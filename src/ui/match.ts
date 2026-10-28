@@ -107,15 +107,20 @@ export class MatchScreen implements Screen {
     const app = this.app;
     const inp = app.input;
     const cfg = this.arg.cfg;
-    if (inp.pausePressed() && !this.ended) this.togglePause();
-    if (this.paused) {
-      this.pauseNav?.update(dt);
+    if (inp.pausePressed() && !this.ended) {
+      // toggle and swallow this press so the pause menu's own back handler doesn't immediately close it
+      this.togglePause();
       this.view.render();
       return;
     }
-    // local input
+    const online = !!(this.arg.host || this.arg.client);
+    if (this.paused) {
+      this.pauseNav?.update(dt);
+      if (!online) { this.view.render(); return; }
+    }
+    // local input (online games keep running behind the pause menu)
     cfg.players.forEach((p, i) => {
-      if (!this.isLocal(i)) return;
+      if (!this.isLocal(i) || this.paused) return;
       const top = this.state.tops[i];
       const c = inp.read(p.ctrl, top);
       if (this.sim) this.sim.setControl(i, c);
@@ -204,17 +209,14 @@ export class MatchScreen implements Screen {
   }
 
   togglePause() {
-    if (this.arg.host || this.arg.client) {
-      // online: pause menu doesn't stop the sim
-    }
     this.paused = !this.paused;
     if (this.paused) {
       const resume = h('button.btn.nav', { onclick: () => this.togglePause() }, 'Resume');
       const restart = h('button.btn.nav', { onclick: () => this.restart(), disabled: !!this.arg.client }, 'Restart');
-      const quit = h('button.btn.nav', { onclick: () => { this.quit(); } }, 'Quit to Menu');
-      this.pauseEl = h('div.pause', null, h('h2', null, 'PAUSED'), resume, restart, quit, this.hud.controlsHelp());
+      const quit = h('button.btn.nav', { onclick: () => { this.quit(); } }, this.arg.host || this.arg.client ? 'Leave Match' : 'Quit to Menu');
+      this.pauseEl = h('div.pause', null, h('h2', null, this.arg.host || this.arg.client ? 'MENU' : 'PAUSED'), resume, restart, quit, this.hud.controlsHelp());
       this.wrap.append(this.pauseEl);
-      this.pauseNav = new MenuNav(this.app, this.pauseEl, () => this.togglePause());
+      this.pauseNav = new MenuNav(this.app, this.pauseEl);
       this.pauseNav.focus(0);
     } else {
       this.pauseEl?.remove();
