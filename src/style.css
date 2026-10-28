@@ -204,3 +204,5 @@ body.ingame .hide-ingame { display: none; }
 .pcard .meta .ico { width: 13px; height: 13px; }
 .pcard .meta .place { font-family: var(--font-h); color: var(--gold); font-size: 14px; }
 .title-foot .ico { width: 18px; height: 18px; color: var(--accent); }
+.wrong-way { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-family: var(--font-h); font-weight: 900; font-size: 54px; letter-spacing: 0.15em; color: var(--red); text-shadow: 0 0 30px var(--red); display: none; animation: blink 0.5s infinite; pointer-events: none; }
+.wrong-way.on { display: block; }

@@ -78,7 +78,7 @@ export class MainMenu extends Base {
 }
 
 // ------------------------------------------------------------------ mode select
-const MODE_ICON: Record<ModeId, string> = { duel: 'swords', tag: 'users', ffa: 'burst', ctf: 'hex', rush: 'gem', koth: 'crown', gauntlet: 'gear', race: 'finish' };
+export const MODE_ICON: Record<ModeId, string> = { duel: 'swords', tag: 'users', ffa: 'burst', ctf: 'hex', rush: 'gem', koth: 'crown', gauntlet: 'gear', race: 'finish' };
 export class ModeSelect extends Base {
   initialFocus = 1;
   build() {

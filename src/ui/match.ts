@@ -35,6 +35,7 @@ export class MatchScreen implements Screen {
   lastSnapAt = 0;
   sendAcc = 0;
   ended = false;
+  wrongT = 0;
   wrap!: HTMLElement;
   private pendingCtl = new Map<number, { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }>();
 
@@ -123,6 +124,13 @@ export class MatchScreen implements Screen {
       if (!this.isLocal(i) || this.paused) return;
       const top = this.state.tops[i];
       const c = inp.read(p.ctrl, top);
+      if (p.ctrl.type !== 'mouse') {
+        // camera-relative steering: stick up = away from the camera
+        const f = this.view.camFwd;
+        const mx = c.mx, mz = c.mz;
+        c.mx = -f.z * mx - f.x * mz;
+        c.mz = f.x * mx - f.z * mz;
+      }
       if (this.sim) this.sim.setControl(i, c);
       else {
         const prev = this.pendingCtl.get(i);
@@ -163,6 +171,18 @@ export class MatchScreen implements Screen {
     const launchPower = 0.5 - 0.5 * Math.cos(renderState.phaseT * 4.2);
     this.view.update(renderState, dt, launchPower);
     this.hud.update(renderState, dt);
+    const TS = this.view.terrain.track;
+    if (TS && renderState.phase === 'battle') {
+      let wrong = false;
+      for (const i of this.view.focus) {
+        const t = renderState.tops[i];
+        if (!t?.alive) continue;
+        const along = t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog];
+        if (along < -2.5) wrong = true;
+      }
+      this.wrongT = wrong ? this.wrongT + dt : 0;
+      this.hud.wrongWay(this.wrongT > 0.8);
+    }
     // hum from the fastest local top
     let hum = 0;
     renderState.tops.forEach((t, i) => { if (t.alive && this.isLocal(i)) hum = Math.max(hum, t.spin); });

@@ -14,6 +14,7 @@ export class Hud {
   cards = h('div.hud-cards');
   ann = h('div.announce');
   hint = h('div.launch-hint');
+  wrong = h('div.wrong-way', null, 'WRONG WAY');
   cardEls: { el: HTMLElement; spin: HTMLElement; burst: HTMLElement; sp: HTMLElement; spBar: HTMLElement; item: HTMLElement; meta: HTMLElement; rpm: HTMLElement }[] = [];
   scoreEls: HTMLElement[] = [];
   annQueue: { text: string; sub?: string; color?: string }[] = [];
@@ -23,7 +24,7 @@ export class Hud {
   constructor(parent: HTMLElement, cfg: MatchConfig) {
     this.cfg = cfg;
     parent.append(this.root);
-    this.root.append(this.scores, this.obj, this.cards, this.ann, this.hint);
+    this.root.append(this.scores, this.obj, this.cards, this.ann, this.hint, this.wrong);
     const mode = MODES.find((m) => m.id === cfg.mode)!;
     const teams = Math.max(...cfg.players.map((p) => p.team)) + 1;
     const teamScores = mode.id !== 'gauntlet';
@@ -66,6 +67,8 @@ export class Hud {
     this.annQueue.push({ text, sub, color });
     if (this.annQueue.length > 3) this.annQueue.splice(0, this.annQueue.length - 3);
   }
+
+  wrongWay(on: boolean) { this.wrong.classList.toggle('on', on); }
 
   count(n: number) {
     const el = h('div.count', null, String(n));

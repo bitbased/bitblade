@@ -70,7 +70,10 @@ export function cloudRelayUrl(): string {
     const s = localStorage.getItem('bitblade.cloudRelay');
     if (s) return s;
   } catch { /* ignore */ }
-  return (import.meta.env.VITE_CLOUD_RELAY as string | undefined) ?? '';
+  const env = import.meta.env.VITE_CLOUD_RELAY as string | undefined;
+  if (env) return env;
+  // served over http(s) (dev server, dev tunnel, the Worker): the page's own origin has a relay
+  return typeof location !== 'undefined' && location.protocol.startsWith('http') ? location.origin : '';
 }
 
 /** Host through the Cloudflare Worker (Durable Object relay). */

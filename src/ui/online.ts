@@ -6,6 +6,8 @@ import { setBackdropVisible } from './backdrop';
 import { drawBladeIcon } from './lobby';
 import { settings } from '../core/settings';
 import { MODES } from '../game/types';
+import { icon } from './icons';
+import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
 
 export class OnlineScreen implements Screen {
@@ -42,7 +44,9 @@ export class OnlineScreen implements Screen {
         h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px', width: 'min(460px, 100%)' } },
           h('h3', null, 'HOST A ROOM'),
           h('div.hint', null, 'Opens a lobby. Choose LAN (direct), Public Link (Cloudflare tunnel, desktop app) or Cloud (Worker relay) in the lobby\'s invite box.'),
-          ...MODES.filter((m) => m.maxPlayers > 1).slice(0, 4).map((m) => h('button.btn.nav', { onclick: () => this.app.go('lobby', { mode: m.id }) }, `Host ${m.name}`))),
+          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } },
+            ...MODES.map((m) => h('button.btn.small.nav', { onclick: () => this.app.go('lobby', { mode: m.id, online: true }) }, icon(MODE_ICON[m.id]), ` ${m.name}`))),
+          h('div.hint', null, 'In the lobby, open the room with LAN / Public Link / Cloud, share the code, then press START.')),
         h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px', width: 'min(520px, 100%)' } },
           h('h3', null, 'JOIN A ROOM'),
           h('div.field', null, h('label', null, 'YOUR NAME'), name),

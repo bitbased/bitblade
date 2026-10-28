@@ -5,7 +5,7 @@ import { ringPoints } from '../core/bladeMesh';
 import { allArenas, findArena } from '../game/terrain';
 import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
-import { hostCloud, hostLocal, type HostTransport } from '../net/transport';
+import { cloudRelayUrl, hostCloud, hostLocal, type HostTransport } from '../net/transport';
 import { getPlatform } from '../net/platform';
 import { TEAM_COLORS } from './hud';
 import { setBackdropVisible } from './backdrop';
@@ -84,7 +84,7 @@ export class LobbyScreen implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(true, app.canvas);
-    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean };
+    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean };
     if (a.mode && a.mode !== L.mode) this.setMode(a.mode);
     else if (a.mode) this.setMode(a.mode, true);
     if (a.arenaId) L.arenaId = a.arenaId;
@@ -98,6 +98,7 @@ export class LobbyScreen implements Screen {
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1); // START
     this.wireHost();
+    if (a.online && !hostT) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
   }
 
   setMode(id: ModeId, keepArena = false) {
@@ -336,26 +337,29 @@ export class LobbyScreen implements Screen {
       return;
     }
     const p = getPlatform();
-    const go = async (fn: () => Promise<HostTransport>, label: string) => {
-      el.innerHTML = '';
-      el.append(h('div.hint', null, `Opening ${label}…`));
-      try {
-        hostT = await fn();
-        lobbyListeners = false;
-        this.wireHost();
-        this.app.toast(`Room ${hostT.code} open`);
-      } catch (e) {
-        this.app.toast(String((e as Error).message || e));
-      }
-      this.renderOnline();
-    };
     el.append(
       h('div.hint', null, 'INVITE ONLINE FRIENDS'),
       h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-        h('button.btn.small.nav', { onclick: () => go(() => hostLocal(L.slots[0]?.name ?? 'host', false), 'LAN room'), title: p ? 'Direct connection on your network' : 'Needs `bun run relay` in dev' }, 'LAN'),
-        p ? h('button.btn.small.nav', { onclick: () => go(() => hostLocal(L.slots[0]?.name ?? 'host', true), 'Cloudflare tunnel') }, 'Public Link') : null,
-        h('button.btn.small.nav', { onclick: () => go(() => hostCloud(L.slots[0]?.name ?? 'host'), 'cloud room') }, 'Cloud')),
+        h('button.btn.small.nav', { onclick: () => this.openRoom('lan'), title: p ? 'Direct connection on your network' : 'Same-origin relay' }, 'LAN'),
+        p ? h('button.btn.small.nav', { onclick: () => this.openRoom('tunnel') }, 'Public Link') : null,
+        h('button.btn.small.nav', { onclick: () => this.openRoom('cloud') }, 'Cloud')),
     );
+  }
+
+  async openRoom(kind: 'lan' | 'tunnel' | 'cloud') {
+    const el = this.onlineEl;
+    const name = L.slots[0]?.name ?? 'host';
+    el.innerHTML = '';
+    el.append(h('div.hint', null, `Opening ${kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room'}…`));
+    try {
+      hostT = await (kind === 'cloud' ? hostCloud(name) : hostLocal(name, kind === 'tunnel'));
+      lobbyListeners = false;
+      this.wireHost();
+      this.app.toast(`Room ${hostT.code} open — share the code!`);
+    } catch (e) {
+      this.app.toast(String((e as Error).message || e));
+    }
+    this.renderOnline();
   }
 
   wireHost() {

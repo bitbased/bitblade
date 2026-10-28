@@ -80,6 +80,25 @@ function textSprite(text: string, color: string, size = 48) {
   return sp;
 }
 
+/** chevrons pointing toward canvas top (= local +y of a PlaneGeometry) */
+function chevronTexture(color: string, n = 3) {
+  const cv = document.createElement('canvas');
+  cv.width = 64; cv.height = 128;
+  const c = cv.getContext('2d')!;
+  c.fillStyle = '#000'; c.fillRect(0, 0, 64, 128);
+  c.strokeStyle = color; c.lineWidth = 10; c.lineCap = 'round'; c.lineJoin = 'round';
+  const step = 128 / n;
+  for (let k = 0; k < n; k++) { const y = step * k + step * 0.7; c.beginPath(); c.moveTo(10, y); c.lineTo(32, y - step * 0.45); c.lineTo(54, y); c.stroke(); }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+/** yaw for a flat plane (rotation.x = -PI/2, order YXZ) so its +y axis points along world (dx, dz) */
+function planeYaw(dx: number, dz: number) {
+  return Math.atan2(-dx, -dz);
+}
+
 function questionTexture() {
   const S = 128;
   const cv = document.createElement('canvas');
@@ -359,6 +378,8 @@ export class GameView {
   time = 0;
   attract = false;
   focus: number[] = []; // local player ids the camera should follow (race)
+  camFwd = { x: 0, z: -1 }; // camera forward on the ground plane (controls are camera-relative)
+  chaseYaw: number | null = null;
   sun: THREE.DirectionalLight;
   private shared = {
     crystalGeo: new THREE.OctahedronGeometry(0.28),
@@ -421,6 +442,20 @@ export class GameView {
       gate.rotation.y = Math.atan2(T.tx[0], T.tz[0]);
       gate.position.set(T.x[0], y0, T.z[0]);
       this.scene.add(gate);
+      // direction chevrons every ~9m along the ribbon
+      const chevMat = new THREE.MeshBasicMaterial({ map: chevronTexture(theme.glow, 2), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const chevGeo = new THREE.PlaneGeometry(T.width * 0.45, T.width * 0.45);
+      for (let i = 10; i < T.n - 6; i += 18) {
+        const h = this.terrain.height(T.x[i], T.z[i]);
+        if (h <= VOID) continue;
+        const m = new THREE.Mesh(chevGeo, chevMat);
+        m.rotation.order = 'YXZ';
+        m.rotation.y = planeYaw(T.tx[i], T.tz[i]);
+        m.rotation.x = -Math.PI / 2;
+        m.position.set(T.x[i], h + 0.04, T.z[i]);
+        this.scene.add(m);
+      }
+      this.boostMeshes.push(new THREE.Mesh(new THREE.BufferGeometry(), chevMat)); // scroll the chevrons too
     }
     cfg.players.forEach((p) => this.addTopView(p.blade));
     this.camPos.set(0, S * 1.2, S * 1.1);
@@ -549,18 +584,12 @@ export class GameView {
           break;
         }
         case 'boost': {
-          const cv = document.createElement('canvas');
-          cv.width = 64; cv.height = 128;
-          const c = cv.getContext('2d')!;
-          c.fillStyle = '#000'; c.fillRect(0, 0, 64, 128);
-          c.strokeStyle = '#ffe23a'; c.lineWidth = 10;
-          for (let k = 0; k < 3; k++) { c.beginPath(); c.moveTo(8, 100 - k * 40); c.lineTo(32, 76 - k * 40); c.lineTo(56, 100 - k * 40); c.stroke(); }
-          const tex = new THREE.CanvasTexture(cv);
-          tex.wrapT = THREE.RepeatWrapping;
-          const pad = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.8), new THREE.MeshBasicMaterial({ map: tex, blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false }));
+          const pad = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.8), new THREE.MeshBasicMaterial({ map: chevronTexture('#ffe23a'), blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false }));
+          const r = m.rot ?? 0;
+          pad.rotation.order = 'YXZ';
+          pad.rotation.y = planeYaw(Math.sin(r), Math.cos(r)); // sim pushes along (sin rot, cos rot)
           pad.rotation.x = -Math.PI / 2;
-          pad.rotation.z = -(m.rot ?? 0) + Math.PI;
-          pad.position.set(m.x, y + 0.04, m.z);
+          pad.position.set(m.x, y + 0.05, m.z);
           this.scene.add(pad);
           this.boostMeshes.push(pad);
           break;
@@ -889,9 +918,29 @@ export class GameView {
       }
       let spread = 0;
       for (const t of pts) spread = Math.max(spread, Math.hypot(t.x - cx, t.z - cz * 1.0));
-      const dist = Math.min(this.terrain.track ? 40 : S * 2.2, Math.max(this.terrain.track ? 13 : 11, spread * 1.7 + 8));
-      this.camTarget.lerp(new THREE.Vector3(cx, cy * 0.5, cz), Math.min(1, dt * 3));
-      this.camPos.lerp(new THREE.Vector3(cx * 0.9, cy * 0.5 + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2));
+      const T = this.terrain.track;
+      if (T && pts.length) {
+        // chase camera: sit behind the (leading) followed blade, looking down the track
+        const lead = pts.reduce((a, b) => (b.lap * T.n + b.prog > a.lap * T.n + a.prog ? b : a));
+        let hx = 0, hz = 0;
+        for (let k = 0; k < 14; k++) { const q = (lead.prog + k) % T.n; hx += T.tx[q]; hz += T.tz[q]; }
+        const want = Math.atan2(hx, hz);
+        if (this.chaseYaw === null) this.chaseYaw = want;
+        let d = want - this.chaseYaw;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        this.chaseYaw += d * Math.min(1, dt * 2.5);
+        const fx = Math.sin(this.chaseYaw), fz = Math.cos(this.chaseYaw);
+        const back = Math.min(30, 9 + spread * 1.2);
+        const up = 5 + spread * 0.55;
+        const gy = Math.max(cy, -2);
+        this.camTarget.lerp(new THREE.Vector3(cx + fx * 7, gy + 0.6, cz + fz * 7), Math.min(1, dt * 5));
+        this.camPos.lerp(new THREE.Vector3(cx - fx * back, gy + up, cz - fz * back), Math.min(1, dt * 4));
+      } else {
+        const dist = Math.min(S * 2.2, Math.max(11, spread * 1.7 + 8));
+        this.camTarget.lerp(new THREE.Vector3(cx, cy * 0.5, cz), Math.min(1, dt * 3));
+        this.camPos.lerp(new THREE.Vector3(cx * 0.9, cy * 0.5 + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2));
+      }
     }
     this.camera.position.copy(this.camPos);
     if (this.shake > 0) {
@@ -900,6 +949,8 @@ export class GameView {
       this.shake = Math.max(0, this.shake - dt * 3);
     }
     this.camera.lookAt(this.camTarget);
+    const fx = this.camTarget.x - this.camPos.x, fz = this.camTarget.z - this.camPos.z, fl = Math.hypot(fx, fz) || 1;
+    this.camFwd.x = fx / fl; this.camFwd.z = fz / fl;
   }
 
   render() {
