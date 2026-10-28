@@ -96,7 +96,7 @@ export class LobbyScreen implements Screen {
     this.el = this.build();
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
-    this.nav.focus(0);
+    this.nav.focus(1); // START
     this.wireHost();
   }
 

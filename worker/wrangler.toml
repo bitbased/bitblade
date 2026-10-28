@@ -2,6 +2,9 @@ name = "bitblade"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
+# Production hostname (zone bitbased.net must be on this Cloudflare account)
+routes = [{ pattern = "bitblade.bitbased.net", custom_domain = true }]
+
 [assets]
 directory = "../dist"
 binding = "ASSETS"

@@ -27,7 +27,7 @@ export class OnlineScreen implements Screen {
     this.el = this.buildHub(a.join ?? '');
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
-    this.nav.focus(0);
+    this.nav.focus(1);
     if (a.join) this.join(a.join);
   }
 

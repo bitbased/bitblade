@@ -18,13 +18,14 @@ abstract class Base implements Screen {
   nav: MenuNav | null = null;
   abstract build(arg?: unknown): HTMLElement;
   backdrop = true;
+  initialFocus = 0;
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(this.backdrop, app.canvas);
     this.el = this.build(arg);
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.onBack());
-    this.nav.focus(0);
+    this.nav.focus(this.initialFocus);
   }
   onBack() { this.app.back(); }
   update(dt: number) { this.nav?.update(dt); }
@@ -79,6 +80,7 @@ export class MainMenu extends Base {
 // ------------------------------------------------------------------ mode select
 const MODE_ICON: Record<ModeId, string> = { duel: 'swords', tag: 'users', ffa: 'burst', ctf: 'hex', rush: 'gem', koth: 'crown', gauntlet: 'gear', race: 'finish' };
 export class ModeSelect extends Base {
+  initialFocus = 1;
   build() {
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.app.back() }, '◀ Back'), h('div.screen-title', null, 'SELECT MODE')),
@@ -135,6 +137,7 @@ export class Results extends Base {
 // ------------------------------------------------------------------ settings
 
 export class SettingsScreen extends Base {
+  initialFocus = 1;
   build() {
     const sfx = this.app.sfx;
     const slider = (label: string, val: number, min: number, max: number, step: number, on: (v: number) => void) => {

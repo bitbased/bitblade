@@ -44,9 +44,10 @@ function wrapHost(rc: RelayClient, kind: TransportKind, invites: string[], clean
 export async function hostLocal(name: string, tunnel: boolean): Promise<HostTransport> {
   const p = getPlatform();
   if (!p) {
-    // browser dev: expect `bun run relay` on 8787
-    const rc = await RelayClient.host('ws://localhost:8787', name);
-    return wrapHost(rc, 'relay-local', [rc.code, makeInviteUrl('http://localhost:8787', rc.code)]);
+    // browser: same-origin relay (vite dev proxies /room to `bun run relay`; the Worker serves it in production)
+    const http = location.protocol.startsWith('http') ? location.origin : 'http://localhost:8787';
+    const rc = await RelayClient.host(http.replace(/^http/, 'ws'), name);
+    return wrapHost(rc, 'relay-local', [rc.code, makeInviteUrl(http, rc.code)]);
   }
   const info = await p.startHost();
   const rc = await RelayClient.host(`ws://127.0.0.1:${info.port}`, name);
