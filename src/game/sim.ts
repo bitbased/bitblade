@@ -1,0 +1,1013 @@
+// Authoritative game simulation. Plain-data state (GameState) so it can be snapshotted over the network.
+import { computeStats, type BladeStats } from '../core/blade';
+import { Terrain, VOID, type Marker } from './terrain';
+import { hazardPose, closestOnSeg } from './hazards';
+import { aiControl, newAI, type AIState } from './ai';
+import { globalNearest, nearestSample } from './track';
+import {
+  MODES, NO_CONTROL, type Control, type FinishType, type GameState, type ItemKind, type MatchConfig, type ModeInfo, type TopState,
+} from './types';
+
+export const G = 20;
+export const S_SURF = 7;
+const POINTS: Record<FinishType, number> = { spin: 1, over: 2, burst: 2, xtreme: 3 };
+export const FINISH_LABEL: Record<FinishType, string> = { spin: 'SPIN FINISH', over: 'OVER FINISH', burst: 'BURST FINISH', xtreme: 'XTREME FINISH' };
+const ITEM_POOL: ItemKind[] = ['turbo', 'shield', 'shock', 'surge', 'vortex', 'titan', 'comet', 'mine'];
+const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race']);
+
+function mulberry(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a += 0x6d2b79f5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const grad = { gx: 0, gz: 0 };
+
+export class Sim {
+  cfg: MatchConfig;
+  mode: ModeInfo;
+  terrain: Terrain;
+  s: GameState;
+  st: BladeStats[] = [];
+  rnd: () => number;
+  controls: Control[] = [];
+  ai: (AIState | null)[] = [];
+  numTeams: number;
+  markers: Marker[];
+  spawns: { x: number; z: number; team?: number }[] = [];
+  pairCd = new Map<number, number>();
+  hazardHitCd = new Map<string, number>();
+
+  constructor(cfg: MatchConfig) {
+    this.cfg = cfg;
+    this.mode = MODES.find((m) => m.id === cfg.mode)!;
+    this.terrain = new Terrain(cfg.arena);
+    this.markers = cfg.arena.markers;
+    this.rnd = mulberry(cfg.seed);
+    this.numTeams = Math.max(1, ...cfg.players.map((p) => p.team + 1));
+    this.s = {
+      t: 0, phase: 'launch', phaseT: 0, round: 1, timeLeft: cfg.timeLimit,
+      tops: [], teamScores: new Array(this.numTeams).fill(0),
+      boxes: [], crystals: [], flags: [], projs: [], mines: [], gems: [], gemsLeft: 0, zone: null,
+      events: [], winner: -1, lastFinish: '', nextId: 1,
+    };
+    this.buildSpawns();
+    cfg.players.forEach((p, i) => this.addTop(p.name, p.team, p.blade, p.ctrl.type === 'cpu' ? p.ctrl.level : 0, i));
+    // objects
+    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet') {
+      let items = this.markers.filter((m) => m.kind === 'item');
+      if (items.length === 0) items = [0, 1, 2].map(() => ({ kind: 'item', ...this.terrain.randomSafePoint(this.rnd) }) as Marker);
+      for (const m of items) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
+      if (cfg.mode === 'rush') for (let k = 0; k < 3; k++) { const p = this.terrain.randomSafePoint(this.rnd); this.s.boxes.push({ x: p.x, y: this.ground(p.x, p.z), z: p.z, t: 0 }); }
+    }
+    if (cfg.mode === 'ctf') {
+      let fl = this.markers.filter((m) => m.kind === 'flag');
+      if (fl.length < 2) {
+        const e = this.terrain.size * 0.6;
+        fl = [{ kind: 'flag', x: -e, z: 0, team: 0 }, { kind: 'flag', x: e, z: 0, team: 1 }].map((m) => {
+          const p = this.terrain.randomSafePoint(this.rnd, { x: m.x, z: m.z, r: 4 });
+          return { ...m, ...p } as Marker;
+        });
+      }
+      for (const m of fl.slice(0, 2)) {
+        const y = this.ground(m.x, m.z);
+        this.s.flags.push({ team: m.team ?? 0, hx: m.x, hy: y, hz: m.z, x: m.x, y, z: m.z, carrier: -1, home: true, t: 0 });
+      }
+    }
+    if (cfg.mode === 'koth') this.moveZone(true);
+    if (cfg.mode === 'gauntlet') {
+      this.s.gemsLeft = cfg.target || 15;
+      for (let k = 0; k < 3; k++) this.spawnGem();
+    }
+    this.startLaunch();
+  }
+
+  get rounds() { return this.mode.rounds; }
+
+  ground(x: number, z: number) {
+    const h = this.terrain.height(x, z);
+    return h <= VOID ? 0 : h;
+  }
+
+  buildSpawns() {
+    const sp = this.markers.filter((m) => m.kind === 'spawn');
+    if (sp.length) { this.spawns = sp.map((m) => ({ x: m.x, z: m.z, team: m.team })); }
+    const n = Math.max(this.cfg.players.length, 2);
+    const R = this.cfg.arena.stadium ? this.cfg.arena.stadium.radius * 0.55 : Math.min(this.terrain.size * 0.45, 8);
+    for (let i = 0; i < n; i++) {
+      const a = Math.PI + (i / n) * Math.PI * 2;
+      let x = Math.cos(a) * R, z = Math.sin(a) * R;
+      if (!this.terrain.isSafe(x, z)) { const p = this.terrain.randomSafePoint(this.rnd, { x, z, r: 5 }); x = p.x; z = p.z; }
+      this.spawns.push({ x, z });
+    }
+  }
+
+  spawnFor(top: TopState, idx: number) {
+    const teamSp = this.spawns.filter((s) => s.team === top.team);
+    const list = teamSp.length && this.cfg.mode !== 'ffa' ? teamSp : this.spawns.filter((s) => s.team === undefined);
+    const pick = list.length ? list[idx % list.length] : { x: 0, z: 0 };
+    return pick;
+  }
+
+  addTop(name: string, team: number, blade: MatchConfig['players'][0]['blade'], cpuLevel: number, idx: number, drone = false) {
+    const st = computeStats(blade);
+    const kinds: [TopState['specialKind'], number][] = [['rush', st.attack], ['fortress', st.defense], ['vortex', st.stamina], ['skydive', st.speed]];
+    let best = kinds[0];
+    for (const k of kinds) if (k[1] > best[1]) best = k;
+    const t: TopState = {
+      id: this.s.tops.length, team, name, color: blade.glow, cpu: cpuLevel > 0,
+      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, spin: 1, dir: blade.spinDir, angle: 0, tx: 0, tz: 0,
+      grounded: false, air: 0, alive: true, out: '', outT: 0, burst: 0, special: 0, specialKind: best[0],
+      dashCd: 0, jumpCd: 0, itemCd: 0, item: null, roll: 0,
+      fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0 },
+      flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : 99,
+      respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
+      lap: 0, prog: 0, cp: 0, place: 0, finishT: -1,
+    };
+    this.s.tops.push(t);
+    this.st.push(st);
+    this.controls.push({ ...NO_CONTROL });
+    this.ai.push(cpuLevel > 0 ? newAI(cpuLevel, this.rnd) : null);
+    const sp = this.spawnFor(t, idx);
+    this.placeTop(t, sp.x, sp.z, 1.6);
+    return t;
+  }
+
+  placeTop(t: TopState, x: number, z: number, lift: number) {
+    t.x = x; t.z = z; t.y = this.ground(x, z) + lift;
+    t.vx = t.vy = t.vz = 0;
+    if (this.terrain.track) t.prog = globalNearest(this.terrain.track, x, z);
+  }
+
+  endT = -1;
+  finishers = 0;
+
+  /** Merge input; edge flags persist until consumed by a substep. */
+  setControl(i: number, c: Control) {
+    const p = this.controls[i];
+    if (!p) return;
+    p.mx = c.mx; p.mz = c.mz;
+    p.dash ||= c.dash; p.jump ||= c.jump; p.item ||= c.item; p.special ||= c.special;
+  }
+
+  ev(e: GameState['events'][0]) { this.s.events.push(e); }
+
+  // ---------------- phases ----------------
+  startLaunch() {
+    const s = this.s;
+    s.phase = 'launch';
+    s.phaseT = 0;
+    this.pairCd.clear();
+    s.tops.forEach((t, i) => {
+      if (t.drone) return;
+      t.alive = true; t.out = ''; t.outT = 0; t.spin = 1; t.burst = 0; t.launchLocked = false; t.launch = 0.6;
+      t.fx = { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0 };
+      t.flag = -1; t.item = null; t.roll = 0; t.scale = 1;
+      const sp = this.spawnFor(t, i);
+      this.placeTop(t, sp.x, sp.z, 1.6);
+    });
+    s.tops = s.tops.filter((t) => !t.drone);
+    this.ev({ k: 'announce', text: this.rounds ? `ROUND ${s.round}` : this.mode.name.toUpperCase(), sub: 'Press DASH at full power to launch!' });
+  }
+
+  launchPower(t = this.s.phaseT) { return 0.5 - 0.5 * Math.cos(t * 4.2); }
+
+  updateLaunch(dt: number) {
+    const s = this.s;
+    const counts = [0.6, 1.4, 2.2];
+    for (let k = 0; k < 3; k++) if (s.phaseT - dt < counts[k] && s.phaseT >= counts[k]) this.ev({ k: 'count', n: 3 - k });
+    s.tops.forEach((t, i) => {
+      t.angle += t.dir * dt * 30;
+      const c = this.controls[i];
+      if (!t.launchLocked) {
+        if (this.ai[i]) {
+          const lv = this.ai[i]!.level;
+          if (s.phaseT > 1.2 + i * 0.13 && Math.abs(this.launchPower() - 1) < 0.08 + (3 - lv) * 0.12) { t.launch = this.launchPower(); t.launchLocked = true; }
+        } else if (c.dash) {
+          t.launch = this.launchPower();
+          t.launchLocked = true;
+        }
+      }
+      // hover
+      const g = this.ground(t.x, t.z);
+      t.y = g + 1.6 + Math.sin(s.t * 3 + i) * 0.05;
+      t.vx = t.vy = t.vz = 0;
+    });
+    if (s.phaseT >= 3.0) {
+      for (const t of s.tops) {
+        const p = t.launchLocked ? t.launch : 0.45;
+        t.spin = 0.72 + 0.4 * p;
+        // launch toward center with sideways spin-kick
+        const dx = -t.x, dz = -t.z, d = Math.hypot(dx, dz) || 1;
+        const sp = 2 + p * 4;
+        t.vx = (dx / d) * sp + (-dz / d) * t.dir * 2;
+        t.vz = (dz / d) * sp + (dx / d) * t.dir * 2;
+        const TS = this.terrain.track;
+        if (TS) { t.vx = TS.tx[t.prog] * (4 + p * 8); t.vz = TS.tz[t.prog] * (4 + p * 8); }
+        t.vy = -2;
+      }
+      s.phase = 'battle';
+      s.phaseT = 0;
+      this.ev({ k: 'go' });
+      this.ev({ k: 'announce', text: 'LET IT RIP!', color: '#ffd23a' });
+    }
+  }
+
+  // ---------------- main step ----------------
+  step(dt: number) {
+    const s = this.s;
+    s.t += dt;
+    s.phaseT += dt;
+    if (s.phase === 'launch') {
+      this.updateLaunch(dt);
+      this.clearEdges();
+      return;
+    }
+    if (s.phase === 'battle') {
+      s.timeLeft -= dt;
+      // AI
+      s.tops.forEach((t, i) => {
+        const a = this.ai[i];
+        if (a && t.alive) this.setControl(i, aiControl(this, t, a, dt));
+      });
+    }
+    // tops
+    s.tops.forEach((t, i) => this.updateTop(t, i, dt));
+    this.collideTops(dt);
+    this.hazards(dt);
+    this.updateObjects(dt);
+    this.clearEdges();
+    if (s.phase === 'battle') this.modeUpdate(dt);
+    else if (s.phase === 'roundEnd' && s.phaseT > 3.2) {
+      if (s.winner !== -1) { s.phase = 'matchEnd'; s.phaseT = 0; }
+      else { s.round++; s.timeLeft = this.cfg.timeLimit; this.startLaunch(); }
+    }
+  }
+
+  clearEdges() {
+    for (const c of this.controls) c.dash = c.jump = c.item = c.special = false;
+  }
+
+  // ---------------- per-top physics ----------------
+  mass(t: TopState) {
+    const st = this.st[t.id];
+    return st.mass * (t.fx.titan > 0 ? 2.2 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 4 : 1);
+  }
+  radius(t: TopState) { return this.st[t.id].radius * t.scale; }
+
+  updateTop(t: TopState, i: number, dt: number) {
+    const s = this.s;
+    const st = this.st[i];
+    const c = this.controls[i];
+    for (const k in t.fx) { const kk = k as keyof typeof t.fx; if (t.fx[kk] > 0) t.fx[kk] = Math.max(0, t.fx[kk] - dt); }
+    t.dashCd = Math.max(0, t.dashCd - dt);
+    t.jumpCd = Math.max(0, t.jumpCd - dt);
+    t.itemCd = Math.max(0, t.itemCd - dt);
+    t.scale += ((t.fx.titan > 0 ? 1.3 : 1) - t.scale) * Math.min(1, dt * 6);
+    if (t.roll > 0) {
+      t.roll -= dt;
+      if (t.roll <= 0) t.roll = 0;
+    }
+
+    if (!t.alive) {
+      t.outT += dt;
+      if (t.out === 'over' || t.out === 'xtreme') this.integrate(t, i, dt, false);
+      else { t.vx *= 0.9; t.vz *= 0.9; }
+      if (t.respawnT > 0) {
+        t.respawnT -= dt;
+        if (t.respawnT <= 0) this.respawn(t, i);
+      }
+      return;
+    }
+
+    const canAct = s.phase === 'battle' && t.fx.frozen <= 0;
+    // ---- abilities
+    if (canAct) {
+      let ix = c.mx, iz = c.mz;
+      const il = Math.hypot(ix, iz);
+      if (il > 1) { ix /= il; iz /= il; }
+      if (c.dash && t.dashCd <= 0 && t.spin > 0.08) {
+        let dx = ix, dz = iz;
+        if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
+        const dl = Math.hypot(dx, dz) || 1;
+        t.vx += (dx / dl) * 9; t.vz += (dz / dl) * 9;
+        t.spin -= 0.025;
+        t.dashCd = 1.1;
+        t.fx.dash = 0.35;
+        this.ev({ k: 'dash', id: t.id });
+      }
+      if (c.jump && t.jumpCd <= 0 && t.grounded) {
+        t.vy += 7.5;
+        t.grounded = false;
+        t.spin -= 0.015;
+        t.jumpCd = 0.8;
+        this.ev({ k: 'jump', id: t.id });
+      }
+      if (c.item && t.item && t.roll <= 0 && t.itemCd <= 0) this.useItem(t);
+      if (c.special && t.special >= 1) this.useSpecial(t);
+    }
+
+    this.integrate(t, i, dt, canAct);
+
+    // spin decay
+    const decay = st.spinDecay * (0.55 + 0.45 * t.spin) * (t.grounded ? 1 : 0.25) * (this.cfg.mode === 'gauntlet' ? 1.25 : this.cfg.mode === 'race' ? 0.3 : 1) + (t.spin < 0.25 ? 0.006 : 0);
+    if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * dt;
+    else t.spin = Math.min(1.1, t.spin + 0.12 * dt);
+    t.angle += t.dir * (6 + t.spin * 34) * dt;
+
+    // finishes
+    if (t.spin <= 0.03) this.finish(t, 'spin');
+    else if (t.y < -4) {
+      const hs = Math.hypot(t.vx, t.vz);
+      this.finish(t, hs > 11 ? 'xtreme' : 'over');
+    }
+  }
+
+  integrate(t: TopState, i: number, dt: number, control: boolean) {
+    const st = this.st[i];
+    const c = this.controls[i];
+    let ax = 0, az = 0;
+    if (control) {
+      let ix = c.mx, iz = c.mz;
+      const il = Math.hypot(ix, iz);
+      if (il > 1) { ix /= il; iz /= il; }
+      const acc = 17 * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      ax += ix * acc; az += iz * acc;
+      t.spin -= Math.min(1, il) * 0.004 * dt;
+    }
+    // vortex pull from others
+    for (const o of this.s.tops) {
+      if (o === t || !o.alive || o.team === t.team) continue;
+      const pull = o.fx.vortex > 0 || (o.fx.special > 0 && o.specialKind === 'vortex');
+      if (!pull) continue;
+      const dx = o.x - t.x, dz = o.z - t.z, d = Math.hypot(dx, dz);
+      if (d < 7 && d > 0.1) { ax += (dx / d) * 11 * (1 - d / 7); az += (dz / d) * 11 * (1 - d / 7); }
+    }
+    // rush special: home onto nearest enemy
+    if (t.fx.special > 0 && t.specialKind === 'rush') {
+      const e = this.nearestEnemy(t);
+      if (e) { const dx = e.x - t.x, dz = e.z - t.z, d = Math.hypot(dx, dz) || 1; ax += (dx / d) * 40; az += (dz / d) * 40; }
+    }
+
+    if (t.grounded && t.alive) {
+      this.terrain.gradient(t.x, t.z, grad);
+      // gyroscopic tilt: slope + low-spin wobble -> tip contact offset -> drift
+      const wob = Math.max(0, 0.4 - t.spin) * 2.5;
+      const prec = this.s.t * (3 + t.spin * 4) * t.dir;
+      const targetTx = grad.gx * 0.35 + Math.cos(prec) * wob * 0.35;
+      const targetTz = grad.gz * 0.35 + Math.sin(prec) * wob * 0.35;
+      t.tx += (targetTx - t.tx) * Math.min(1, dt * 8);
+      t.tz += (targetTz - t.tz) * Math.min(1, dt * 8);
+      const drift = t.spin * st.tipFriction * 10 * t.dir;
+      ax += -t.tz * drift;
+      az += t.tx * drift;
+      const slope = Math.hypot(grad.gx, grad.gz);
+      // wall riding: steep surface + spin = grind along it (xtreme dash)
+      if (slope > 1.2) {
+        const nx = -grad.gx / slope, nz = -grad.gz / slope; // horizontal normal (pointing downhill)
+        const ride = t.spin * (st.tipFriction + 0.35) * 9 * t.dir;
+        ax += -nz * ride; az += nx * ride;
+        if (Math.random() < dt * 20) this.ev({ k: 'grind', x: t.x, y: t.y, z: t.z, id: t.id });
+      }
+    } else {
+      t.tx *= 1 - dt * 2; t.tz *= 1 - dt * 2;
+    }
+
+    t.vx += ax * dt; t.vz += az * dt;
+    t.vy -= G * dt * (t.fx.special > 0 && t.specialKind === 'skydive' && t.vy < 0 ? 2.2 : 1);
+    if (t.grounded) {
+      const k = 0.22 + st.tipFriction * 0.4 + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
+      const f = Math.max(0, 1 - k * dt);
+      t.vx *= f; t.vz *= f;
+    }
+    const hs = Math.hypot(t.vx, t.vz);
+    const cap = 12.5 * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
+
+    t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
+
+    const wasGrounded = t.grounded;
+    t.grounded = false;
+    let h = this.terrain.height(t.x, t.z);
+    if (h > VOID && t.y <= h + 0.002) {
+      let nx = 0, ny = 1, nz = 0;
+      for (let k = 0; k < 3; k++) {
+        this.terrain.gradient(t.x, t.z, grad);
+        const L = Math.hypot(grad.gx, 1, grad.gz);
+        nx = -grad.gx / L; ny = 1 / L; nz = -grad.gz / L;
+        h = this.terrain.height(t.x, t.z);
+        if (h <= VOID || t.y >= h) break;
+        const pen = (h - t.y) * ny;
+        t.x += nx * pen; t.y += ny * pen; t.z += nz * pen;
+      }
+      h = this.terrain.height(t.x, t.z);
+      if (h > VOID) {
+        if (t.y < h) t.y = h;
+        const vn = t.vx * nx + t.vy * ny + t.vz * nz;
+        if (vn < 0) {
+          const impact = -vn;
+          const e = impact > 5 ? 0.25 : 0;
+          t.vx -= (1 + e) * vn * nx; t.vy -= (1 + e) * vn * ny; t.vz -= (1 + e) * vn * nz;
+          if (!wasGrounded && t.air > 0.18 && impact > 3) {
+            this.ev({ k: 'land', x: t.x, y: t.y, z: t.z, s: impact, id: t.id });
+            if (t.alive) t.spin -= impact * 0.0035 * (1.2 - st.defense * 0.5);
+            if (t.fx.special > 0 && t.specialKind === 'skydive') { this.shockwave(t, 5.5, 14, 0.08); t.fx.special = 0; }
+          }
+        }
+        t.grounded = true;
+        t.air = 0;
+      }
+    }
+    if (!t.grounded) t.air += dt;
+  }
+
+  // ---------------- collisions ----------------
+  collideTops(dt: number) {
+    const tops = this.s.tops;
+    for (const [k, v] of this.pairCd) { if (v - dt <= 0) this.pairCd.delete(k); else this.pairCd.set(k, v - dt); }
+    for (let i = 0; i < tops.length; i++)
+      for (let j = i + 1; j < tops.length; j++) {
+        const A = tops[i], B = tops[j];
+        if (!A.alive || !B.alive) continue;
+        const dx = B.x - A.x, dz = B.z - A.z, dy = B.y - A.y;
+        const rA = this.radius(A), rB = this.radius(B);
+        const dist = Math.hypot(dx, dz);
+        if (dist >= rA + rB || Math.abs(dy) > 0.85 || dist < 1e-4) continue;
+        const nx = dx / dist, nz = dz / dist;
+        const mA = this.mass(A), mB = this.mass(B);
+        const inv = 1 / mA + 1 / mB;
+        // separate
+        const ov = rA + rB - dist;
+        A.x -= nx * ov * (1 / mA) / inv; A.z -= nz * ov * (1 / mA) / inv;
+        B.x += nx * ov * (1 / mB) / inv; B.z += nz * ov * (1 / mB) / inv;
+        const key = i * 64 + j;
+        if (this.pairCd.has(key)) continue;
+        const vn = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz;
+        if (vn > 1.5) continue;
+        this.pairCd.set(key, 0.09);
+        this.clash(A, B, nx, nz, vn, dy);
+      }
+  }
+
+  clash(A: TopState, B: TopState, nx: number, nz: number, vn: number, dy: number) {
+    const sa = this.st[A.id], sb = this.st[B.id];
+    const mA = this.mass(A), mB = this.mass(B);
+    const mEff = 1 / (1 / mA + 1 / mB);
+    const tx = nz, tz = -nx;
+    const sA = A.dir * A.spin * S_SURF, sB = -B.dir * B.spin * S_SURF;
+    const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
+    const slip = vt + sA - sB;
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + t.spin * 0.6);
+    const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
+    const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
+    const approach = Math.max(0, -vn);
+    const e = 0.55;
+    const jn = mEff * (approach * (1 + e) + (2.0 + Math.abs(slip) * 0.32) * (0.55 + (aA + aB) * 0.55));
+    const jt = Math.sign(slip) * Math.min(0.55 * jn, Math.abs(slip) * mEff * 0.5);
+    const kA = A.fx.shield > 0 ? 0.4 : 1, kB = B.fx.shield > 0 ? 0.4 : 1;
+    A.vx -= ((nx * jn + tx * jt) / mA) * kA; A.vz -= ((nz * jn + tz * jt) / mA) * kA;
+    B.vx += ((nx * jn + tx * jt) / mB) * kB; B.vz += ((nz * jn + tz * jt) / mB) * kB;
+    // vertical: upper attack lifts, higher top smashes down
+    const tiltA = this.cfg.players[A.id]?.blade.wingTilt ?? 0, tiltB = this.cfg.players[B.id]?.blade.wingTilt ?? 0;
+    B.vy += (jn / mB) * 0.22 * Math.max(0, tiltA) + (dy < -0.2 ? -2 : 0);
+    A.vy += (jn / mA) * 0.22 * Math.max(0, tiltB) + (dy > 0.2 ? -2 : 0);
+    // spin exchange through contact friction
+    const fric = 0.06;
+    const sAn = sA - (jt * 2 / mA) * fric * (1.3 - dA * 0.35);
+    const sBn = sB + (jt * 2 / mB) * fric * (1.3 - dB * 0.35);
+    const before = [A.spin, B.spin];
+    A.spin = Math.max(0, Math.min(1.15, (sAn * A.dir) / S_SURF));
+    B.spin = Math.max(0, Math.min(1.15, (-sBn * B.dir) / S_SURF));
+    // direct impact damage
+    A.spin -= (approach * 0.003 + 0.004) * (aB / dA);
+    B.spin -= (approach * 0.003 + 0.004) * (aA / dB);
+    const lossA = Math.max(0, before[0] - A.spin), lossB = Math.max(0, before[1] - B.spin);
+    A.dmg += lossB; B.dmg += lossA;
+    A.special = Math.min(1, A.special + lossB * 2.2 + 0.015);
+    B.special = Math.min(1, B.special + lossA * 2.2 + 0.015);
+    A.lastHit = B.id; A.lastHitT = this.s.t;
+    B.lastHit = A.id; B.lastHitT = this.s.t;
+    // burst
+    const I = jn + Math.abs(jt);
+    const bth = 8;
+    if (I > bth) {
+      if (B.fx.shield <= 0) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin);
+      if (A.fx.shield <= 0) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin);
+    }
+    // flag carriers drop on hard hits
+    if (I > 6) { if (A.flag >= 0) this.dropFlag(A); if (B.flag >= 0) this.dropFlag(B); }
+    // rush crystals spill
+    if (this.cfg.mode === 'rush' && I > 5) {
+      const loser = lossA > lossB ? A : B;
+      this.spillCrystals(loser, Math.min(loser.crystals, 1 + Math.floor(I / 5)));
+    }
+    const cx = A.x + nx * this.radius(A), cz = A.z + nz * this.radius(A);
+    this.ev({ k: 'clash', x: cx, y: (A.y + B.y) / 2 + 0.35, z: cz, s: I, a: A.id, b: B.id });
+    if (B.burst >= 1) this.finish(B, 'burst', A.id);
+    if (A.burst >= 1) this.finish(A, 'burst', B.id);
+  }
+
+  hazards(dt: number) {
+    for (const [k, v] of this.hazardHitCd) { if (v - dt <= 0) this.hazardHitCd.delete(k); else this.hazardHitCd.set(k, v - dt); }
+    const t = this.s.t;
+    this.markers.forEach((m, mi) => {
+      if (m.kind === 'boost' || m.kind === 'spinpad') {
+        for (const top of this.s.tops) {
+          if (!top.alive || !top.grounded) continue;
+          const dx = top.x - m.x, dz = top.z - m.z;
+          if (m.kind === 'spinpad') {
+            if (Math.hypot(dx, dz) < (m.r ?? 1.1)) top.spin = Math.min(1, top.spin + 0.09 * dt);
+          } else {
+            const a = m.rot ?? 0, fx = Math.sin(a), fz = Math.cos(a);
+            const along = dx * fx + dz * fz, side = dx * fz - dz * fx;
+            if (Math.abs(along) < 1.4 && Math.abs(side) < 0.9) {
+              top.vx += fx * 34 * dt; top.vz += fz * 34 * dt;
+              const key = `b${mi}:${top.id}`;
+              if (!this.hazardHitCd.has(key)) { this.hazardHitCd.set(key, 1); this.ev({ k: 'pickup', id: top.id, what: 'boost', x: top.x, y: top.y, z: top.z }); }
+            }
+          }
+        }
+        return;
+      }
+      const hp = hazardPose(m, t);
+      if (!hp) return;
+      const baseY = this.ground(m.x, m.z);
+      for (const top of this.s.tops) {
+        if (!top.alive) continue;
+        if (top.y > baseY + 1.1) continue; // jumped over it
+        const r = this.radius(top);
+        let px: number, pz: number, hvx = hp.vx, hvz = hp.vz;
+        if (hp.kind === 'arm') {
+          const cp = closestOnSeg(hp.ax, hp.az, hp.bx, hp.bz, top.x, top.z);
+          px = cp.x; pz = cp.z;
+          // velocity of the arm at that point
+          const rx = cp.x - hp.ax, rz = cp.z - hp.az;
+          hvx = -rz * hp.w; hvz = rx * hp.w;
+        } else { px = hp.ax; pz = hp.az; }
+        const dx = top.x - px, dz = top.z - pz, d = Math.hypot(dx, dz);
+        const R = r + hp.r;
+        if (d >= R || d < 1e-4) continue;
+        const nx = dx / d, nz = dz / d;
+        top.x = px + nx * R; top.z = pz + nz * R;
+        const rvn = (top.vx - hvx) * nx + (top.vz - hvz) * nz;
+        const key = `${mi}:${top.id}`;
+        if (rvn < 0) {
+          const bounce = hp.kind === 'bumper' ? 1.0 : hp.kind === 'pillar' ? 0.6 : 1.1;
+          top.vx -= (1 + bounce) * rvn * nx; top.vz -= (1 + bounce) * rvn * nz;
+        }
+        if (hp.kind === 'bumper') { top.vx += nx * 9; top.vz += nz * 9; }
+        if (hp.kind === 'arm' || hp.kind === 'saw') { top.vx += hvx * 0.6 + nx * 4; top.vz += hvz * 0.6 + nz * 4; top.vy += 2.5; }
+        if (!this.hazardHitCd.has(key)) {
+          this.hazardHitCd.set(key, 0.4);
+          const dmg = hp.kind === 'saw' ? 0.09 : hp.kind === 'arm' ? 0.05 : hp.kind === 'bumper' ? 0.01 : 0.004;
+          if (top.fx.shield <= 0) top.spin -= dmg;
+          this.ev({ k: 'hazard', x: px + nx * hp.r, y: top.y + 0.3, z: pz + nz * hp.r, id: top.id });
+          if (top.flag >= 0 && hp.kind !== 'pillar') this.dropFlag(top);
+        }
+      }
+    });
+  }
+
+  // ---------------- finishes / respawns ----------------
+  finish(t: TopState, type: FinishType, by = -1) {
+    if (!t.alive) return;
+    t.alive = false;
+    t.out = type;
+    t.outT = 0;
+    if (by < 0 && this.s.t - t.lastHitT < 5) by = t.lastHit;
+    if (t.flag >= 0) this.dropFlag(t);
+    if (this.cfg.mode === 'rush') this.spillCrystals(t, Math.ceil(t.crystals / 2));
+    this.ev({ k: 'finish', id: t.id, type, by });
+    if (type === 'burst') this.ev({ k: 'burst', id: t.id, x: t.x, y: t.y, z: t.z });
+    const killer = by >= 0 ? this.s.tops[by] : null;
+    if (killer && killer.team !== t.team) killer.kos++;
+    this.s.lastFinish = FINISH_LABEL[type];
+    if (this.rounds && this.s.phase === 'battle') {
+      // award points
+      let team = -1;
+      if (this.numTeams === 2) team = 1 - t.team;
+      else if (killer && killer.team !== t.team) team = killer.team;
+      if (team >= 0) {
+        this.s.teamScores[team] += POINTS[type];
+        const k = this.s.tops.find((x) => x.team === team);
+        this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name} is out! +${POINTS[type]} ${this.teamLabel(team)}`, color: k?.color });
+      } else this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name} self-destructed!` });
+    } else if (!t.drone) {
+      this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name}${RESPAWN_MODES.has(this.cfg.mode) ? ' respawning…' : ''}` });
+    }
+    if (RESPAWN_MODES.has(this.cfg.mode) && !t.drone) {
+      if (this.cfg.mode === 'gauntlet') {
+        t.lives--;
+        if (t.lives > 0) t.respawnT = 2.5;
+      } else t.respawnT = this.cfg.mode === 'race' ? 1.2 : 2.5;
+    }
+  }
+
+  teamLabel(team: number) {
+    if (this.numTeams === 2 && this.cfg.mode !== 'duel') return team === 0 ? 'RED' : 'BLUE';
+    return this.s.tops.find((t) => t.team === team)?.name ?? `Team ${team + 1}`;
+  }
+
+  respawn(t: TopState, i: number) {
+    t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1;
+    const TS = this.terrain.track;
+    if (TS) {
+      // back on the ribbon a little behind where we fell off, facing forward
+      // respawn at the first solid ground at/after where we fell (so gaps don't become fall loops)
+      let k = t.prog;
+      for (let n = 0; n < 80 && !this.terrain.isSafe(TS.x[k], TS.z[k], 1.5); n++) k = (k + 2) % TS.n;
+      const keep = t.prog;
+      this.placeTop(t, TS.x[k], TS.z[k], 1.5);
+      t.prog = k < keep && keep - k < TS.n / 2 ? keep : k;
+      t.vx = TS.tx[k] * 6; t.vz = TS.tz[k] * 6;
+      return;
+    }
+    const sp = this.cfg.mode === 'gauntlet' ? this.spawnFor(t, i) : this.terrain.randomSafePoint(this.rnd, { ...this.spawnFor(t, i), r: 3 });
+    this.placeTop(t, sp.x, sp.z, 3);
+  }
+
+  // ---------------- items & specials ----------------
+  rollItem(t: TopState) {
+    // rubber-banding: weaker tops get stronger items
+    const weak = t.spin < 0.45 || this.isLosing(t);
+    const pool: ItemKind[] = weak ? ['surge', 'surge', 'comet', 'vortex', 'turbo', 'titan', 'shock'] : ITEM_POOL;
+    t.item = pool[Math.floor(this.rnd() * pool.length)];
+    t.roll = 1.2;
+  }
+
+  isLosing(t: TopState) {
+    const my = this.s.teamScores[t.team] ?? 0;
+    return this.s.teamScores.some((v) => v > my);
+  }
+
+  useItem(t: TopState) {
+    const it = t.item!;
+    t.item = null;
+    t.itemCd = 0.3;
+    this.ev({ k: 'use', id: t.id, item: it });
+    switch (it) {
+      case 'turbo': t.fx.turbo = 3.5; break;
+      case 'shield': t.fx.shield = 5; break;
+      case 'shock': this.shockwave(t, 5, 13, 0.05); break;
+      case 'surge': t.spin = Math.min(1.1, t.spin + 0.4); break;
+      case 'vortex': t.fx.vortex = 4; break;
+      case 'titan': t.fx.titan = 6; break;
+      case 'comet': {
+        const e = this.nearestEnemy(t);
+        let dx = t.vx, dz = t.vz;
+        if (e) { dx = e.x - t.x; dz = e.z - t.z; }
+        const d = Math.hypot(dx, dz) || 1;
+        this.s.projs.push({ id: this.s.nextId++, kind: 'comet', x: t.x, y: t.y + 0.8, z: t.z, vx: (dx / d) * 12, vy: 3, vz: (dz / d) * 12, owner: t.id, t: 0 });
+        break;
+      }
+      case 'mine':
+        this.s.mines.push({ id: this.s.nextId++, x: t.x - t.vx * 0.15, y: t.y, z: t.z - t.vz * 0.15, owner: t.id, t: 0 });
+        break;
+    }
+  }
+
+  useSpecial(t: TopState) {
+    t.special = 0;
+    this.ev({ k: 'special', id: t.id });
+    const names = { rush: 'METEOR RUSH', fortress: 'IRON FORTRESS', vortex: 'ETERNAL VORTEX', skydive: 'SKY DIVE' };
+    this.ev({ k: 'announce', text: names[t.specialKind], sub: t.name, color: t.color });
+    switch (t.specialKind) {
+      case 'rush': t.fx.special = 1.2; break;
+      case 'fortress': t.fx.special = 3.5; t.fx.shield = Math.max(t.fx.shield, 3.5); break;
+      case 'vortex': t.fx.special = 3; t.spin = Math.min(1.1, t.spin + 0.2); break;
+      case 'skydive': t.fx.special = 3; t.vy = 13; t.grounded = false; break;
+    }
+  }
+
+  shockwave(src: TopState, R: number, power: number, dmg: number) {
+    this.ev({ k: 'shock', x: src.x, y: src.y + 0.2, z: src.z, r: R, c: src.color });
+    for (const o of this.s.tops) {
+      if (o === src || !o.alive) continue;
+      const dx = o.x - src.x, dz = o.z - src.z, d = Math.hypot(dx, dz);
+      if (d > R || d < 0.01) continue;
+      const f = 1 - d / R;
+      const k = o.fx.shield > 0 ? 0.3 : 1;
+      o.vx += (dx / d) * power * f * k; o.vz += (dz / d) * power * f * k; o.vy += 5 * f * k;
+      o.spin -= dmg * f * k;
+      o.lastHit = src.id; o.lastHitT = this.s.t;
+      if (o.flag >= 0) this.dropFlag(o);
+      if (this.cfg.mode === 'rush') this.spillCrystals(o, Math.min(o.crystals, 2));
+    }
+  }
+
+  nearestEnemy(t: TopState) {
+    let best: TopState | null = null, bd = 1e9;
+    for (const o of this.s.tops) {
+      if (!o.alive || o.team === t.team) continue;
+      const d = Math.hypot(o.x - t.x, o.z - t.z);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+
+  // ---------------- world objects ----------------
+  updateObjects(dt: number) {
+    const s = this.s;
+    // item boxes
+    for (const b of s.boxes) {
+      if (b.t > 0) { b.t -= dt; continue; }
+      for (const t of s.tops) {
+        if (!t.alive || t.item || t.roll > 0 || t.drone) continue;
+        if (Math.hypot(t.x - b.x, t.z - b.z) < this.radius(t) + 0.6 && Math.abs(t.y - b.y - 0.6) < 1.5) {
+          b.t = 6;
+          this.rollItem(t);
+          this.ev({ k: 'pickup', id: t.id, what: 'box', x: b.x, y: b.y + 0.6, z: b.z });
+          break;
+        }
+      }
+    }
+    // projectiles
+    for (const p of s.projs) {
+      p.t += dt;
+      const owner = s.tops[p.owner];
+      const e = owner ? this.nearestEnemy(owner) : null;
+      if (e) {
+        const dx = e.x - p.x, dy = e.y + 0.4 - p.y, dz = e.z - p.z, d = Math.hypot(dx, dy, dz) || 1;
+        p.vx += (dx / d) * 30 * dt; p.vy += (dy / d) * 30 * dt; p.vz += (dz / d) * 30 * dt;
+        const sp = Math.hypot(p.vx, p.vy, p.vz);
+        if (sp > 15) { p.vx *= 15 / sp; p.vy *= 15 / sp; p.vz *= 15 / sp; }
+      }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      const g = this.terrain.height(p.x, p.z);
+      if (g > VOID && p.y < g + 0.3) { p.y = g + 0.3; p.vy = Math.abs(p.vy) * 0.5; }
+      for (const t of s.tops) {
+        if (!t.alive || t.team === owner?.team) continue;
+        if (Math.hypot(t.x - p.x, t.y + 0.4 - p.y, t.z - p.z) < this.radius(t) + 0.4) {
+          const d = Math.hypot(p.vx, p.vz) || 1;
+          const k = t.fx.shield > 0 ? 0.2 : 1;
+          t.vx += (p.vx / d) * 11 * k; t.vz += (p.vz / d) * 11 * k; t.vy += 6 * k;
+          t.spin -= 0.12 * k;
+          t.lastHit = p.owner; t.lastHitT = s.t;
+          if (t.flag >= 0) this.dropFlag(t);
+          this.ev({ k: 'shock', x: p.x, y: p.y, z: p.z, r: 2.5, c: '#ff9e3d' });
+          p.t = 99;
+        }
+      }
+    }
+    s.projs = s.projs.filter((p) => p.t < 4.5);
+    // mines
+    for (const m of s.mines) {
+      m.t += dt;
+      if (m.t < 0.6) continue;
+      for (const t of s.tops) {
+        if (!t.alive || (t.id === m.owner && m.t < 3)) continue;
+        if (Math.hypot(t.x - m.x, t.z - m.z) < this.radius(t) + 0.5 && Math.abs(t.y - m.y) < 1) {
+          t.fx.frozen = t.fx.shield > 0 ? 0.3 : 1.6;
+          t.vy += 6; t.spin -= 0.04;
+          t.lastHit = m.owner; t.lastHitT = s.t;
+          this.ev({ k: 'shock', x: m.x, y: m.y + 0.3, z: m.z, r: 2, c: '#9fe8ff' });
+          m.t = 99;
+          break;
+        }
+      }
+    }
+    s.mines = s.mines.filter((m) => m.t < 30);
+    // crystals: ballistic arcs and bounce
+    for (const c of s.crystals) {
+      c.t += dt;
+      c.vy -= G * dt;
+      c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt;
+      const g = this.terrain.height(c.x, c.z);
+      if (g > VOID && c.y < g + 0.35) { c.y = g + 0.35; c.vy = Math.abs(c.vy) * 0.35; c.vx *= 0.7; c.vz *= 0.7; }
+      if (c.t < 0.5) continue;
+      for (const t of s.tops) {
+        if (!t.alive || t.drone) continue;
+        if (Math.hypot(t.x - c.x, t.z - c.z) < this.radius(t) + 0.45 && Math.abs(t.y - c.y) < 1.3) {
+          t.crystals++;
+          if (this.cfg.mode === 'rush') s.teamScores[t.team] = this.teamCrystals(t.team);
+          this.ev({ k: 'pickup', id: t.id, what: 'crystal', x: c.x, y: c.y, z: c.z });
+          c.t = -99;
+          break;
+        }
+      }
+    }
+    s.crystals = s.crystals.filter((c) => c.t >= 0 && c.y > -6);
+  }
+
+  teamCrystals(team: number) {
+    return this.s.tops.filter((t) => t.team === team).reduce((a, t) => a + t.crystals, 0);
+  }
+
+  spillCrystals(t: TopState, n: number) {
+    n = Math.min(n, t.crystals);
+    if (n <= 0) return;
+    t.crystals -= n;
+    this.s.teamScores[t.team] = this.teamCrystals(t.team);
+    for (let k = 0; k < n; k++) {
+      const a = this.rnd() * Math.PI * 2, sp = 3 + this.rnd() * 4;
+      this.s.crystals.push({ id: this.s.nextId++, x: t.x, y: t.y + 0.6, z: t.z, vx: Math.cos(a) * sp, vy: 6 + this.rnd() * 4, vz: Math.sin(a) * sp, t: 0 });
+    }
+  }
+
+  spawnCrystal() {
+    const p = this.terrain.randomSafePoint(this.rnd);
+    this.s.crystals.push({ id: this.s.nextId++, x: p.x, y: this.ground(p.x, p.z) + 6, z: p.z, vx: 0, vy: 0, vz: 0, t: 0.5 });
+  }
+
+  spawnGem() {
+    const p = this.terrain.randomSafePoint(this.rnd);
+    this.s.gems.push({ id: this.s.nextId++, x: p.x, y: this.ground(p.x, p.z) + 0.6, z: p.z });
+  }
+
+  dropFlag(t: TopState) {
+    const f = this.s.flags.find((f) => f.carrier === t.id);
+    t.flag = -1;
+    if (!f) return;
+    f.carrier = -1;
+    f.home = false;
+    f.t = 0;
+    f.x = t.x; f.y = this.ground(t.x, t.z); f.z = t.z;
+    this.ev({ k: 'announce', text: 'CORE DROPPED', sub: t.name, color: '#fff' });
+  }
+
+  moveZone(first = false) {
+    const zm = this.markers.filter((m) => m.kind === 'zone');
+    let p: { x: number; z: number };
+    if (first && zm.length) p = zm[0];
+    else p = this.terrain.randomSafePoint(this.rnd, { x: 0, z: 0, r: this.terrain.size * 0.6 });
+    const r = zm[0]?.r ?? 2.6;
+    this.s.zone = { x: p.x, y: this.ground(p.x, p.z), z: p.z, r, owner: -1, t: 0 };
+    if (!first) this.ev({ k: 'announce', text: 'ZONE MOVED', color: '#ffd23a' });
+  }
+
+  // ---------------- mode rules ----------------
+  modeUpdate(dt: number) {
+    const s = this.s;
+    const mode = this.cfg.mode;
+    if (this.rounds) {
+      const alive = new Set(s.tops.filter((t) => t.alive).map((t) => t.team));
+      const timeUp = s.timeLeft <= 0;
+      if (alive.size <= 1 || timeUp) {
+        let roundWinner = alive.size === 1 ? [...alive][0] : -1;
+        if (timeUp && alive.size > 1) {
+          // highest total spin wins the round
+          let best = -1, bv = -1;
+          for (const team of alive) {
+            const v = s.tops.filter((t) => t.team === team && t.alive).reduce((a, t) => a + t.spin, 0);
+            if (v > bv) { bv = v; best = team; }
+          }
+          roundWinner = best;
+          s.teamScores[best] += 1;
+          this.ev({ k: 'announce', text: 'TIME UP', sub: `${this.teamLabel(best)} wins on spin! +1` });
+        }
+        if (mode === 'ffa' && alive.size === 1 && roundWinner >= 0) s.teamScores[roundWinner] += 1;
+        s.phase = 'roundEnd';
+        s.phaseT = 0;
+        const max = Math.max(...s.teamScores);
+        if (max >= this.cfg.target) {
+          const leaders = s.teamScores.map((v, i) => [v, i]).filter(([v]) => v === max);
+          s.winner = leaders.length === 1 ? leaders[0][1] : -2;
+        }
+        if (roundWinner >= 0 && s.winner === -1) this.ev({ k: 'announce', text: `${this.teamLabel(roundWinner)} TAKES THE ROUND`, sub: s.lastFinish });
+      }
+      return;
+    }
+
+    // continuous modes
+    if (mode === 'ctf') {
+      for (const f of s.flags) {
+        if (f.carrier >= 0) {
+          const c = s.tops[f.carrier];
+          f.x = c.x; f.y = c.y + 1.2; f.z = c.z;
+          // capture: carrier reaches own home flag while it's home
+          const own = s.flags.find((o) => o.team === c.team);
+          if (own && own.home && Math.hypot(c.x - own.hx, c.z - own.hz) < 2.0) {
+            s.teamScores[c.team]++;
+            c.score++;
+            c.flag = -1;
+            f.carrier = -1; f.home = true; f.x = f.hx; f.y = f.hy; f.z = f.hz;
+            this.ev({ k: 'announce', text: 'CAPTURE!', sub: `${c.name} scores for ${this.teamLabel(c.team)}`, color: c.color });
+            this.ev({ k: 'shock', x: c.x, y: c.y, z: c.z, r: 4, c: c.color });
+          }
+          continue;
+        }
+        if (!f.home) { f.t += dt; if (f.t > 15) { f.home = true; f.x = f.hx; f.y = f.hy; f.z = f.hz; } }
+        for (const t of s.tops) {
+          if (!t.alive || t.flag >= 0) continue;
+          if (Math.hypot(t.x - f.x, t.z - f.z) > this.radius(t) + 0.9 || Math.abs(t.y - f.y) > 2) continue;
+          if (t.team === f.team) {
+            if (!f.home) { f.home = true; f.x = f.hx; f.y = f.hy; f.z = f.hz; this.ev({ k: 'announce', text: 'CORE RETURNED', sub: t.name }); }
+          } else {
+            f.carrier = t.id; f.home = false; t.flag = f.team;
+            this.ev({ k: 'announce', text: 'CORE TAKEN!', sub: t.name, color: t.color });
+            this.ev({ k: 'pickup', id: t.id, what: 'flag', x: f.x, y: f.y, z: f.z });
+            break;
+          }
+        }
+      }
+    } else if (mode === 'rush') {
+      if (s.crystals.length < 14 && this.rnd() < dt * 2.2) this.spawnCrystal();
+    } else if (mode === 'koth' && s.zone) {
+      const z = s.zone;
+      z.t += dt;
+      const inside = new Set(s.tops.filter((t) => t.alive && Math.hypot(t.x - z.x, t.z - z.z) < z.r).map((t) => t.team));
+      z.owner = inside.size === 1 ? [...inside][0] : inside.size > 1 ? -2 : -1;
+      if (z.owner >= 0) {
+        s.teamScores[z.owner] += dt;
+        for (const t of s.tops) if (t.team === z.owner && t.alive) t.special = Math.min(1, t.special + dt * 0.05);
+      }
+      if (z.t > 25) this.moveZone();
+    } else if (mode === 'race') {
+      return this.raceUpdate();
+    } else if (mode === 'gauntlet') {
+      for (const g of s.gems) {
+        for (const t of s.tops) {
+          if (!t.alive || t.drone) continue;
+          if (Math.hypot(t.x - g.x, t.z - g.z) < this.radius(t) + 0.6 && Math.abs(t.y - g.y) < 1.5) {
+            g.id = -1;
+            t.score++;
+            s.teamScores[0]++;
+            s.gemsLeft--;
+            t.spin = Math.min(1.05, t.spin + 0.06);
+            this.ev({ k: 'pickup', id: t.id, what: 'gem', x: g.x, y: g.y, z: g.z });
+            if (s.teamScores[0] % 4 === 0) this.spawnDrone();
+            break;
+          }
+        }
+      }
+      s.gems = s.gems.filter((g) => g.id >= 0);
+      const active = s.gems.length;
+      if (active < 3 && s.gemsLeft - active > 0) this.spawnGem();
+      if (s.gemsLeft <= 0) return this.endMatch(0, `CLEARED IN ${(this.cfg.timeLimit - s.timeLeft).toFixed(1)}s`);
+      const humansAlive = s.tops.some((t) => !t.drone && (t.alive || t.respawnT > 0));
+      if (!humansAlive) return this.endMatch(-2, 'OUT OF SPIN');
+      if (s.timeLeft <= 0) return this.endMatch(-2, 'TIME UP');
+      return;
+    }
+    const target = this.cfg.target;
+    const max = Math.max(...s.teamScores);
+    if ((target > 0 && max >= target) || s.timeLeft <= 0) {
+      const leaders = s.teamScores.map((v, i) => [v, i]).filter(([v]) => v === max);
+      this.endMatch(leaders.length === 1 ? leaders[0][1] : -2, s.timeLeft <= 0 ? 'TIME UP' : 'TARGET REACHED');
+    }
+  }
+
+  raceUpdate() {
+    const s = this.s;
+    const S = this.terrain.track;
+    if (!S) return;
+    const laps = this.cfg.target || 3;
+    for (const t of s.tops) {
+      if (t.finishT >= 0 || !t.alive) continue;
+      const prev = t.prog;
+      const ns = nearestSample(S, t.x, t.z, t.prog);
+      if (ns.d > S.width) continue;
+      t.prog = ns.i;
+      const q = Math.floor((t.prog / S.n) * 4);
+      if (q === t.cp + 1) t.cp = q;
+      if (prev > S.n * 0.85 && t.prog < S.n * 0.15) {
+        if (t.cp >= 3) {
+          t.lap++;
+          t.cp = 0;
+          if (t.lap >= laps) {
+            t.finishT = s.t;
+            this.finishers++;
+            t.score = this.finishers;
+            this.ev({ k: 'announce', text: this.finishers === 1 ? `${t.name} WINS!` : `${t.name} FINISHED`, sub: `P${this.finishers}`, color: t.color });
+            if (this.finishers === 1) this.endT = s.t + 20;
+          } else if (!t.cpu) this.ev({ k: 'announce', text: t.lap === laps - 1 ? 'FINAL LAP' : `LAP ${t.lap + 1}`, sub: t.name, color: t.color });
+        }
+      } else if (prev < S.n * 0.15 && t.prog > S.n * 0.85) {
+        // crossed the line backwards
+        t.cp = -1;
+      }
+    }
+    const order = s.tops.filter((t) => !t.drone).sort((a, b) => {
+      if (a.finishT >= 0 || b.finishT >= 0) return (a.finishT < 0 ? 1e9 : a.finishT) - (b.finishT < 0 ? 1e9 : b.finishT);
+      return b.lap * S.n + b.prog - (a.lap * S.n + a.prog);
+    });
+    order.forEach((t, i) => (t.place = i + 1));
+    for (let k = 0; k < s.teamScores.length; k++) s.teamScores[k] = Math.max(0, ...s.tops.filter((t) => t.team === k).map((t) => t.lap));
+    const humansDone = s.tops.filter((t) => !t.cpu).every((t) => t.finishT >= 0);
+    if ((this.finishers > 0 && (humansDone || s.t > this.endT)) || s.timeLeft <= 0) {
+      const first = order[0];
+      this.endMatch(first ? first.team : -2, first ? `${first.name} takes the Grand Prix` : 'TIME UP');
+    }
+  }
+
+  spawnDrone() {
+    const p = this.terrain.randomSafePoint(this.rnd);
+    const blade = { ...this.cfg.players[0].blade, id: 'drone' + this.s.nextId++, name: 'Drone', primary: '#444', glow: '#ff2244', spinDir: -1 as const, tip: 'flat' as const };
+    const t = this.addTop('Drone', 9, blade, 2, 0, true);
+    this.placeTop(t, p.x, p.z, 4);
+    this.ev({ k: 'announce', text: 'DRONE INCOMING', color: '#ff2244' });
+  }
+
+  endMatch(winner: number, msg: string) {
+    this.s.winner = winner;
+    this.s.phase = 'matchEnd';
+    this.s.phaseT = 0;
+    this.s.lastFinish = msg;
+    this.ev({ k: 'announce', text: winner === -2 ? (this.cfg.mode === 'gauntlet' ? 'FAILED' : 'DRAW') : winner >= 0 && this.cfg.mode === 'gauntlet' ? 'GAUNTLET CLEAR!' : 'MATCH OVER', sub: msg });
+  }
+}

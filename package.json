@@ -1,0 +1,55 @@
+{
+  "name": "bitblade",
+  "productName": "BitBlade",
+  "version": "0.1.0",
+  "description": "BitBlade - spinning top battle arena",
+  "author": "bitbased",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "relay": "bun run server/relay-bun.ts",
+    "electron": "electron .",
+    "electron:dev": "bun run scripts/dev-electron.ts",
+    "dist:win": "vite build && electron-builder --win nsis",
+    "dist:mac": "vite build && electron-builder --mac dmg",
+    "worker:dev": "vite build && cd worker && bunx wrangler dev",
+    "worker:deploy": "vite build && cd worker && bunx wrangler deploy"
+  },
+  "build": {
+    "appId": "net.bitbased.bitblade",
+    "productName": "BitBlade",
+    "directories": {
+      "output": "release"
+    },
+    "files": ["dist/**", "electron/**", "package.json"],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.games"
+    }
+  },
+  "dependencies": {
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.2",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

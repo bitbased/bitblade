@@ -1,0 +1,289 @@
+// Unified input: two keyboard layouts, mouse, any number of gamepads, touch joystick + gyro tilt.
+import type { Control, ControllerSpec } from '../game/types';
+
+const K1 = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], dash: ['Space'], jump: ['KeyF', 'ShiftLeft'], item: ['KeyE'], special: ['KeyQ'] };
+const K2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], dash: ['Enter', 'Numpad0'], jump: ['ShiftRight', 'NumpadDecimal'], item: ['Slash', 'NumpadEnter'], special: ['Period', 'Numpad1'] };
+
+export const CONTROL_HELP: Record<string, string> = {
+  kb1: 'WASD move · Space dash · F/LShift jump · E item · Q special',
+  kb2: 'Arrows move · Enter dash · RShift jump · / item · . special',
+  mouse: 'Hold LMB to steer to cursor · RMB dash · Space jump · E item · Q special',
+  pad: 'Stick move · A/RT dash · B/LB jump · X/RB item · Y/LT special',
+  touch: 'Left thumb joystick (or tilt) · right buttons: dash / jump / item / special',
+  cpu: 'Computer controlled',
+  remote: 'Online player',
+};
+
+export type DeviceKey = string; // 'kb1' | 'kb2' | 'mouse' | 'pad0' | 'touch'
+
+export function specKey(s: ControllerSpec): DeviceKey {
+  return s.type === 'pad' ? `pad${s.index}` : s.type;
+}
+
+export function specLabel(s: ControllerSpec) {
+  switch (s.type) {
+    case 'kb1': return 'Keyboard (WASD)';
+    case 'kb2': return 'Keyboard (Arrows)';
+    case 'mouse': return 'Mouse';
+    case 'pad': return `Gamepad ${s.index + 1}`;
+    case 'touch': return s.gyro ? 'Touch + Gyro' : 'Touch';
+    case 'cpu': return `CPU ${['', 'Easy', 'Normal', 'Hard'][s.level]}`;
+    case 'remote': return 'Online';
+  }
+}
+
+export class Input {
+  keys = new Set<string>();
+  pressed = new Set<string>();
+  mouseNdc = { x: 0, y: 0 };
+  mouseButtons = 0;
+  mousePressed = 0;
+  mouseMoved = false;
+  padPrev: boolean[][] = [];
+  padNow: boolean[][] = [];
+  padAxes: number[][] = [];
+  touch: TouchControls | null = null;
+  gyro = { on: false, beta: 0, gamma: 0, b0: 0, g0: 0, calibrated: false };
+  /** world-space ground point under mouse, provided by the renderer */
+  mouseWorld: (() => { x: number; z: number } | null) | null = null;
+
+  constructor() {
+    addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+      if (!this.keys.has(e.code)) this.pressed.add(e.code);
+      this.keys.add(e.code);
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Slash'].includes(e.code) && document.body.classList.contains('ingame')) e.preventDefault();
+    });
+    addEventListener('keyup', (e) => this.keys.delete(e.code));
+    addEventListener('blur', () => this.keys.clear());
+    addEventListener('mousemove', (e) => {
+      this.mouseNdc.x = (e.clientX / innerWidth) * 2 - 1;
+      this.mouseNdc.y = -(e.clientY / innerHeight) * 2 + 1;
+      this.mouseMoved = true;
+    });
+    addEventListener('mousedown', (e) => {
+      this.mouseButtons |= 1 << e.button;
+      this.mousePressed |= 1 << e.button;
+    });
+    addEventListener('mouseup', (e) => (this.mouseButtons &= ~(1 << e.button)));
+    addEventListener('contextmenu', (e) => { if (document.body.classList.contains('ingame')) e.preventDefault(); });
+    addEventListener('deviceorientation', (e) => {
+      this.gyro.beta = e.beta ?? 0;
+      this.gyro.gamma = e.gamma ?? 0;
+      if (this.gyro.on && !this.gyro.calibrated) this.calibrateGyro();
+    });
+  }
+
+  static isTouchDevice() {
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  }
+
+  async enableGyro() {
+    const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } }).DeviceOrientationEvent;
+    try {
+      if (DOE?.requestPermission) {
+        const r = await DOE.requestPermission();
+        if (r !== 'granted') return false;
+      }
+    } catch { return false; }
+    this.gyro.on = true;
+    this.gyro.calibrated = false;
+    return true;
+  }
+
+  calibrateGyro() {
+    this.gyro.b0 = this.gyro.beta;
+    this.gyro.g0 = this.gyro.gamma;
+    this.gyro.calibrated = true;
+  }
+
+  poll() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (let i = 0; i < pads.length; i++) {
+      const p = pads[i];
+      this.padPrev[i] = this.padNow[i] ?? [];
+      if (!p || !p.connected) { this.padNow[i] = []; this.padAxes[i] = []; continue; }
+      this.padNow[i] = p.buttons.map((b) => b.pressed || b.value > 0.5);
+      this.padAxes[i] = [...p.axes];
+    }
+  }
+
+  endFrame() {
+    this.pressed.clear();
+    this.mousePressed = 0;
+    this.touch?.endFrame();
+  }
+
+  connectedPads(): number[] {
+    const out: number[] = [];
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (let i = 0; i < pads.length; i++) if (pads[i]?.connected) out.push(i);
+    return out;
+  }
+
+  padName(i: number) {
+    const p = navigator.getGamepads?.()[i];
+    return p ? p.id.replace(/\(.*?\)/g, '').trim().slice(0, 28) : `Gamepad ${i + 1}`;
+  }
+
+  private padBtn(i: number, b: number) { return !!this.padNow[i]?.[b]; }
+  private padEdge(i: number, b: number) { return !!this.padNow[i]?.[b] && !this.padPrev[i]?.[b]; }
+  private anyKey(list: string[]) { return list.some((k) => this.keys.has(k)); }
+  private anyPressed(list: string[]) { return list.some((k) => this.pressed.has(k)); }
+
+  rumble(spec: ControllerSpec, strength: number, ms = 120) {
+    if (spec.type === 'pad') {
+      const p = navigator.getGamepads?.()[spec.index] as (Gamepad & { vibrationActuator?: { playEffect?: (t: string, o: object) => void } }) | null;
+      p?.vibrationActuator?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: Math.min(1, strength), weakMagnitude: Math.min(1, strength * 0.6) });
+    } else if (spec.type === 'touch' && navigator.vibrate) navigator.vibrate(Math.min(60, ms * strength));
+  }
+
+  read(spec: ControllerSpec, me?: { x: number; z: number }): Control {
+    const c: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
+    const kb = (L: typeof K1) => {
+      c.mx = (this.anyKey(L.right) ? 1 : 0) - (this.anyKey(L.left) ? 1 : 0);
+      c.mz = (this.anyKey(L.down) ? 1 : 0) - (this.anyKey(L.up) ? 1 : 0);
+      c.dash = this.anyPressed(L.dash);
+      c.jump = this.anyPressed(L.jump);
+      c.item = this.anyPressed(L.item);
+      c.special = this.anyPressed(L.special);
+    };
+    switch (spec.type) {
+      case 'kb1': kb(K1); break;
+      case 'kb2': kb(K2); break;
+      case 'mouse': {
+        const w = this.mouseWorld?.();
+        if (w && me) {
+          const dx = w.x - me.x, dz = w.z - me.z, d = Math.hypot(dx, dz) || 1;
+          const mag = Math.min(1, d / 3);
+          if (this.mouseButtons & 1) { c.mx = (dx / d) * mag; c.mz = (dz / d) * mag; }
+          if (this.mousePressed & 4) { c.mx = dx / d; c.mz = dz / d; c.dash = true; }
+          if (this.mousePressed & 2) { c.mx = dx / d; c.mz = dz / d; c.dash = true; }
+        }
+        c.jump = this.anyPressed(['Space']);
+        c.item = this.anyPressed(['KeyE']) || !!(this.mousePressed & 8);
+        c.special = this.anyPressed(['KeyQ']) || !!(this.mousePressed & 16);
+        // WASD also works in mouse mode
+        const kx = (this.anyKey(K1.right) ? 1 : 0) - (this.anyKey(K1.left) ? 1 : 0);
+        const kz = (this.anyKey(K1.down) ? 1 : 0) - (this.anyKey(K1.up) ? 1 : 0);
+        if (kx || kz) { c.mx = kx; c.mz = kz; }
+        break;
+      }
+      case 'pad': {
+        const i = spec.index;
+        const ax = this.padAxes[i] ?? [];
+        let x = ax[0] ?? 0, y = ax[1] ?? 0;
+        const m = Math.hypot(x, y);
+        if (m < 0.15) { x = 0; y = 0; } else { const k = (m - 0.15) / 0.85 / m; x *= k; y *= k; }
+        if (this.padBtn(i, 14)) x = -1;
+        if (this.padBtn(i, 15)) x = 1;
+        if (this.padBtn(i, 12)) y = -1;
+        if (this.padBtn(i, 13)) y = 1;
+        c.mx = x; c.mz = y;
+        c.dash = this.padEdge(i, 0) || this.padEdge(i, 7);
+        c.jump = this.padEdge(i, 1) || this.padEdge(i, 4);
+        c.item = this.padEdge(i, 2) || this.padEdge(i, 5);
+        c.special = this.padEdge(i, 3) || this.padEdge(i, 6);
+        break;
+      }
+      case 'touch': {
+        const t = this.touch;
+        if (t) {
+          c.mx = t.jx; c.mz = t.jy;
+          c.dash = t.edge.dash; c.jump = t.edge.jump; c.item = t.edge.item; c.special = t.edge.special;
+        }
+        if (spec.gyro && this.gyro.on) {
+          const gx = (this.gyro.gamma - this.gyro.g0) / 25, gz = (this.gyro.beta - this.gyro.b0) / 25;
+          if (Math.hypot(gx, gz) > 0.12 && Math.hypot(c.mx, c.mz) < 0.1) { c.mx = Math.max(-1, Math.min(1, gx)); c.mz = Math.max(-1, Math.min(1, gz)); }
+        }
+        break;
+      }
+    }
+    return c;
+  }
+
+  /** Devices that pressed their "join/confirm" button this frame. */
+  joinPresses(): ControllerSpec[] {
+    const out: ControllerSpec[] = [];
+    if (this.pressed.has('Space')) out.push({ type: 'kb1' });
+    if (this.pressed.has('Enter') || this.pressed.has('Numpad0')) out.push({ type: 'kb2' });
+    for (let i = 0; i < this.padNow.length; i++) if (this.padEdge(i, 0) || this.padEdge(i, 9)) out.push({ type: 'pad', index: i });
+    return out;
+  }
+
+  /** start/escape pressed on any device → pause */
+  pausePressed() {
+    if (this.pressed.has('Escape') || this.pressed.has('KeyP')) return true;
+    for (let i = 0; i < this.padNow.length; i++) if (this.padEdge(i, 9)) return true;
+    return false;
+  }
+}
+
+/** On-screen joystick + buttons for phones/tablets. */
+export class TouchControls {
+  root: HTMLDivElement;
+  jx = 0; jy = 0;
+  edge = { dash: false, jump: false, item: false, special: false };
+  private stickId = -1;
+  private cx = 0; private cy = 0;
+  private knob: HTMLDivElement;
+  private base: HTMLDivElement;
+
+  constructor(parent: HTMLElement) {
+    this.root = document.createElement('div');
+    this.root.className = 'touch-ui';
+    this.root.innerHTML = `
+      <div class="touch-stick-zone"><div class="touch-base"><div class="touch-knob"></div></div></div>
+      <div class="touch-btns">
+        <button data-b="special" class="tb tb-special">SP</button>
+        <button data-b="item" class="tb tb-item">ITEM</button>
+        <button data-b="jump" class="tb tb-jump">JUMP</button>
+        <button data-b="dash" class="tb tb-dash">DASH</button>
+      </div>`;
+    parent.appendChild(this.root);
+    this.base = this.root.querySelector('.touch-base')!;
+    this.knob = this.root.querySelector('.touch-knob')!;
+    const zone = this.root.querySelector('.touch-stick-zone') as HTMLDivElement;
+    zone.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      this.stickId = t.identifier;
+      this.cx = t.clientX; this.cy = t.clientY;
+      this.base.style.left = `${t.clientX - 60}px`;
+      this.base.style.top = `${t.clientY - 60}px`;
+      this.base.classList.add('on');
+    }, { passive: false });
+    zone.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.identifier !== this.stickId) continue;
+        let dx = t.clientX - this.cx, dy = t.clientY - this.cy;
+        const d = Math.hypot(dx, dy), max = 55;
+        if (d > max) { dx = (dx / d) * max; dy = (dy / d) * max; }
+        this.jx = dx / max; this.jy = dy / max;
+        this.knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      }
+    }, { passive: false });
+    const end = (e: TouchEvent) => {
+      for (const t of Array.from(e.changedTouches)) if (t.identifier === this.stickId) {
+        this.stickId = -1; this.jx = this.jy = 0;
+        this.knob.style.transform = '';
+        this.base.classList.remove('on');
+      }
+    };
+    zone.addEventListener('touchend', end);
+    zone.addEventListener('touchcancel', end);
+    this.root.querySelectorAll<HTMLButtonElement>('.tb').forEach((b) => {
+      b.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const k = b.dataset.b as keyof TouchControls['edge'];
+        this.edge[k] = true;
+        b.classList.add('down');
+        navigator.vibrate?.(8);
+      }, { passive: false });
+      b.addEventListener('touchend', () => b.classList.remove('down'));
+    });
+  }
+  endFrame() { this.edge.dash = this.edge.jump = this.edge.item = this.edge.special = false; }
+  dispose() { this.root.remove(); }
+}

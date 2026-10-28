@@ -1,0 +1,449 @@
+// Local + online-host lobby: press-to-join slots, blades, teams, arena, rules, invite codes.
+import { h, MenuNav, type App, type Screen } from './app';
+import { allBlades, findBlade, PRESETS, type BladeDesign } from '../core/blade';
+import { ringPoints } from '../core/bladeMesh';
+import { allArenas, findArena } from '../game/terrain';
+import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
+import { Input, specKey, specLabel } from '../input/input';
+import { hostCloud, hostLocal, type HostTransport } from '../net/transport';
+import { getPlatform } from '../net/platform';
+import { TEAM_COLORS } from './hud';
+import { setBackdropVisible } from './backdrop';
+import { settings } from '../core/settings';
+import { icon, drawIcon } from './icons';
+import type { MatchArg } from './match';
+
+interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
+
+const L = {
+  mode: 'duel' as ModeId,
+  arenaId: 'neon-stadium',
+  items: true,
+  target: 4,
+  time: 90,
+  slots: [] as Slot[],
+};
+
+// online host session survives lobby <-> match round trips
+let hostT: HostTransport | null = null;
+let lobbyListeners = false;
+
+export function drawBladeIcon(cv: HTMLCanvasElement, d: BladeDesign, angle = 0) {
+  const S = cv.width;
+  const c = cv.getContext('2d')!;
+  c.clearRect(0, 0, S, S);
+  c.save();
+  c.translate(S / 2, S / 2);
+  c.rotate(angle);
+  const pts = ringPoints(d, 120);
+  const k = S * 0.42 / Math.max(...pts.map((p) => Math.hypot(p.x, p.y)));
+  c.shadowColor = d.glow;
+  c.shadowBlur = S * 0.12;
+  c.beginPath();
+  pts.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
+  c.closePath();
+  const g = c.createRadialGradient(0, 0, S * 0.05, 0, 0, S * 0.45);
+  g.addColorStop(0, d.accent);
+  g.addColorStop(0.35, d.primary);
+  g.addColorStop(1, d.secondary);
+  c.fillStyle = g;
+  c.fill();
+  c.shadowBlur = 0;
+  c.lineWidth = S * 0.02;
+  c.strokeStyle = d.glow;
+  c.stroke();
+  c.beginPath();
+  c.arc(0, 0, S * 0.13, 0, Math.PI * 2);
+  c.fillStyle = d.secondary;
+  c.fill();
+  c.strokeStyle = d.accent;
+  c.stroke();
+  c.rotate(-angle);
+  c.fillStyle = d.emblemColor;
+  c.font = `900 ${S * 0.16}px Orbitron, sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  if (!drawIcon(c, d.emblem, 0, 0, S * 0.18, d.emblemColor)) c.fillText(d.emblem || '', 0, S * 0.01);
+  c.restore();
+}
+
+export class LobbyScreen implements Screen {
+  app!: App;
+  el!: HTMLElement;
+  nav!: MenuNav;
+  slotsEl!: HTMLElement;
+  icons: { cv: HTMLCanvasElement; d: BladeDesign }[] = [];
+  angle = 0;
+  onlineEl!: HTMLElement;
+  peerSlot = new Map<number, number>();
+  broadcastT = 0;
+  dirty = true;
+
+  get mode() { return MODES.find((m) => m.id === L.mode)!; }
+
+  mount(app: App, arg?: unknown) {
+    this.app = app;
+    setBackdropVisible(true, app.canvas);
+    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean };
+    if (a.mode && a.mode !== L.mode) this.setMode(a.mode);
+    else if (a.mode) this.setMode(a.mode, true);
+    if (a.arenaId) L.arenaId = a.arenaId;
+    if (!L.slots.some((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote')) {
+      L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb1' }, bladeId: PRESETS[0].id, team: 0 });
+    }
+    if (a.bladeId) L.slots[0].bladeId = a.bladeId;
+    this.fillCpus();
+    this.el = this.build();
+    app.root.append(this.el);
+    this.nav = new MenuNav(app, this.el, () => this.leave());
+    this.nav.focus(0);
+    this.wireHost();
+  }
+
+  setMode(id: ModeId, keepArena = false) {
+    L.mode = id;
+    const m = this.mode;
+    L.target = m.target;
+    L.time = m.time;
+    const ok = m.arenas.includes(L.arenaId) || allArenas().find((x) => x.id === L.arenaId)?.custom;
+    if (!keepArena || !ok) L.arenaId = m.arenas[0];
+    if (L.slots.length > m.maxPlayers) L.slots = L.slots.filter((s, i) => i < m.maxPlayers || s.ctrl.type === 'remote');
+    this.assignTeams();
+  }
+
+  fillCpus() {
+    const m = this.mode;
+    const names = ['Kai', 'Ryo', 'Mika', 'Zed', 'Nova', 'Juno', 'Rex', 'Ivy'];
+    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' ? 1 : 2)) {
+      const used = new Set(L.slots.map((s) => s.bladeId));
+      const blade = PRESETS.find((b) => !used.has(b.id)) ?? PRESETS[L.slots.length % PRESETS.length];
+      L.slots.push({ name: `CPU ${names[L.slots.length % names.length]}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length });
+    }
+    this.assignTeams();
+  }
+
+  assignTeams(force = false) {
+    const m = this.mode;
+    L.slots.forEach((s, i) => {
+      if (m.id === 'gauntlet') s.team = 0;
+      else if (m.teams === 0 || m.id === 'duel') s.team = i;
+      else if (force || s.team > 1) s.team = m.id === 'tag' ? (i < 2 ? 0 : 1) : i % 2;
+    });
+    if (m.teams === 2 && m.id !== 'duel' && !force) {
+      // keep teams balanced-ish
+      const c0 = L.slots.filter((s) => s.team === 0).length, c1 = L.slots.length - c0;
+      if (Math.abs(c0 - c1) > 1) this.assignTeams(true);
+    }
+  }
+
+  isTeamMode() { return L.mode === 'tag' || L.mode === 'ctf'; }
+  slotColor(s: Slot, i: number) { return this.isTeamMode() ? TEAM_COLORS[s.team] : this.bladeOf(s).glow || TEAM_COLORS[i]; }
+  bladeOf(s: Slot) { return s.blade ?? findBlade(s.bladeId); }
+
+  build() {
+    const m = this.mode;
+    const arenas = allArenas();
+    const arena = findArena(L.arenaId);
+    const selector = (label: string, title: string, sub: string, step: (d: number) => void) => {
+      const el = h('div.selector.panel.nav', { 'data-navx': '1' },
+        h('span.lbl', null, label),
+        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(-1); } }, '◀'),
+        h('div.val', null, h('b', null, title), h('span', null, sub)),
+        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(1); } }, '▶'));
+      el.addEventListener('navx', (e) => step((e as CustomEvent).detail));
+      return el;
+    };
+    const modeSel = selector('MODE', m.name.toUpperCase(), m.tag, (d) => {
+      const i = MODES.findIndex((x) => x.id === L.mode);
+      this.setMode(MODES[(i + d + MODES.length) % MODES.length].id);
+      this.fillCpus();
+      this.rebuild();
+    });
+    const order = [...m.arenas.map((id) => arenas.find((a) => a.id === id)!).filter(Boolean), ...arenas.filter((a) => !m.arenas.includes(a.id))];
+    const arenaSel = selector('ARENA', arena.name.toUpperCase(), arena.desc, (d) => {
+      const i = order.findIndex((a) => a.id === L.arenaId);
+      L.arenaId = order[(i + d + order.length) % order.length].id;
+      this.rebuild();
+    });
+    arenaSel.style.flex = '1';
+    arenaSel.style.setProperty('border-color', arena.theme.glow);
+
+    this.slotsEl = h('div.slots');
+    this.renderSlots();
+
+    const num = (label: string, get: () => number, set: (v: number) => void, step: number, min: number, fmt = (v: number) => String(v)) => {
+      const val = h('b', null, fmt(get()));
+      const el = h('div.toggle.panel.nav', { 'data-navx': '1' }, label, ' ', h('button.arrow', { onclick: () => ch(-1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' } }, '−'), val, h('button.arrow', { onclick: () => ch(1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' } }, '+'));
+      const ch = (d: number) => { set(Math.max(min, get() + d * step)); val.textContent = fmt(get()); this.dirty = true; };
+      el.addEventListener('navx', (e) => ch((e as CustomEvent).detail));
+      return el;
+    };
+    const items = h('div.toggle.panel.nav', { onclick: () => { L.items = !L.items; items.classList.toggle('on', L.items); this.dirty = true; } }, h('span.dot'), 'ITEMS');
+    items.classList.toggle('on', L.items);
+
+    this.onlineEl = h('div.online-box.panel');
+    this.renderOnline();
+
+    return h('div.screen', null,
+      h('div.screen-head', null,
+        h('button.btn.small.nav', { onclick: () => this.leave() }, '◀ Back'),
+        h('div.screen-title', null, 'LOBBY'),
+        h('div.screen-sub', null, m.desc),
+        h('div.spacer'),
+        h('button.btn.primary.nav', { onclick: () => this.start() }, '▶ START')),
+      h('div.lobby-top', null, modeSel, arenaSel),
+      this.slotsEl,
+      h('div.lobby-bottom', null,
+        h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ Add CPU'),
+        m.id !== 'gauntlet' && m.id !== 'rush' ? items : null,
+        m.target > 0 ? num(m.id === 'koth' ? 'HOLD SECS' : m.id === 'gauntlet' ? 'GEMS' : 'TARGET', () => L.target, (v) => (L.target = v), m.id === 'koth' ? 5 : 1, 1) : null,
+        num('TIME', () => L.time, (v) => (L.time = v), 15, 30, (v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`),
+        h('div.spacer'),
+        this.onlineEl),
+    );
+  }
+
+  rebuild() {
+    const focus = this.nav?.idx ?? 0;
+    this.el.remove();
+    this.el = this.build();
+    this.app.root.append(this.el);
+    this.nav = new MenuNav(this.app, this.el, () => this.leave());
+    this.nav.focus(focus);
+    this.dirty = true;
+  }
+
+  controllerOptions(current: ControllerSpec): ControllerSpec[] {
+    const used = new Set(L.slots.map((s) => specKey(s.ctrl)));
+    used.delete(specKey(current));
+    const opts: ControllerSpec[] = [{ type: 'kb1' }, { type: 'kb2' }, { type: 'mouse' }];
+    for (const i of this.app.input.connectedPads()) opts.push({ type: 'pad', index: i });
+    if (Input.isTouchDevice()) opts.push({ type: 'touch' }, { type: 'touch', gyro: true });
+    const free = opts.filter((o) => !used.has(specKey(o)) && !(o.type === 'mouse' && used.has('kb1')) && !(o.type === 'kb1' && used.has('mouse')));
+    return [...free, { type: 'cpu', level: 1 }, { type: 'cpu', level: 2 }, { type: 'cpu', level: 3 }];
+  }
+
+  renderSlots() {
+    this.slotsEl.innerHTML = '';
+    this.icons = [];
+    const m = this.mode;
+    const blades = allBlades();
+    L.slots.forEach((s, i) => {
+      const d = this.bladeOf(s);
+      const cv = h<HTMLCanvasElement>('canvas', { width: 240, height: 240 });
+      this.icons.push({ cv, d });
+      const remote = s.ctrl.type === 'remote';
+      const cycleBlade = (dir: number) => {
+        if (remote) return;
+        const k = blades.findIndex((b) => b.id === s.bladeId);
+        s.bladeId = blades[(k + dir + blades.length) % blades.length].id;
+        this.renderSlots();
+        this.dirty = true;
+        this.app.sfx.play('tick');
+      };
+      const bladeRow = h('div.row.nav', { 'data-navx': '1' },
+        h('button.selector.arrow', { onclick: () => cycleBlade(-1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '18px' } }, '◀'),
+        h('div.bname', null, d.name),
+        h('button.selector.arrow', { onclick: () => cycleBlade(1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '18px' } }, '▶'));
+      bladeRow.addEventListener('navx', (e) => cycleBlade((e as CustomEvent).detail));
+      const ctrl = h('div.ctrl.nav', {
+        onclick: () => {
+          if (remote) return;
+          const opts = this.controllerOptions(s.ctrl);
+          const k = opts.findIndex((o) => specLabel(o) === specLabel(s.ctrl));
+          s.ctrl = opts[(k + 1) % opts.length];
+          if (s.ctrl.type === 'touch' && s.ctrl.gyro) this.app.input.enableGyro();
+          if (s.ctrl.type === 'cpu' && !s.name.startsWith('CPU')) s.name = `CPU ${i + 1}`;
+          if (s.ctrl.type !== 'cpu' && s.name.startsWith('CPU')) s.name = `Player ${i + 1}`;
+          this.renderSlots();
+          this.dirty = true;
+        },
+      }, icon(remote ? 'link' : s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
+      const name = h<HTMLInputElement>('input.pname', { value: s.name, maxLength: 16, disabled: remote });
+      name.addEventListener('change', () => { s.name = name.value || `Player ${i + 1}`; if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); } this.dirty = true; });
+      const card = h('div.slot', null,
+        h('div.pnum', null, `P${i + 1}`),
+        this.isTeamMode() ? h('div.team-tag', { onclick: () => { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } }, s.team === 0 ? 'RED' : 'BLUE') : null,
+        cv, name, bladeRow, ctrl,
+        L.slots.length > 1 ? h('div.x', { onclick: () => this.removeSlot(i), title: 'Remove' }, icon('close')) : null);
+      card.style.setProperty('--slot', this.slotColor(s, i));
+      card.style.animationDelay = `${i * 0.04}s`;
+      this.slotsEl.append(card);
+    });
+    if (L.slots.length < m.maxPlayers) {
+      const hint = Input.isTouchDevice() ? 'TAP + ADD CPU OR' : 'PRESS';
+      this.slotsEl.append(h('div.slot.join', null, h('div.big', null, '+'), `${hint} SPACE · ENTER · Ⓐ`, h('br'), 'TO JOIN'));
+    }
+    for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle);
+  }
+
+  removeSlot(i: number) {
+    const s = L.slots[i];
+    if (s.ctrl.type === 'remote') hostT?.kick(s.ctrl.peer);
+    L.slots.splice(i, 1);
+    this.assignTeams();
+    this.renderSlots();
+    this.dirty = true;
+  }
+
+  addCpu() {
+    if (L.slots.length >= this.mode.maxPlayers) { this.app.toast('Lobby full for this mode'); return; }
+    const blade = PRESETS[(L.slots.length * 3) % PRESETS.length];
+    L.slots.push({ name: `CPU ${L.slots.length + 1}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length % 2 });
+    this.assignTeams();
+    this.renderSlots();
+    this.dirty = true;
+    this.app.sfx.play('select');
+  }
+
+  join(spec: ControllerSpec) {
+    const key = specKey(spec);
+    if (L.slots.some((s) => specKey(s.ctrl) === key)) return false;
+    // replace a CPU if full
+    const m = this.mode;
+    let idx = L.slots.length;
+    if (L.slots.length >= m.maxPlayers) {
+      idx = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
+      if (idx < 0) return false;
+    } else {
+      const cpu = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
+      if (cpu >= 0 && L.slots.length >= m.minPlayers) idx = cpu;
+    }
+    const blades = allBlades();
+    const slot: Slot = { name: spec.type === 'pad' ? `Pad ${spec.index + 1}` : `Player ${idx + 1}`, ctrl: spec, bladeId: blades[(idx * 2 + 1) % blades.length].id, team: idx % 2 };
+    if (idx < L.slots.length) L.slots[idx] = { ...slot, bladeId: L.slots[idx].bladeId, team: L.slots[idx].team };
+    else L.slots.push(slot);
+    this.assignTeams();
+    this.renderSlots();
+    this.dirty = true;
+    this.app.sfx.play('select');
+    this.app.toast(`${specLabel(spec)} joined as P${idx + 1}`);
+    return true;
+  }
+
+  // -------------------------------------------------------------- online host
+  renderOnline() {
+    const el = this.onlineEl;
+    el.innerHTML = '';
+    if (hostT) {
+      const t = hostT;
+      el.append(
+        h('div.hint', null, t.kind === 'relay-tunnel' ? 'PUBLIC ROOM — share the link' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'),
+        h('div.code', null, t.code),
+        ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
+        h('button.btn.small.nav', { onclick: () => { t.close(); hostT = null; lobbyListeners = false; L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); this.renderSlots(); this.renderOnline(); } }, 'Close Room'),
+      );
+      return;
+    }
+    const p = getPlatform();
+    const go = async (fn: () => Promise<HostTransport>, label: string) => {
+      el.innerHTML = '';
+      el.append(h('div.hint', null, `Opening ${label}…`));
+      try {
+        hostT = await fn();
+        lobbyListeners = false;
+        this.wireHost();
+        this.app.toast(`Room ${hostT.code} open`);
+      } catch (e) {
+        this.app.toast(String((e as Error).message || e));
+      }
+      this.renderOnline();
+    };
+    el.append(
+      h('div.hint', null, 'INVITE ONLINE FRIENDS'),
+      h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+        h('button.btn.small.nav', { onclick: () => go(() => hostLocal(L.slots[0]?.name ?? 'host', false), 'LAN room'), title: p ? 'Direct connection on your network' : 'Needs `bun run relay` in dev' }, 'LAN'),
+        p ? h('button.btn.small.nav', { onclick: () => go(() => hostLocal(L.slots[0]?.name ?? 'host', true), 'Cloudflare tunnel') }, 'Public Link') : null,
+        h('button.btn.small.nav', { onclick: () => go(() => hostCloud(L.slots[0]?.name ?? 'host'), 'cloud room') }, 'Cloud')),
+    );
+  }
+
+  wireHost() {
+    if (!hostT || lobbyListeners) return;
+    lobbyListeners = true;
+    const t = hostT;
+    t.onJoin((peer, name) => {
+      if (L.slots.length >= this.mode.maxPlayers) {
+        const cpu = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
+        if (cpu < 0) { t.send(peer, { t: 'full' }); t.kick(peer); return; }
+        L.slots.splice(cpu, 1);
+      }
+      L.slots.push({ name: name.slice(0, 16) || `Guest ${peer}`, ctrl: { type: 'remote', peer }, bladeId: PRESETS[peer % PRESETS.length].id, team: L.slots.length % 2 });
+      this.assignTeams();
+      this.app.sfx.play('select');
+      this.app.toast(`${name} joined online`);
+      this.renderSlots();
+      this.dirty = true;
+    });
+    t.onLeave((peer) => {
+      const i = L.slots.findIndex((s) => s.ctrl.type === 'remote' && s.ctrl.peer === peer);
+      if (i >= 0) { this.app.toast(`${L.slots[i].name} left`); L.slots.splice(i, 1); this.fillCpus(); this.renderSlots(); this.dirty = true; }
+    });
+    t.onMessage((peer, msg) => {
+      const s = L.slots.find((x) => x.ctrl.type === 'remote' && x.ctrl.peer === peer);
+      if (!s) return;
+      if (msg?.t === 'hello' || msg?.t === 'blade') {
+        if (msg.name) s.name = String(msg.name).slice(0, 16);
+        if (msg.blade) s.blade = msg.blade as BladeDesign;
+        this.renderSlots();
+        this.dirty = true;
+      }
+    });
+  }
+
+  lobbySnapshot() {
+    const arena = findArena(L.arenaId);
+    return {
+      t: 'lobby', mode: L.mode, arena: arena.name, target: L.target, time: L.time,
+      slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i) })),
+    };
+  }
+
+  // -------------------------------------------------------------- start / leave
+  start() {
+    const m = this.mode;
+    this.fillCpus();
+    if (L.slots.length < m.minPlayers) { this.app.toast(`${m.name} needs ${m.minPlayers} players`); return; }
+    this.assignTeams();
+    const cfg: MatchConfig = {
+      mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0,
+      players: L.slots.slice(0, m.maxPlayers).map((s, i) => ({ slot: i, name: s.name, team: s.team, blade: this.bladeOf(s), ctrl: s.ctrl })),
+    };
+    // compact team indices (ffa etc.)
+    const teams = [...new Set(cfg.players.map((p) => p.team))].sort((a, b) => a - b);
+    cfg.players.forEach((p) => (p.team = teams.indexOf(p.team)));
+    this.app.sfx.play('go');
+    const arg: MatchArg = { cfg };
+    if (hostT) {
+      const peerSlot = new Map<number, number>();
+      cfg.players.forEach((p, i) => { if (p.ctrl.type === 'remote') { peerSlot.set(p.ctrl.peer, i); hostT!.send(p.ctrl.peer, { t: 'start', cfg, mine: [i] }); } });
+      arg.host = { t: hostT, peerSlot };
+    }
+    this.app.go('match', arg);
+  }
+
+  leave() {
+    if (hostT) { hostT.close(); hostT = null; lobbyListeners = false; L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); }
+    this.app.go('menu');
+  }
+
+  update(dt: number) {
+    for (const spec of this.app.input.joinPresses()) {
+      const joined = this.join(spec);
+      if (joined) return; // swallow the confirm press
+    }
+    this.nav.update(dt);
+    this.angle += dt * 2.5;
+    for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle * (ic.d.spinDir));
+    if (hostT) {
+      this.broadcastT -= dt;
+      if (this.dirty && this.broadcastT <= 0) {
+        hostT.send('all', this.lobbySnapshot());
+        this.dirty = false;
+        this.broadcastT = 0.25;
+      }
+    }
+  }
+
+  unmount() { this.el.remove(); }
+}

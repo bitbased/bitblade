@@ -1,0 +1,420 @@
+import { fillTrackHeights, sampleTrack, trackBounds, type TrackDef, type TrackSamples } from './track';
+
+// Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
+
+export type PieceKind = 'flat' | 'bowl' | 'quarter' | 'half' | 'corner' | 'kicker' | 'spine' | 'hump' | 'ramp' | 'pit' | 'wall' | 'dome' | 'cradle';
+
+export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
+  flat: { label: 'Flat', desc: 'Plain deck' },
+  bowl: { label: 'Bowl', desc: 'Round deep pool' },
+  quarter: { label: 'Quarter Pipe', desc: 'Curved wall on one edge' },
+  half: { label: 'Half Pipe', desc: 'Curved walls on two edges' },
+  corner: { label: 'Corner', desc: 'Rounded pool corner' },
+  kicker: { label: 'Kicker', desc: 'Launch ramp — get air!' },
+  spine: { label: 'Spine', desc: 'Back-to-back transition' },
+  hump: { label: 'Funbox', desc: 'Raised box with ramps' },
+  ramp: { label: 'Ramp', desc: 'Connects to next level up' },
+  pit: { label: 'Pit', desc: 'Hole — fall = ring out' },
+  wall: { label: 'Rail Wall', desc: 'Low wall on one edge' },
+  dome: { label: 'Dome', desc: 'Center bump' },
+  cradle: { label: 'Cradle', desc: 'Shallow dish' },
+};
+
+export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
+
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone';
+export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number }
+
+export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
+
+export interface StadiumParams { radius: number; depth: number; wall: number; pockets: number; pocketWidth: number; sides: number; dome?: number }
+
+export interface CourseDef { tile: number; w: number; h: number; pieces: Piece[] }
+
+export interface ArenaDef {
+  id: string;
+  name: string;
+  desc: string;
+  theme: Theme;
+  stadium?: StadiumParams;
+  course?: CourseDef;
+  track?: TrackDef;
+  markers: Marker[];
+  custom?: boolean;
+}
+
+export const VOID = -1000;
+
+export class Terrain {
+  minX: number; minZ: number; cell: number; nx: number; nz: number;
+  h: Float32Array;
+  def: ArenaDef;
+  size: number; // rough span for camera
+  track: TrackSamples | null = null;
+  constructor(def: ArenaDef) {
+    this.def = def;
+    let extentX: number, extentZ: number;
+    if (def.stadium) {
+      const e = def.stadium.radius + 2.2;
+      extentX = extentZ = e;
+      this.cell = 0.18;
+      this.minX = -e; this.minZ = -e;
+    } else if (def.track) {
+      const S = (this.track = sampleTrack(def.track));
+      const b = trackBounds(S);
+      this.cell = 0.3;
+      this.minX = b.x0; this.minZ = b.z0;
+      extentX = (b.x1 - b.x0) / 2; extentZ = (b.z1 - b.z0) / 2;
+    } else {
+      const c = def.course!;
+      extentX = (c.w * c.tile) / 2 + 1;
+      extentZ = (c.h * c.tile) / 2 + 1;
+      this.cell = 0.22;
+      this.minX = -extentX; this.minZ = -extentZ;
+    }
+    this.nx = Math.ceil((extentX * 2) / this.cell) + 1;
+    this.nz = Math.ceil((extentZ * 2) / this.cell) + 1;
+    this.size = Math.max(extentX, extentZ);
+    this.h = new Float32Array(this.nx * this.nz);
+    if (this.track) { fillTrackHeights(def.track!, this.track, this.minX, this.minZ, this.cell, this.nx, this.nz, this.h); return; }
+    for (let j = 0; j < this.nz; j++)
+      for (let i = 0; i < this.nx; i++) {
+        const x = this.minX + i * this.cell, z = this.minZ + j * this.cell;
+        this.h[j * this.nx + i] = def.stadium ? stadiumHeight(def.stadium, x, z) : courseHeight(def.course!, x, z);
+      }
+  }
+
+  raw(i: number, j: number) {
+    if (i < 0 || j < 0 || i >= this.nx || j >= this.nz) return VOID;
+    return this.h[j * this.nx + i];
+  }
+
+  /** Bilinear height; returns VOID if any corner is void. */
+  height(x: number, z: number): number {
+    const fx = (x - this.minX) / this.cell, fz = (z - this.minZ) / this.cell;
+    const i = Math.floor(fx), j = Math.floor(fz);
+    const tx = fx - i, tz = fz - j;
+    const a = this.raw(i, j), b = this.raw(i + 1, j), c = this.raw(i, j + 1), d = this.raw(i + 1, j + 1);
+    if (a <= VOID || b <= VOID || c <= VOID || d <= VOID) return VOID;
+    return a * (1 - tx) * (1 - tz) + b * tx * (1 - tz) + c * (1 - tx) * tz + d * tx * tz;
+  }
+
+  /** Surface gradient (dh/dx, dh/dz). */
+  gradient(x: number, z: number, out: { gx: number; gz: number }) {
+    const e = this.cell * 0.75;
+    const hx1 = this.height(x + e, z), hx0 = this.height(x - e, z);
+    const hz1 = this.height(x, z + e), hz0 = this.height(x, z - e);
+    const h0 = this.height(x, z);
+    const fx1 = hx1 <= VOID ? h0 : hx1, fx0 = hx0 <= VOID ? h0 : hx0;
+    const fz1 = hz1 <= VOID ? h0 : hz1, fz0 = hz0 <= VOID ? h0 : hz0;
+    out.gx = (fx1 - fx0) / (2 * e);
+    out.gz = (fz1 - fz0) / (2 * e);
+    return out;
+  }
+
+  isSafe(x: number, z: number, margin = 1.2) {
+    const h = this.height(x, z);
+    if (h <= VOID) return false;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const hh = this.height(x + Math.cos(a) * margin, z + Math.sin(a) * margin);
+      if (hh <= VOID || Math.abs(hh - h) > 0.8) return false;
+    }
+    return true;
+  }
+
+  randomSafePoint(rnd: () => number, near?: { x: number; z: number; r: number }) {
+    for (let k = 0; k < 400; k++) {
+      let x: number, z: number;
+      if (near) {
+        const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * near.r;
+        x = near.x + Math.cos(a) * r; z = near.z + Math.sin(a) * r;
+      } else {
+        x = this.minX + rnd() * (this.nx - 1) * this.cell;
+        z = this.minZ + rnd() * (this.nz - 1) * this.cell;
+      }
+      if (this.isSafe(x, z)) return { x, z };
+    }
+    return { x: 0, z: 0 };
+  }
+
+  /** Lowest-ish center to aim AI at for "stay safe" behaviour */
+  center() {
+    return { x: 0, z: 0 };
+  }
+}
+
+const smooth = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+function polyRadius(R: number, sides: number, th: number) {
+  if (sides < 3) return R;
+  const seg = (Math.PI * 2) / sides;
+  const a = ((th % seg) + seg) % seg - seg / 2;
+  return (R * Math.cos(Math.PI / sides)) / Math.cos(a);
+}
+
+export function stadiumHeight(p: StadiumParams, x: number, z: number) {
+  const th = Math.atan2(z, x);
+  const R = polyRadius(p.radius, p.sides, th);
+  const r = Math.hypot(x, z);
+  const u = r / R;
+  let floor = p.depth * (u * u * 0.85 + u * u * u * u * 0.15) - p.depth;
+  if (p.dome && r < p.dome) floor += 0.35 * smooth(1 - r / p.dome) ;
+  if (r <= R) return floor;
+  // pockets
+  if (p.pockets > 0) {
+    const seg = (Math.PI * 2) / p.pockets;
+    const a = (((th + seg / 2) % seg) + seg) % seg - seg / 2;
+    if (Math.abs(a) * R < p.pocketWidth / 2) {
+      if (r > R + 0.35) return VOID;
+      return 0 - (r - R) * 0.6;
+    }
+  }
+  const d = r - R;
+  if (d < 0.55) return smooth(d / 0.55) * p.wall;
+  if (d < 1.3) return p.wall;
+  return VOID;
+}
+
+// ---- course tiles ----
+const LEVEL_H = 1.6;
+
+function arc(d: number, rho: number) {
+  // circular transition: d in [0, rho] -> height
+  const dd = Math.min(Math.max(d, 0), rho * 0.97);
+  return rho - Math.sqrt(rho * rho - dd * dd);
+}
+
+/** height of a piece in local coords u,v in [0,1] (already rotated), tile size T */
+function pieceHeight(kind: PieceKind, u: number, v: number, T: number): number {
+  const rho = T * 0.42;
+  switch (kind) {
+    case 'flat': return 0;
+    case 'quarter': return arc(v * T - (T - rho), rho) + (v > 0.985 ? 0.1 : 0);
+    case 'half': return arc(v * T - (T - rho), rho) + arc((1 - v) * T - (T - rho), rho);
+    case 'corner': {
+      const px = Math.max(0, u * T - (T - rho)), pz = Math.max(0, v * T - (T - rho));
+      return arc(Math.hypot(px, pz), rho);
+    }
+    case 'bowl': {
+      const r = Math.hypot(u - 0.5, v - 0.5) * T;
+      const inner = T * 0.5 - rho;
+      return arc(r - inner, rho) - 0.6 * smooth(1 - r / inner);
+    }
+    case 'kicker': {
+      if (v < 0.15 || v > 0.78) return 0;
+      const t = (v - 0.15) / 0.63;
+      return 1.5 * t * t;
+    }
+    case 'spine': {
+      const t = 1 - Math.abs(v - 0.5) * 2;
+      return 2.0 * t * t * t;
+    }
+    case 'hump': {
+      const m = Math.max(Math.abs(u - 0.5), Math.abs(v - 0.5));
+      return 1.1 * smooth((0.42 - m) / 0.2);
+    }
+    case 'dome': {
+      const r = Math.hypot(u - 0.5, v - 0.5);
+      return 0.9 * smooth(1 - r / 0.42);
+    }
+    case 'cradle': {
+      const r = Math.hypot(u - 0.5, v - 0.5);
+      return -0.8 * smooth(1 - r / 0.55);
+    }
+    case 'ramp': return LEVEL_H * smooth(v);
+    case 'pit': return Math.hypot(u - 0.5, v - 0.5) < 0.24 ? VOID : 0;
+    case 'wall': return v > 0.88 ? 1.4 * smooth((v - 0.88) / 0.08) : 0;
+  }
+}
+
+export function courseHeight(c: CourseDef, x: number, z: number) {
+  const T = c.tile;
+  const gx = (x + (c.w * T) / 2) / T, gz = (z + (c.h * T) / 2) / T;
+  const i = Math.floor(gx), j = Math.floor(gz);
+  const p = pieceAt(c, i, j);
+  if (!p) return VOID;
+  let u = gx - i, v = gz - j;
+  // rotate local coords; rot r means the "v=1 edge" faces +z rotated r*90deg
+  for (let k = 0; k < (p.rot & 3); k++) {
+    const nu = v, nv = 1 - u;
+    u = nu; v = nv;
+  }
+  const h = pieceHeight(p.kind, u, v, T);
+  if (h <= VOID) return VOID;
+  return h + p.level * LEVEL_H;
+}
+
+export function pieceAt(c: CourseDef, i: number, j: number) {
+  for (const p of c.pieces) if (p.x === i && p.y === j) return p;
+  return undefined;
+}
+
+export function tileCenter(c: CourseDef, i: number, j: number) {
+  return { x: (i + 0.5) * c.tile - (c.w * c.tile) / 2, z: (j + 0.5) * c.tile - (c.h * c.tile) / 2 };
+}
+
+// ---- themes & built-in arenas ----
+export const THEMES: Record<string, Theme> = {
+  neon: { floor: '#1b2340', wall: '#2c3b74', glow: '#3cf2ff', sky1: '#05060f', sky2: '#1a0b3a', grid: '#5f7bff' },
+  inferno: { floor: '#2b1410', wall: '#5a1d10', glow: '#ff6a1f', sky1: '#0d0303', sky2: '#3a0f05', grid: '#ff9b4a' },
+  toxic: { floor: '#13261a', wall: '#1f4a2a', glow: '#74ff5a', sky1: '#020a05', sky2: '#0b2a14', grid: '#9cff7a' },
+  ice: { floor: '#cfe6f5', wall: '#7fb4d9', glow: '#5fd6ff', sky1: '#0a1626', sky2: '#24496e', grid: '#ffffff' },
+  concrete: { floor: '#7d7f86', wall: '#5d6068', glow: '#ff3db4', sky1: '#0f1018', sky2: '#3a2448', grid: '#c9cbd6' },
+  royal: { floor: '#241433', wall: '#3d1f5c', glow: '#ffcc33', sky1: '#07030d', sky2: '#2a0d3d', grid: '#d6a2ff' },
+};
+
+const pc = (kind: PieceKind, x: number, y: number, rot = 0, level = 0): Piece => ({ kind, x, y, rot, level });
+
+function ring(n: number, r: number, kind: MarkerKind, extra: Partial<Marker> = {}, phase = 0): Marker[] {
+  return Array.from({ length: n }, (_, i) => {
+    const a = phase + (i / n) * Math.PI * 2;
+    return { kind, x: Math.cos(a) * r, z: Math.sin(a) * r, ...extra };
+  });
+}
+
+/** Skate pool with walls all around: interior flat, quarters at edges, corners at corners */
+function poolCourse(w: number, h: number, fill: (i: number, j: number) => Piece | null = () => null): Piece[] {
+  const out: Piece[] = [];
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const f = fill(i, j);
+      if (f) { out.push(f); continue; }
+      const L = i === 0, R = i === w - 1, T = j === 0, B = j === h - 1;
+      // rot mapping: rot0 -> wall at +z (v=1), rot1 -> wall at -x? computed via rotation in courseHeight
+      if (B && R) out.push(pc('corner', i, j, 0));
+      else if (B && L) out.push(pc('corner', i, j, 1));
+      else if (T && L) out.push(pc('corner', i, j, 2));
+      else if (T && R) out.push(pc('corner', i, j, 3));
+      else if (B) out.push(pc('quarter', i, j, 0));
+      else if (L) out.push(pc('quarter', i, j, 1));
+      else if (T) out.push(pc('quarter', i, j, 2));
+      else if (R) out.push(pc('quarter', i, j, 3));
+      else out.push(pc('flat', i, j));
+    }
+  return out;
+}
+
+export const BUILTIN_ARENAS: ArenaDef[] = [
+  {
+    id: 'neon-stadium', name: 'Neon Stadium', desc: 'Classic battle bowl with 3 ring-out pockets.', theme: THEMES.neon,
+    stadium: { radius: 8.5, depth: 1.8, wall: 1.3, pockets: 3, pocketWidth: 3.2, sides: 0 },
+    markers: [...ring(3, 4.5, 'item', {}, Math.PI / 3)],
+  },
+  {
+    id: 'hex-colosseum', name: 'Hex Colosseum', desc: 'Six-sided arena, six pockets, bumpers and a center dome.', theme: THEMES.royal,
+    stadium: { radius: 10.5, depth: 2.0, wall: 1.4, pockets: 6, pocketWidth: 2.4, sides: 6, dome: 2.2 },
+    markers: [...ring(3, 6.2, 'bumper', { r: 0.7 }, Math.PI / 6), ...ring(3, 6.2, 'item', {}, Math.PI / 2), { kind: 'zone', x: 0, z: 0, r: 2.6 }],
+  },
+  {
+    id: 'crater', name: 'Molten Crater', desc: 'Huge shallow crater with lava pillars. Great for free-for-alls.', theme: THEMES.inferno,
+    stadium: { radius: 13, depth: 1.4, wall: 1.6, pockets: 4, pocketWidth: 2.6, sides: 0 },
+    markers: [...ring(5, 7.5, 'pillar', { r: 0.8 }), ...ring(5, 4, 'item', {}, 0.6), ...ring(4, 10, 'spinpad', { r: 1.1 }, Math.PI / 4), { kind: 'zone', x: 0, z: 0, r: 3 }],
+  },
+  {
+    id: 'kidney-pool', name: 'Kidney Pool', desc: 'Skate pool with deep transitions — ride the walls and catch air.', theme: THEMES.concrete,
+    course: {
+      tile: 6, w: 4, h: 3,
+      pieces: poolCourse(4, 3, (i, j) => (i === 1 && j === 1 ? pc('cradle', i, j) : i === 2 && j === 1 ? pc('dome', i, j) : null)),
+    },
+    markers: [{ kind: 'item', x: -3, z: 0 }, { kind: 'item', x: 3, z: 0 }, { kind: 'zone', x: 0, z: 0, r: 2.5 }],
+  },
+  {
+    id: 'ramp-park', name: 'Ramp Park', desc: 'Kickers, spine and funbox. Open edges — watch the drop!', theme: THEMES.neon,
+    course: {
+      tile: 6, w: 5, h: 4,
+      pieces: [
+        pc('corner', 0, 0, 2), pc('quarter', 1, 0, 2), pc('quarter', 2, 0, 2), pc('quarter', 3, 0, 2), pc('corner', 4, 0, 3),
+        pc('quarter', 0, 1, 1), pc('kicker', 1, 1, 1), pc('flat', 2, 1), pc('kicker', 3, 1, 3), pc('quarter', 4, 1, 3),
+        pc('quarter', 0, 2, 1), pc('flat', 1, 2), pc('spine', 2, 2, 1), pc('hump', 3, 2), pc('pit', 4, 2),
+        pc('corner', 0, 3, 1), pc('flat', 1, 3), pc('flat', 2, 3), pc('kicker', 3, 3, 2), pc('flat', 4, 3),
+      ],
+    },
+    markers: [{ kind: 'item', x: 0, z: -6 }, { kind: 'item', x: -9, z: 3 }, { kind: 'item', x: 9, z: 3 }, { kind: 'boost', x: -3, z: 9, rot: 0 }, { kind: 'zone', x: 0, z: 0, r: 2.5 }],
+  },
+  {
+    id: 'twin-forts', name: 'Twin Forts', desc: 'Symmetric CTF course: two walled bases joined by a half-pipe.', theme: THEMES.toxic,
+    course: {
+      tile: 6, w: 6, h: 3,
+      pieces: [
+        pc('corner', 0, 0, 2), pc('quarter', 1, 0, 2), pc('quarter', 2, 0, 2), pc('quarter', 3, 0, 2), pc('quarter', 4, 0, 2), pc('corner', 5, 0, 3),
+        pc('quarter', 0, 1, 1), pc('flat', 1, 1), pc('hump', 2, 1), pc('hump', 3, 1), pc('flat', 4, 1), pc('quarter', 5, 1, 3),
+        pc('corner', 0, 2, 1), pc('quarter', 1, 2, 0), pc('pit', 2, 2), pc('pit', 3, 2), pc('quarter', 4, 2, 0), pc('corner', 5, 2, 0),
+      ],
+    },
+    markers: [
+      { kind: 'flag', x: -15, z: 0, team: 0 }, { kind: 'flag', x: 15, z: 0, team: 1 },
+      { kind: 'spawn', x: -13, z: -3, team: 0 }, { kind: 'spawn', x: -13, z: 3, team: 0 },
+      { kind: 'spawn', x: 13, z: -3, team: 1 }, { kind: 'spawn', x: 13, z: 3, team: 1 },
+      { kind: 'item', x: 0, z: -4 }, { kind: 'item', x: -6, z: 0 }, { kind: 'item', x: 6, z: 0 },
+      { kind: 'boost', x: -6, z: -4, rot: Math.PI / 2 }, { kind: 'boost', x: 6, z: -4, rot: -Math.PI / 2 },
+    ],
+  },
+  {
+    id: 'gauntlet-works', name: 'Gauntlet Works', desc: 'Automated factory floor: sweeping arms, saws, bumpers and pits.', theme: THEMES.inferno,
+    course: {
+      tile: 6, w: 5, h: 5,
+      pieces: poolCourse(5, 5, (i, j) => (i === 2 && j === 2 ? pc('dome', i, j) : (i === 1 && j === 3) || (i === 3 && j === 1) ? pc('pit', i, j) : null)),
+    },
+    markers: [
+      { kind: 'arm', x: -6, z: -6, len: 4.2, speed: 1.1 }, { kind: 'arm', x: 6, z: 6, len: 4.2, speed: -1.3 },
+      { kind: 'saw', x: 0, z: 0, r: 5.5, speed: 0.6 }, { kind: 'saw', x: 0, z: 0, r: 9, speed: -0.4 },
+      { kind: 'bumper', x: -6, z: 6, r: 0.9 }, { kind: 'bumper', x: 6, z: -6, r: 0.9 },
+      { kind: 'boost', x: 0, z: 9, rot: 0 }, { kind: 'boost', x: 0, z: -9, rot: Math.PI },
+      { kind: 'spinpad', x: -9, z: 0, r: 1.2 }, { kind: 'spinpad', x: 9, z: 0, r: 1.2 },
+      { kind: 'item', x: 0, z: 4 }, { kind: 'item', x: 0, z: -4 },
+      { kind: 'spawn', x: 0, z: 11 },
+    ],
+  },
+];
+
+function trackArena(id: string, name: string, desc: string, theme: Theme, track: TrackDef): ArenaDef {
+  const S = sampleTrack(track);
+  const markers: Marker[] = [];
+  const at = (f: number) => Math.floor((((f % 1) + 1) % 1) * S.n);
+  for (const f of track.boosts) { const i = at(f); markers.push({ kind: 'boost', x: S.x[i], z: S.z[i], rot: Math.atan2(S.tx[i], S.tz[i]) }); }
+  for (const f of track.items) {
+    const i = at(f);
+    for (const o of [-0.3, 0, 0.3]) markers.push({ kind: 'item', x: S.x[i] - S.tz[i] * o * track.width, z: S.z[i] + S.tx[i] * o * track.width });
+  }
+  // starting grid behind the line
+  for (let k = 0; k < 8; k++) {
+    const i = (S.n - 6 - Math.floor(k / 2) * 6) % S.n;
+    const o = (k % 2 ? 0.22 : -0.22) * track.width;
+    markers.push({ kind: 'spawn', x: S.x[i] - S.tz[i] * o, z: S.z[i] + S.tx[i] * o });
+  }
+  return { id, name, desc, theme, track, markers };
+}
+
+BUILTIN_ARENAS.push(
+  trackArena('neon-circuit', 'Neon Circuit', 'Floating speedway: banked sweepers, a hill jump and boost strips.', THEMES.neon, {
+    width: 10,
+    pts: [[0, -32, 0], [26, -32, 0], [42, -22, 1], [44, 0, 3], [34, 16, 4], [16, 19, 2], [6, 31, 1], [-16, 34, 0], [-36, 24, 0], [-42, 2, 1.5], [-32, -18, 0.5], [-16, -31, 0]],
+    rails: [[0.08, 0.28], [0.4, 0.64], [0.72, 0.94]],
+    gaps: [[0.335, 0.348]],
+    boosts: [0.04, 0.31, 0.68, 0.95],
+    items: [0.18, 0.52, 0.82],
+  }),
+  trackArena('sky-serpent', 'Sky Serpent', 'Twisting sky road with hairpins, two jumps and very few rails.', THEMES.royal, {
+    width: 9,
+    pts: [[0, -40, 0], [30, -38, 1], [48, -20, 3], [42, 4, 5], [22, 10, 4], [10, -4, 3], [-6, 6, 2], [0, 25, 1], [24, 32, 2], [30, 48, 1], [6, 56, 0], [-24, 48, 1], [-45, 26, 2.5], [-46, 0, 1.5], [-34, -26, 0]],
+    rails: [[0.18, 0.32], [0.36, 0.46], [0.53, 0.64], [0.8, 0.88]],
+    gaps: [[0.13, 0.139], [0.7, 0.709]],
+    boosts: [0.03, 0.12, 0.4, 0.69, 0.9],
+    items: [0.22, 0.48, 0.78],
+  }),
+);
+
+const LS_KEY = 'bitblade.courses.v1';
+export function loadCustomArenas(): ArenaDef[] {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch { return []; }
+}
+export function saveCustomArenas(list: ArenaDef[]) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+export function allArenas(): ArenaDef[] {
+  return [...BUILTIN_ARENAS, ...loadCustomArenas()];
+}
+export function findArena(id: string) {
+  return allArenas().find((a) => a.id === id) ?? BUILTIN_ARENAS[0];
+}
