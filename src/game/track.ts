@@ -154,7 +154,7 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
         // explicit jump ramps: a smooth rise to a sharp lip
         for (const r of ramps) {
           const ds = r.end - S.cum[best];
-          if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u * (3 - 2 * u) * (0.35 + 0.65 * u)); }
+          if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u); } // concave: steepest at the lip
         }
         if (def.profile === 'pipe') {
           // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)

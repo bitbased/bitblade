@@ -1,5 +1,6 @@
 // Three.js scene for a match: heightfield arena, blades, hazards, objects, trails, trajectories, particles, bloom.
 import * as THREE from 'three';
+import { questRoute } from './ai';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -650,7 +651,7 @@ export class GameView {
           banner.position.y = 2.6;
           gate.add(banner);
           gate.position.set(m.x, y, m.z);
-          gate.rotation.y = m.rot ?? 0;
+          gate.rotation.y = m.rot ?? this.routeYaw(m.x, m.z, mi);
           const pad = new THREE.Mesh(new THREE.RingGeometry(r * 0.85, r, 40, 2), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false }));
           this.drape(pad, m.x, m.z, 1, 0.05);
           this.scene.add(gate, pad);
@@ -662,7 +663,7 @@ export class GameView {
           const r = m.r ?? 2.6;
           const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.22, 10, 48), new THREE.MeshBasicMaterial({ color: '#ffd23a', toneMapped: false }));
           ring.position.set(m.x, y + r + 0.3, m.z);
-          ring.rotation.y = m.rot ?? Math.PI / 2;
+          ring.rotation.y = m.rot ?? this.routeYaw(m.x, m.z, mi);
           const pad = new THREE.Mesh(new THREE.RingGeometry(0, r, 40, 3), new THREE.MeshBasicMaterial({ map: checkerTexture(), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false }));
           this.drape(pad, m.x, m.z, 1, 0.05);
           const beam = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 14, 32, 1, true), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
@@ -811,6 +812,27 @@ export class GameView {
         case 'finish': if (e.type !== 'burst') this.shake = Math.min(1, this.shake + 0.5); break;
       }
     }
+  }
+
+  /**
+   * Travel direction at a point, as a rotation.y: along the road on tracks, else toward the next waypoint
+   * (next checkpoint / goal) — so gates stand across the route you take.
+   */
+  routeYaw(x: number, z: number, mi: number) {
+    const T = this.terrain.track;
+    if (T) {
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < T.n; i += 2) { const d = (T.x[i] - x) ** 2 + (T.z[i] - z) ** 2; if (d < bd) { bd = d; best = i; } }
+      return Math.atan2(T.tx[best], T.tz[best]);
+    }
+    const ms = this.cfg.arena.markers;
+    const prev = [...ms.slice(0, mi)].reverse().find((m) => m.kind === 'checkpoint' || m.kind === 'spawn');
+    // the real route into this gate (tile pathfinding): face across its last step
+    const route = prev ? questRoute(this, prev.x, prev.z, x, z) : null;
+    if (route && route.length >= 2) { const a = route[route.length - 2], b = route[route.length - 1]; if (Math.hypot(b.x - a.x, b.z - a.z) > 0.5) return Math.atan2(b.x - a.x, b.z - a.z); }
+    if (route && route.length === 1 && prev) return Math.atan2(x - prev.x, z - prev.z);
+    const next = ms.slice(mi + 1).find((m) => m.kind === 'checkpoint' || m.kind === 'goal');
+    return next ? Math.atan2(next.x - x, next.z - z) : prev ? Math.atan2(x - prev.x, z - prev.z) : Math.PI / 2;
   }
 
   /** quest: the next checkpoint after `qcp` (marker index), else the goal */

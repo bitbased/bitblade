@@ -215,10 +215,10 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
  */
 interface QuestNav { T: number; w: number; h: number; ox: number; oz: number; next: number[][] }
 const navCache = new WeakMap<object, QuestNav | null>();
-function questNav(sim: Sim): QuestNav | null {
-  if (navCache.has(sim)) return navCache.get(sim)!;
+function questNav(sim: { terrain: Sim['terrain'] }): QuestNav | null {
+  if (navCache.has(sim.terrain)) return navCache.get(sim.terrain)!;
   const c = sim.terrain.def.course;
-  if (!c) { navCache.set(sim, null); return null; }
+  if (!c) { navCache.set(sim.terrain, null); return null; }
   const T = c.tile, w = c.w, h = c.h, ox = -(w * T) / 2, oz = -(h * T) / 2;
   const ter = sim.terrain;
   const has = new Set(c.pieces.map((p) => p.y * w + p.x));
@@ -248,12 +248,12 @@ function questNav(sim: Sim): QuestNav | null {
     }
   }
   const nav = { T, w, h, ox, oz, next };
-  navCache.set(sim, nav);
+  navCache.set(sim.terrain, nav);
   return nav;
 }
 
 /** breadth-first route over the tile graph; returns the tile centres to roll through (excluding the start) */
-function questRoute(sim: Sim, fx: number, fz: number, tx: number, tz: number): { x: number; z: number }[] | null {
+export function questRoute(sim: { terrain: Sim['terrain'] }, fx: number, fz: number, tx: number, tz: number): { x: number; z: number }[] | null {
   const nav = questNav(sim);
   if (!nav) return null;
   const tile = (x: number, z: number) => {

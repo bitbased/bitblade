@@ -73,6 +73,7 @@ export class MainMenu extends Base {
         item('ONLINE', 'Host a room or join with a code / link', () => this.app.go('online')),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
+        item('TRACK STUDIO', 'Build race tracks and track adventures from segments', () => this.app.go('tracks')),
         item('SETTINGS', 'Audio · graphics · network', () => this.app.go('settings')),
         p || isInstalledApp() ? item('QUIT', p ? 'Exit to desktop' : 'Close BitBlade', () => quitApp(() => this.app.toast('Swipe BitBlade away in your app switcher to close it'))) : null,
       ),

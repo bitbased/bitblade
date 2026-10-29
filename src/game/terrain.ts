@@ -884,14 +884,14 @@ function titanPeak(): ArenaDef {
   };
   const special = new Map<string, { kind: PieceKind; rot: number } | null>();
   const tx = (i: number) => (i + 0.5) * T - (n * T) / 2, tz = (j: number) => (j + 0.5) * T - (n * T) / 2;
-  const rampTops: [number, number][] = [];
+  const rampTops: [number, number, number][] = [];
   for (let r = 5; r >= 1; r--) {
     const s = sideOf[(5 - r) % 4];
     const m = 2 * r - 0.5; // inner tile of ring r
     const along = (5 - r) % 2 ? 1 : -1; // stagger along the side so ramps don't line up
     const i = s[0] ? c + s[0] * m : c + along * 0.5, j = s[1] ? c + s[1] * m : c - along * 0.5;
     special.set(`${i},${j}`, { kind: 'ramp', rot: faceRot('ramp', -s[0], -s[1]) });
-    rampTops.push([i - s[0], j - s[1]]);
+    rampTops.push([i - s[0], j - s[1], Math.atan2(-s[0], -s[1])]); // gate faces up the ramp
   }
   // a two-tile hole across rings 4 and 2: those tiers have to be walked round the other way
   for (const r of [4, 2]) {
@@ -914,7 +914,7 @@ function titanPeak(): ArenaDef {
   }
   const markers: Marker[] = [];
   markers.push({ kind: 'spawn', x: tx(2), z: tz(n - 2) }, { kind: 'spawn', x: tx(3), z: tz(n - 2) }, { kind: 'spawn', x: tx(2), z: tz(n - 3) }, { kind: 'spawn', x: tx(4), z: tz(n - 2) });
-  rampTops.forEach(([i, j]) => markers.push({ kind: 'checkpoint', x: tx(i), z: tz(j), r: 2.2 }));
+  rampTops.forEach(([i, j, rot]) => markers.push({ kind: 'checkpoint', x: tx(i), z: tz(j), r: 2.2, rot }));
   markers.push({ kind: 'hive', x: tx(3), z: tz(3), r: 9, len: 2 }, { kind: 'hive', x: tx(n - 6), z: tz(n - 6), r: 8, len: 2 });
   markers.push({ kind: 'item', x: tx(10), z: tz(1) }, { kind: 'item', x: tx(1), z: tz(10) }, { kind: 'item', x: tx(13), z: tz(13) });
   markers.push({ kind: 'goal', x: 0, z: 0, r: 2.6 });
@@ -1031,8 +1031,26 @@ export function loadCustomArenas(): ArenaDef[] {
 export function saveCustomArenas(list: ArenaDef[]) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
 }
+const TS_KEY = 'bitblade.trackstudio.v1';
+/** Track Studio courses (segment chains), stored as authored */
+export function loadTrackCourses(): SegCourse[] {
+  try { return JSON.parse(localStorage.getItem(TS_KEY) || '[]'); } catch { return []; }
+}
+export function saveTrackCourses(list: SegCourse[]) {
+  try { localStorage.setItem(TS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+  compiledCache.clear();
+}
+const compiledCache = new Map<string, ArenaDef>();
+function trackStudioArenas(): ArenaDef[] {
+  return loadTrackCourses().map((c) => {
+    const key = JSON.stringify(c);
+    let a = compiledCache.get(key);
+    if (!a) { a = { ...compileCourse(c).arena, custom: true }; compiledCache.set(key, a); }
+    return a;
+  });
+}
 export function allArenas(): ArenaDef[] {
-  return [...BUILTIN_ARENAS, ...loadCustomArenas()];
+  return [...BUILTIN_ARENAS, ...loadCustomArenas(), ...trackStudioArenas()];
 }
 export function findArena(id: string) {
   return allArenas().find((a) => a.id === id) ?? BUILTIN_ARENAS[0];

@@ -94,7 +94,7 @@ export function compileCourse(c: SegCourse): CompiledCourse {
     if (s.items) items.push(F((m.start + m.end) / 2));
     const gap = Math.min(s.gap ?? 0, s.len * 0.8);
     if (gap > 0) gaps.push([F(m.end - gap), F(m.end)]);
-    if ((s.lip ?? 0) > 0) ramps.push({ f: F(m.end - gap), len: Math.min(12, Math.max(5, (s.len - gap) * 0.6)), h: s.lip! });
+    if ((s.lip ?? 0) > 0) ramps.push({ f: F(m.end - gap), len: rampLength(s), h: s.lip! });
   });
   const track: TrackDef = {
     pts, width: c.width, rails, gaps, boosts, items, open: c.open, banks, ramps, autoKick: false,
@@ -128,7 +128,7 @@ export function compileCourse(c: SegCourse): CompiledCourse {
         case 'gem': markers.push({ kind: 'gem', ...p }); break;
         case 'item': markers.push({ kind: 'item', ...p }); break;
         case 'boost': markers.push({ kind: 'boost', ...p, rot: yaw, r: a.size ?? c.width * 0.3 }); break;
-        case 'checkpoint': markers.push({ kind: 'checkpoint', ...pos(i), rot: yaw + Math.PI / 2, r: Math.max(2.2, half - 0.3) }); break;
+        case 'checkpoint': markers.push({ kind: 'checkpoint', ...pos(i), rot: yaw, r: Math.max(2.2, half - 0.3) }); break; // rot = travel yaw → posts across the road
         case 'hive': markers.push({ kind: 'hive', ...p, r: a.size ?? Math.max(8, c.width), len: 2 }); break;
       }
     }
@@ -138,7 +138,7 @@ export function compileCourse(c: SegCourse): CompiledCourse {
     const i = c.open ? Math.min(S.n - 1, 8 + Math.floor(k / 2) * 6) : (S.n - 6 - Math.floor(k / 2) * 6) % S.n;
     markers.push({ kind: 'spawn', ...pos(i, k % 2 ? 0.45 : -0.45) });
   }
-  if (c.open) markers.push({ kind: 'goal', ...pos(S.n - 10), r: Math.max(2.6, half * 0.8), rot: Math.atan2(S.tx[S.n - 10], S.tz[S.n - 10]) + Math.PI / 2 });
+  if (c.open) markers.push({ kind: 'goal', ...pos(S.n - 10), r: Math.max(2.6, half * 0.8), rot: Math.atan2(S.tx[S.n - 10], S.tz[S.n - 10]) }); // ring faces along the road
   // checks: the ground is one height surface, so the path can't pass over itself except as a level crossing
   for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
     if (!c.open && S.n - (j - i) < 40) continue;
@@ -160,13 +160,23 @@ export function compileCourse(c: SegCourse): CompiledCourse {
   return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1) };
 }
 
+/** slowest speed (m/s) that clears a segment's gap — calibrated against the sim (a blade's width bridges ~1.8m) */
+export function jumpSpeed(s: Seg, dropAfter = 0) {
+  for (let v = 4; v <= 30; v += 0.25) if (jumpReach(v, s.lip ?? 0, dropAfter, rampLength(s)) >= (s.gap ?? 0) - 1.8) return v;
+  return 0;
+}
+
+/** the run-up length of a segment's jump ramp */
+export function rampLength(s: Seg) { return Math.min(12, Math.max(5, (s.len - Math.min(s.gap ?? 0, s.len * 0.8)) * 0.6)); }
+
 /** the gap a jump has to clear at a given speed (metres), for the editor's jump check */
-export function jumpReach(speed: number, lip: number, drop = 0) {
-  // launch angle from the lip shape (~25° for a 1.5m lip), gravity as in the sim
-  const g = 20, ang = Math.min(0.75, 0.2 + lip * 0.2);
+export function jumpReach(speed: number, lip: number, drop = 0, rampLen = 10) {
+  // launch angle = the ramp's slope at the lip (h·u² rises 2h/len there); gravity as in the sim
+  const g = 20, ang = Math.atan((2 * lip) / Math.max(1, rampLen));
   const vx = speed * Math.cos(ang), vy = speed * Math.sin(ang);
   const tUp = vy / g, hMax = (vy * vy) / (2 * g);
-  const tDown = Math.sqrt((2 * (hMax + Math.max(0, drop))) / g);
+  // you leave from the top of the lip, so you also fall the lip height back to the road (+ any drop beyond)
+  const tDown = Math.sqrt((2 * (hMax + lip + Math.max(0, drop))) / g);
   return vx * (tUp + tDown);
 }
 

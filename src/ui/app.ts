@@ -2,7 +2,7 @@
 import type { Input } from '../input/input';
 import type { Sfx } from '../game/audio';
 
-export type ScreenName = 'title' | 'menu' | 'modes' | 'lobby' | 'match' | 'results' | 'blades' | 'courses' | 'online' | 'settings';
+export type ScreenName = 'title' | 'menu' | 'modes' | 'lobby' | 'match' | 'results' | 'blades' | 'courses' | 'tracks' | 'online' | 'settings';
 
 export interface App {
   root: HTMLElement; // #ui overlay; screens render DOM in here
