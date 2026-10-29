@@ -1,6 +1,6 @@
 import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
-import { pinballTables, tiltLift, type Rail } from './pinball';
+import { pinballTables, rampLiftAt, tiltLift, type PinRamp, type Rail } from './pinball';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -30,7 +30,7 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
-export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal' | 'saucer' | 'rollover';
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal' | 'saucer' | 'rollover' | 'kickback' | 'drop' | 'post';
 export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
@@ -57,6 +57,8 @@ export interface ArenaDef {
   tilt?: number;
   /** a pinball table (Pinball mode) */
   pinball?: boolean;
+  /** raised ramp paths on the floor (their walls are added automatically) */
+  ramps?: PinRamp[];
 }
 
 export const VOID = -1000;
@@ -118,10 +120,13 @@ export class Terrain {
       }
     // a tilted playfield (pinball): the floor rises toward the top. (Rails are real vertical walls handled by the sim
     // and drawn by the renderer — as bumps in the floor, fast balls bounced up off them and hopped over.)
-    if (def.tilt) {
+    if (def.tilt || def.ramps?.length) {
       for (let j = 0; j < this.nz; j++) {
         const z = this.minZ + j * this.cell, lift = tiltLift(def, z);
-        for (let i = 0; i < this.nx; i++) { const k = j * this.nx + i; if (this.h[k] > VOID) this.h[k] += lift; }
+        for (let i = 0; i < this.nx; i++) {
+          const k = j * this.nx + i;
+          if (this.h[k] > VOID) this.h[k] += lift + (def.ramps?.length ? rampLiftAt(def.ramps, this.minX + i * this.cell, z) : 0);
+        }
       }
     }
   }

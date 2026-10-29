@@ -292,7 +292,7 @@ export class MatchScreen implements Screen {
         case 'hazard': sfx.play('hazard'); this.rumble([e.id], 0.6); break;
         case 'pin': {
           // table sounds from the existing set
-          const snd = ({ flip: 'tick', bumper: 'clash', sling: 'land', target: 'gem', plunge: 'launch', portal: 'special', tilt: 'burst', danger: 'count', multiball: 'win', capture: 'crystal', kickout: 'dash', rollover: 'pickup' } as const)[e.what];
+          const snd = ({ flip: 'tick', bumper: 'clash', sling: 'land', target: 'gem', plunge: 'launch', portal: 'special', tilt: 'burst', danger: 'count', multiball: 'win', capture: 'crystal', kickout: 'dash', rollover: 'pickup', drop: 'hazard', bank: 'win', kickback: 'launch', post: 'land', group: 'crystal', wormhole: 'special' } as const)[e.what];
           if (snd) sfx.play(snd);
           break;
         }

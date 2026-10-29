@@ -2,7 +2,7 @@
 import { computeStats, type BladeStats } from '../core/blade';
 import { Terrain, VOID, type Marker } from './terrain';
 import { hazardPose, closestOnSeg } from './hazards';
-import { flipperHalf, flipperPose, flipperSide, railSegments, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
+import { flipperHalf, flipperPose, flipperSide, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
 import { aiControl, newAI, type AIState } from './ai';
 import { globalNearest, nearestSample } from './track';
 import {
@@ -97,10 +97,10 @@ export class Sim {
       this.s.gemsLeft = this.s.gems.length;
       this.hiveCool = this.markers.map(() => 1.5);
     }
-    this.railSegs = railSegments(this.cfg.arena.rails);
+    this.railSegs = railSegments([...(this.cfg.arena.rails ?? []), ...(this.cfg.arena.ramps ?? []).flatMap(rampRails)]);
     // pinball tables (and any arena with flippers): table state
     if (this.cfg.mode === 'pinball' || this.markers.some((m) => m.kind === 'flipper')) {
-      this.s.pin = { flip: this.markers.map((m) => (m.kind === 'flipper' ? m.rot ?? 0 : 0)), lit: this.markers.map(() => false), charge: 0, mult: 0, litT: 0, tilt: 0, tilted: false, warned: false };
+      this.s.pin = { flip: this.markers.map((m) => (m.kind === 'flipper' ? m.rot ?? 0 : 0)), lit: this.markers.map(() => false), charge: 0, mult: 0, litT: 0, tilt: 0, tilted: false, warned: false, tm: this.markers.map(() => 0), save: 0 };
     }
     this.startLaunch();
   }
@@ -808,6 +808,7 @@ export class Sim {
         const R = r + sg.half;
         if (d >= R || d < 1e-5) continue;
         if (t.y > this.ground(cx, cz) + sg.h) continue; // over the top
+        if ((sg.ox || sg.oz) && t.vx * sg.ox + t.vz * sg.oz > 0.5) continue; // a one-way gate, passed the right way (moving clearly through)
         const nx = (t.x - cx) / d, nz = (t.z - cz) / d;
         t.x = cx + nx * R; t.z = cz + nz * R;
         const vn = t.vx * nx + t.vz * nz;
@@ -861,7 +862,8 @@ export class Sim {
     if (!pl) return;
     const v = (15 + 25 * k) * (pl.len ?? 1);
     t.x = pl.x; t.vx = 0; t.vz = -v;
-    if (this.s.pin) this.s.pin.charge = 0;
+    t.spin = Math.max(t.spin, 1); // a fresh launch is a full-spin launch
+    if (this.s.pin) { this.s.pin.charge = 0; if (!t.extra) this.s.pin.save = 10; }
     this.ev({ k: 'pin', what: 'plunge', x: t.x, y: t.y, z: t.z });
   }
 
@@ -940,6 +942,7 @@ export class Sim {
     const pl = ms.find((m) => m.kind === 'plunger');
     if (pl) for (const t of s.tops) {
       if (!t.alive || !this.inPlunger(t)) continue;
+      t.spin = Math.max(t.spin, 1); // waiting to launch: no spin lost
       if (t.extra) { this.plunge(t, 0.9); continue; }
       if (s.phase !== 'battle') continue;
       const c = this.controls[t.id] ?? NO_CONTROL;
@@ -974,6 +977,69 @@ export class Sim {
         }
       }
     });
+    for (let i = 0; i < pin.tm.length; i++) if (pin.tm[i] > 0) pin.tm[i] = Math.max(0, pin.tm[i] - dt);
+    if (pin.save > 0) pin.save = Math.max(0, pin.save - dt);
+    // center post: up between the flippers while ball save runs (the first seconds after a launch)
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'post' || pin.save <= 0) return;
+      for (const t of s.tops) {
+        if (!t.alive) continue;
+        const ex = t.x - m.x, ez = t.z - m.z, d = Math.hypot(ex, ez), R = (m.r ?? 0.45) + this.radius(t);
+        if (d >= R || d < 1e-4) continue;
+        const nx = ex / d, nz = ez / d;
+        t.x = m.x + nx * R; t.z = m.z + nz * R;
+        const vn = t.vx * nx + t.vz * nz;
+        if (vn < 0) { t.vx -= 1.6 * vn * nx; t.vz -= 1.6 * vn * nz; this.ev({ k: 'pin', what: 'post', x: m.x, y: t.y, z: m.z }); }
+      }
+      void mi;
+    });
+    // kickback: an outlane saver — fires the ball straight back up, then needs ~25s to recharge
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'kickback' || pin.tm[mi] > 0) return;
+      for (const t of s.tops) {
+        if (!t.alive || Math.hypot(t.x - m.x, t.z - m.z) > (m.r ?? 0.9)) continue;
+        const a = m.rot ?? -Math.PI / 2, v = m.len ?? 30;
+        t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
+        pin.tm[mi] = 25;
+        this.addScore(t, 250);
+        this.ev({ k: 'pin', what: 'kickback', x: m.x, y: t.y, z: m.z, pts: 250 });
+        this.ev({ k: 'announce', text: 'KICKBACK!', sub: 'recharging…' });
+        break;
+      }
+    });
+    // drop targets: plates (width 2r, facing rot) that drop when hit; a whole bank (same team number) down scores a
+    // bonus and refills spin, then the bank pops back up
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'drop' || pin.lit[mi]) return;
+      const fx = Math.cos(m.rot ?? 0), fz = Math.sin(m.rot ?? 0); // the face direction
+      const half = m.r ?? 0.8, sg = { ax: m.x - fz * half, az: m.z + fx * half, bx: m.x + fz * half, bz: m.z - fx * half };
+      for (const t of s.tops) {
+        if (!t.alive) continue;
+        const { d, cx, cz } = segDist(sg, t.x, t.z), R = this.radius(t) + 0.2;
+        if (d >= R || d < 1e-4) continue;
+        const nx = (t.x - cx) / d, nz = (t.z - cz) / d;
+        t.x = cx + nx * R; t.z = cz + nz * R;
+        const vn = t.vx * nx + t.vz * nz;
+        if (vn < 0) { t.vx -= 1.3 * vn * nx; t.vz -= 1.3 * vn * nz; }
+        pin.lit[mi] = true; // down
+        this.addScore(t, 300);
+        this.ev({ k: 'pin', what: 'drop', x: m.x, y: t.y, z: m.z, pts: 300 });
+        const bank = ms.map((q, qi) => ({ q, qi })).filter(({ q }) => q.kind === 'drop' && (q.team ?? 0) === (m.team ?? 0));
+        if (bank.every(({ qi }) => pin.lit[qi])) {
+          this.addScore(t, 3000);
+          t.spin = Math.max(t.spin, 1);
+          this.ev({ k: 'announce', text: 'BANK DOWN!', sub: '+3000 · full spin' });
+          this.ev({ k: 'pin', what: 'bank', x: m.x, y: t.y, z: m.z, pts: 3000 });
+          for (const { qi } of bank) pin.tm[qi] = 3; // pop back up in 3s
+        }
+        break;
+      }
+    });
+    // banks pop back up (unless a ball sits right where a plate would rise)
+    ms.forEach((m, mi) => {
+      if (m.kind === 'drop' && pin.lit[mi] && pin.tm[mi] > 0 && pin.tm[mi] <= dt * 1.5 && !s.tops.some((t) => t.alive && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 0.8) + 0.8)) pin.lit[mi] = false;
+    });
+    // rollover groups: rollovers sharing a team number light up; light the whole group for a bonus
     // capture saucers: catch the ball, spin it right back up while it sits there, then kick it out (rot = the
     // kick direction, len = kick speed). On a table you can't stop on a spin pad — this is where spin comes from.
     for (const t of s.tops) {
@@ -984,11 +1050,15 @@ export class Sim {
         t.spin = Math.min(1, t.spin + dt * 0.55);
         t.heldT = (t.heldT ?? 0) - dt;
         if (t.heldT <= 0) {
-          const a = m.rot ?? -Math.PI / 2, v = m.len ?? 18;
+          // a wormhole: saucers sharing a team number are linked — you come out of the other one
+          const partner = m.team !== undefined ? ms.find((q) => q !== m && q.kind === 'saucer' && q.team === m.team) : undefined;
+          if (partner) { t.x = partner.x; t.z = partner.z; t.y = this.ground(partner.x, partner.z) + 0.2; this.addScore(t, 1500); this.ev({ k: 'pin', what: 'wormhole', x: partner.x, y: t.y, z: partner.z, pts: 1500 }); }
+          const out = partner ?? m;
+          const a = out.rot ?? -Math.PI / 2, v = out.len ?? 18;
           t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
-          t.x += Math.cos(a) * ((m.r ?? 1) + 0.3); t.z += Math.sin(a) * ((m.r ?? 1) + 0.3);
+          t.x += Math.cos(a) * ((out.r ?? 1) + 0.3); t.z += Math.sin(a) * ((out.r ?? 1) + 0.3);
           t.held = undefined; t.portalT = 0.6;
-          this.ev({ k: 'pin', what: 'kickout', x: m.x, y: t.y, z: m.z });
+          this.ev({ k: 'pin', what: 'kickout', x: out.x, y: t.y, z: out.z });
         }
         continue;
       }
@@ -1009,6 +1079,18 @@ export class Sim {
       t.rollT = 0.7;
       this.addScore(t, 100);
       this.ev({ k: 'pin', what: 'rollover', x: m.x, y: t.y, z: m.z, pts: 100 });
+      if (m.team !== undefined) {
+        const mi = ms.indexOf(m);
+        pin.lit[mi] = true;
+        const group = ms.map((q, qi) => ({ q, qi })).filter(({ q }) => q.kind === 'rollover' && q.team === m.team);
+        if (group.every(({ qi }) => pin.lit[qi])) {
+          for (const { qi } of group) pin.lit[qi] = false;
+          this.addScore(t, 2500);
+          t.spin = Math.max(t.spin, 1);
+          this.ev({ k: 'announce', text: 'LANES COMPLETE', sub: '+2500 · full spin' });
+          this.ev({ k: 'pin', what: 'group', x: m.x, y: t.y, z: m.z, pts: 2500 });
+        }
+      }
     }
     // portals: in one, out of its partner (same team number), keeping your speed
     for (const t of s.tops) {

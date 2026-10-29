@@ -569,3 +569,8 @@ body.hints-on .music-chip { bottom: 56px; }
 .hud.hud-pin.hud-touch .hud-cards { top: 64px; bottom: auto; }
 .touch-ui.pin .touch-base { bottom: 150px; }
 .touch-ui.pin .touch-stick-zone { height: calc(70% - 120px); bottom: 120px; }
+
+/* pinball: the score + ball line sit in the top-left corner, clear of the table's top lanes */
+.hud.hud-pin .hud-top { left: 14px; transform: none; }
+.hud.hud-pin .hud-obj { left: 18px; transform: none; top: 70px; }
+@media (max-width: 700px) { .hud.hud-pin .hud-top { left: 10px; top: 10px; } .hud.hud-pin .hud-obj { left: 12px; top: 58px; } .hud.hud-pin.hud-touch .hud-cards { top: 84px; } }

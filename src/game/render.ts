@@ -11,7 +11,7 @@ import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
 import type { TrackSamples } from './track';
-import { railPolyline, railSegments, flipperHalf } from './pinball';
+import { railPolyline, railSegments, rampRails, flipperHalf } from './pinball';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -270,7 +270,7 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
   };
   const segs = railSegments(rails);
   for (const r of rails) {
-    if (!r.kick) { addRail(r, plain, new THREE.Color(theme.glow)); continue; }
+    if (!r.kick) { addRail(r, plain, new THREE.Color(r.oneWay ? '#ffd23a' : theme.glow)); continue; } // (gates in gold)
     const one = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
     addRail(r, one, new THREE.Color('#ffffff'));
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false, color: '#ff5cf4' });
@@ -547,6 +547,10 @@ export class GameView {
   flippers: { g: THREE.Group; mi: number }[] = [];
   targets: { mat: THREE.MeshStandardMaterial; mi: number }[] = [];
   portals: THREE.Mesh[] = [];
+  drops: { g: THREE.Mesh; mi: number; y: number }[] = [];
+  kickbacks: { mat: THREE.MeshBasicMaterial; mi: number }[] = [];
+  posts: { g: THREE.Mesh; y: number }[] = [];
+  lights: { mat: THREE.MeshBasicMaterial; mi: number; base: string }[] = [];
   plungerRod: { g: THREE.Group; z0: number } | null = null;
 
   slings: RailBuild['slings'] = [];
@@ -554,11 +558,37 @@ export class GameView {
 
   /** rails: smooth neon walls (shared with the Course Builder); slingshot faces are kept to animate */
   buildRails() {
-    const rails = this.cfg.arena.rails;
-    if (!rails?.length) return;
+    const rails = [...(this.cfg.arena.rails ?? []), ...(this.cfg.arena.ramps ?? []).flatMap(rampRails)];
+    if (!rails.length) return;
     const b = buildRailMeshes(rails, this.cfg.arena.theme, (x, z) => this.groundY(x, z));
     this.scene.add(b.group);
     this.slings = b.slings;
+    // ramp decks: a glowing deck over the raised path with chevrons pointing up it (so it reads as a ramp)
+    for (const rp of this.cfg.arena.ramps ?? []) {
+      const pl = railPolyline({ pts: rp.pts });
+      const half = (rp.w ?? 3) / 2;
+      const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+      let along = 0;
+      for (let i = 0; i < pl.length; i++) {
+        const a = pl[Math.max(0, i - 1)], b2 = pl[Math.min(pl.length - 1, i + 1)];
+        let tx = b2[0] - a[0], tz = b2[1] - a[1];
+        const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+        if (i > 0) along += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]);
+        for (const sd of [1, -1]) {
+          const x = pl[i][0] - tz * half * 0.92 * sd, z = pl[i][1] + tx * half * 0.92 * sd;
+          pos.push(x, this.groundY(x, z) + 0.04, z);
+          uv.push(sd > 0 ? 0 : 1, -along / 3);
+        }
+        if (i > 0) { const k = (i - 1) * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      const deck = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(this.cfg.arena.theme.glow, 2), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+      this.scene.add(deck);
+      this.boostMeshes.push(deck); // (the chevrons scroll up the ramp)
+    }
   }
   boxMeshes: THREE.Mesh[] = [];
   crystalMeshes = new Map<number, THREE.Mesh>();
@@ -860,7 +890,8 @@ export class GameView {
           const cup = new THREE.Mesh(new THREE.CircleGeometry(r * 0.85, 32), new THREE.MeshBasicMaterial({ color: '#05060c' }));
           cup.rotation.x = -Math.PI / 2;
           cup.position.set(m.x, y + 0.04, m.z);
-          const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.88, 0.1, 8, 40), new THREE.MeshBasicMaterial({ color: '#38ffb0', toneMapped: false }));
+          const wcol = m.team === undefined ? '#38ffb0' : ['#ff3b4a', '#38ffb0', '#ffd23a', '#3cf2ff'][m.team % 4];
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.88, 0.1, 8, 40), new THREE.MeshBasicMaterial({ color: wcol, toneMapped: false }));
           rim.rotation.x = Math.PI / 2;
           rim.position.set(m.x, y + 0.1, m.z);
           const a = m.rot ?? -Math.PI / 2;
@@ -874,11 +905,41 @@ export class GameView {
         case 'rollover': {
           // spin rollover: a lane light on the floor
           const r = m.r ?? 0.9;
-          const disc = new THREE.Mesh(new THREE.RingGeometry(r * 0.45, r * 0.7, 6), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.8, toneMapped: false, side: THREE.DoubleSide, depthWrite: false }));
+          const lmat = new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.8, toneMapped: false, side: THREE.DoubleSide, depthWrite: false });
+          const disc = new THREE.Mesh(new THREE.RingGeometry(r * 0.45, r * 0.7, 6), lmat);
           disc.rotation.x = -Math.PI / 2;
           disc.position.set(m.x, y + 0.05, m.z);
           this.scene.add(disc);
           this.portals.push(disc);
+          if (m.team !== undefined) this.lights.push({ mat: lmat, mi, base: '#ffd23a' });
+          break;
+        }
+        case 'drop': {
+          // a drop-target plate: stands up facing rot; sinks into the floor when hit (see update)
+          const w = (m.r ?? 0.8) * 2;
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.0, w), new THREE.MeshStandardMaterial({ color: '#2a1d10', emissive: '#ff9a2a', emissiveIntensity: 0.8, metalness: 0.3, roughness: 0.4 }));
+          plate.position.set(m.x, y + 0.5, m.z);
+          plate.rotation.y = -(m.rot ?? 0);
+          plate.castShadow = true;
+          this.scene.add(plate);
+          this.drops.push({ g: plate, mi, y });
+          break;
+        }
+        case 'kickback': {
+          const kmat = new THREE.MeshBasicMaterial({ color: '#38ffb0', toneMapped: false, transparent: true, opacity: 0.9 });
+          const a = m.rot ?? -Math.PI / 2;
+          const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.1, 3), kmat);
+          arrow.rotation.order = 'YXZ'; arrow.rotation.y = -a + Math.PI / 2; arrow.rotation.x = Math.PI / 2;
+          arrow.position.set(m.x, y + 0.08, m.z);
+          this.scene.add(arrow);
+          this.kickbacks.push({ mat: kmat, mi });
+          break;
+        }
+        case 'post': {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(m.r ?? 0.45, m.r ?? 0.45, 1.1, 16), new THREE.MeshStandardMaterial({ color: '#d8dce8', emissive: '#3cf2ff', emissiveIntensity: 0.6, metalness: 0.6, roughness: 0.3 }));
+          post.position.set(m.x, y - 0.6, m.z);
+          this.scene.add(post);
+          this.posts.push({ g: post, y });
           break;
         }
         case 'portal': {
@@ -1351,6 +1412,12 @@ export class GameView {
       if (this.plungerRod) this.plungerRod.g.position.z = this.plungerRod.z0 + s.pin.charge * 1.3;
     }
     for (const p of this.portals) p.rotation.z += dt * 2.5;
+    if (s.pin) {
+      for (const d of this.drops) { const down = s.pin.lit[d.mi]; const ty = d.y + (down ? -0.55 : 0.5); d.g.position.y += (ty - d.g.position.y) * Math.min(1, dt * 18); }
+      for (const k of this.kickbacks) { const armed = (s.pin.tm[k.mi] ?? 0) <= 0; k.mat.color.set(armed ? '#38ffb0' : '#3a4250'); k.mat.opacity = armed ? 0.6 + 0.35 * Math.sin(this.time * 6) : 0.5; }
+      for (const p of this.posts) { const ty = p.y + (s.pin.save > 0 ? 0.55 : -0.6); p.g.position.y += (ty - p.g.position.y) * Math.min(1, dt * 12); }
+      for (const l of this.lights) l.mat.color.set(s.pin.lit[l.mi] ? '#ffffff' : l.base);
+    }
     for (const sl of this.slings) {
       sl.t = Math.max(0, sl.t - dt);
       const k = sl.t / 0.16;
