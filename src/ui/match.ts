@@ -176,6 +176,7 @@ export class MatchScreen implements Screen {
     const online = !!(this.arg.host || this.arg.client);
     if (this.paused) {
       this.pauseNav?.update(dt);
+      app.sfx.setHum(0); // (no blade whir behind the pause menu)
       if (!online) { this.view.render(); return; }
     }
     // local input (online games keep running behind the pause menu)
@@ -344,6 +345,7 @@ export class MatchScreen implements Screen {
 
   togglePause() {
     this.paused = !this.paused;
+    if (this.paused) this.app.sfx.setHum(0);
     if (this.paused) {
       const resume = h('button.btn.nav', { onclick: () => this.togglePause() }, 'Resume');
       let buttons: HTMLElement[];

@@ -66,7 +66,11 @@ export class Sim {
     this.buildSpawns();
     cfg.players.forEach((p, i) => this.addTop(p.name, p.team, p.blade, p.ctrl.type === 'cpu' ? p.ctrl.level : 0, i));
     // objects
-    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest' || (cfg.mode === 'pinball' && this.markers.some((m) => m.kind === 'item'))) {
+    // (a pinball table with items off still keeps the power-up inside an arena bowl)
+    const inBowl = (m: Marker) => this.markers.some((a) => a.kind === 'arena' && Math.hypot(m.x - a.x, m.z - a.z) < (a.r ?? 6));
+    const bowlItems = cfg.mode === 'pinball' && !cfg.items ? this.markers.filter((m) => m.kind === 'item' && inBowl(m)) : [];
+    for (const m of bowlItems) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
+    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest') {
       let items = this.markers.filter((m) => m.kind === 'item');
       if (items.length === 0) items = [0, 1, 2].map(() => ({ kind: 'item', ...this.terrain.randomSafePoint(this.rnd) }) as Marker);
       for (const m of items) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
