@@ -433,6 +433,15 @@ export class Sim {
         // grind regen: a fast wall ride feeds spin back in (rewards style; slow crawling up a wall doesn't count)
         const sp = Math.hypot(t.vx, t.vz);
         if (sp > 6 && t.spin < 1) t.spin = Math.min(1, t.spin + Math.min(0.08, 0.05 + (sp - 6) * 0.005) * dt);
+      } else if (slope > 0.3 && t.spin < 1 && !this.terrain.track) {
+        // carving: riding ALONG a curved wall (bowl, quarter pipe, banked edge) at speed feeds spin back too —
+        // steeper and faster = more; going straight up/down the wall doesn't count
+        const sp = Math.hypot(t.vx, t.vz);
+        const across = Math.abs((t.vx * grad.gx + t.vz * grad.gz) / ((sp || 1) * slope));
+        if (sp > 6 && across < 0.55) {
+          t.spin = Math.min(1, t.spin + (0.035 + Math.min(0.035, (sp - 6) * 0.004)) * Math.min(1, slope / 0.9) * dt);
+          if (Math.random() < dt * 6) this.ev({ k: 'grind', x: t.x, y: t.y, z: t.z, id: t.id });
+        }
       }
     } else {
       t.tx *= 1 - dt * 2; t.tz *= 1 - dt * 2;

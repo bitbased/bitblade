@@ -244,7 +244,7 @@ function pieceHeight(kind: PieceKind, u: number, v: number, T: number): number {
     case 'bowl': {
       const r = Math.hypot(u - 0.5, v - 0.5) * T;
       const inner = T * 0.5 - rho;
-      return arc(r - inner, rho) - 0.6 * smooth(1 - r / inner);
+      return arc(r - inner, rho); // (no centre dip: it left a dimple in the bottom of the bowl)
     }
     case 'kicker': {
       if (v < 0.15 || v > 0.78) return 0;
