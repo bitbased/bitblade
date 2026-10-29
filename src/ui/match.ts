@@ -1,6 +1,6 @@
 // Match screen: runs the sim (local / host) or mirrors snapshots (client), renders, HUD, pause.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { allSongs, surpriseSong } from '../game/music';
+import { allSongs } from '../game/music';
 import { Hud } from './hud';
 import { icon } from './icons';
 import { Sim } from '../game/sim';
@@ -313,7 +313,7 @@ export class MatchScreen implements Screen {
   }
 
   /**
-   * Pause menu MUSIC: ◀ ▶ through this course's own song, 🎲 a fresh surprise, 📻 radio (new surprise songs keep
+   * Pause menu MUSIC: ◀ ▶ through this course's own song, 📻 surprise radio (new surprise songs keep
    * coming), and every song in your library. It switches straight away, for this match.
    */
   musicIdx = 0;
@@ -322,7 +322,6 @@ export class MatchScreen implements Screen {
     type Opt = { label: string; play: () => void };
     const opts: Opt[] = [
       { label: this.arg.cfg.song ? `♪ Room song — ${this.arg.cfg.song.name}` : '♪ This course\'s song', play: () => (this.arg.cfg.song ? sfx.playSong(this.arg.cfg.song) : sfx.useMusic('game', this.arg.cfg.arena)) },
-      { label: '🎲 Surprise song', play: () => sfx.playSong((sfx.surprise = surpriseSong())) },
       { label: '📻 Surprise radio', play: () => sfx.startRadio() },
       ...allSongs().map((s) => ({ label: `♪ ${s.name}${s.custom ? '' : ' ★'}`, play: () => sfx.playSong(s) })),
     ];
