@@ -60,7 +60,7 @@ function installGlobal() {
   const NAV_KEYS = /^(Arrow|Key[WASDQEZC]$|Enter$|Space$|Escape$|Backspace$|Tab$)/;
   addEventListener('keydown', (e) => {
     // only menu keys switch the prompts to keyboard (typing a name on a phone must not)
-    if (!isText(e.target as Element) && NAV_KEYS.test(e.code)) { navUsed = true; setDevice('key'); }
+    if (!isText(e.target as Element) && NAV_KEYS.test(e.code)) { navUsed = true; setDevice('key'); document.body.classList.add('kb-nav'); }
     // typing in a field: Enter / Esc hand control back to the menu
     if (isText(e.target as Element) && (e.key === 'Escape' || (e.key === 'Enter' && (e.target as Element).tagName !== 'TEXTAREA'))) {
       (e.target as HTMLElement).blur();
@@ -69,6 +69,9 @@ function installGlobal() {
   });
   // a real mouse keeps keyboard prompts (same device); a finger switches to touch (no prompts)
   addEventListener('pointermove', (e) => { if (e.isTrusted && e.pointerType === 'mouse' && lastDevice !== 'key' && Math.abs(e.movementX) + Math.abs(e.movementY) > 6) setDevice('key'); }, { passive: true });
+  // kb-nav: focus came from menu keys (show focus rings); any click / tap / real mouse move clears it
+  addEventListener('pointerdown', () => document.body.classList.remove('kb-nav'), { passive: true });
+  addEventListener('pointermove', (e) => { if (e.pointerType !== 'mouse' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6) document.body.classList.remove('kb-nav'); }, { passive: true });
   addEventListener('pointerdown', (e) => { if (!e.isTrusted) return; setDevice(e.pointerType === 'touch' || e.pointerType === 'pen' ? 'mouse' : 'key'); }, { passive: true });
   // desktop starts with keyboard+mouse prompts, phones/tablets with none
   setDevice(typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? 'key' : 'mouse');

@@ -527,9 +527,11 @@ body.hints-on .menu-foot { bottom: 56px; }
 /* ON (radio): solid pink with an ON tag — unmistakable */
 .music-chip .mm-ic.on { background: #ff5cf4; border-color: #ff5cf4; color: #05060a; box-shadow: 0 0 14px rgba(255, 92, 244, 0.7); }
 .music-chip .mm-ic.on::after { content: 'ON'; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); font-family: var(--font-h); font-size: 8px; letter-spacing: 0.1em; padding: 1px 4px; background: #05060a; color: #ff5cf4; border: 1px solid #ff5cf4; line-height: 1.2; }
-/* keyboard / gamepad focus: a white ring + cyan glow + a little bigger — never confused with ON */
-.music-chip .mm-ic.focus { outline: 3px solid #fff !important; outline-offset: 3px !important; box-shadow: 0 0 0 7px rgba(60, 242, 255, 0.55), 0 0 18px rgba(60, 242, 255, 0.7) !important; transform: scale(1.12) !important; z-index: 1; }
-.music-chip .mm-ic:hover:not(.focus) { outline: 1px solid rgba(255, 255, 255, 0.7); outline-offset: 1px; }
+/* focus ring only when steering with keys / a gamepad (a click or tap leaves nothing behind), and a light one */
+.music-chip .focus { outline: none !important; }
+body.kb-nav .music-chip .mm-ic.focus, body.dev-pad .music-chip .mm-ic.focus,
+body.kb-nav .music-chip .mm-play.focus, body.dev-pad .music-chip .mm-play.focus { outline: 2px solid var(--accent) !important; outline-offset: 2px !important; }
+@media (hover: hover) { .music-chip .mm-ic:hover { border-color: rgba(255, 255, 255, 0.6); background: rgba(255, 255, 255, 0.12); } .music-chip .mm-ic.on:hover { background: #ff7af6; } }
 .music-chip .mm-now span { white-space: nowrap; }
 /* audio still locked by the browser: a pulsing tap-to-play */
 .music-chip .mm-play { display: flex; align-items: center; gap: 10px; background: linear-gradient(135deg, rgba(255, 92, 244, 0.25), rgba(60, 242, 255, 0.18)); border: 1px solid #ff5cf4; color: var(--text); padding: 5px 12px 5px 8px; cursor: pointer; animation: mmPulse 1.4s ease-in-out infinite; text-align: left; }
@@ -537,7 +539,6 @@ body.hints-on .menu-foot { bottom: 56px; }
 .music-chip .mm-play span { display: flex; flex-direction: column; font-family: var(--font-h); }
 .music-chip .mm-play i { font-style: normal; font-size: 11px; letter-spacing: 0.14em; color: #fff; }
 .music-chip .mm-play em { font-style: normal; font-size: 11px; color: #ff5cf4; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-.music-chip .mm-play.focus { outline: 3px solid #fff !important; outline-offset: 3px !important; }
 @keyframes mmPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 92, 244, 0.55); } 50% { box-shadow: 0 0 0 7px rgba(255, 92, 244, 0); } }
 body.hints-on .music-chip { bottom: 56px; }
 .music-chip.on-title, body.hints-on .music-chip.on-title { top: 16px; bottom: auto; right: 16px; }
@@ -548,3 +549,7 @@ body.hints-on .music-chip { bottom: 56px; }
 .room-music .rm-status { height: 30px; display: flex; align-items: center; font-size: 12px; color: var(--muted); overflow: hidden; }
 .room-music .rm-status .btn { padding: 5px 12px; font-size: 10px; height: 28px; }
 .room-music .val b, .room-music .val span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; }
+
+.music-chip .mm-ic svg { width: 20px; height: 20px; }
+.music-chip .mm-play b svg { width: 14px; height: 14px; margin-left: 2px; }
+.music-chip .mm-tiny { width: 10px; height: 10px; vertical-align: -1px; }
