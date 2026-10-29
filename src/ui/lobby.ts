@@ -1,6 +1,6 @@
 // Local + online-host lobby: press-to-join slots, blades, teams, arena, rules, invite codes.
 import { h, MenuNav, type App, type Screen } from './app';
-import { allBlades, findBlade, PRESETS, type BladeDesign } from '../core/blade';
+import { allBlades, computeStats, findBlade, PRESETS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
 import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
 import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
@@ -351,7 +351,7 @@ export class LobbyScreen implements Screen {
       const card = h('div.slot', null,
         h('div.pnum', null, `P${i + 1}`),
         this.isTeamMode() ? h('div.team-tag', { onclick: () => { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } }, s.team === 0 ? 'RED' : 'BLUE') : null,
-        cv, name, bladeRow, ctrl,
+        cv, name, bladeRow, this.statLine(d), ctrl,
         L.slots.length > 1 ? h('div.x', { onclick: () => this.removeSlot(i), title: 'Remove' }, icon('close')) : null);
       card.style.setProperty('--slot', this.slotColor(s, i));
       card.style.animationDelay = `${i * 0.04}s`;
@@ -362,6 +362,14 @@ export class LobbyScreen implements Screen {
       this.slotsEl.append(h('div.slot.join', null, h('div.big', null, '+'), `${hint} SPACE · ENTER · Ⓐ`, h('br'), 'TO JOIN'));
     }
     for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle);
+  }
+
+  statLine(d: BladeDesign) {
+    const st = computeStats(d);
+    const pip = (v: number) => Math.max(1, Math.round(v * 10));
+    const ctl = Math.round(((st.control - 0.8) / 0.5) * 10);
+    return h('div.slot-stats', { title: `Attack / Defense / Stamina / Control (acceleration)` },
+      ...([['ATK', pip(st.attack)], ['DEF', pip(st.defense)], ['STA', pip(st.stamina)], ['CTL', Math.max(1, Math.min(10, ctl))]] as const).map(([k, v]) => h('span', null, h('b', null, k), ` ${v}`)));
   }
 
   removeSlot(i: number) {

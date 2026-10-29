@@ -347,7 +347,10 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      const acc = 17 * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      let acc = 17 * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      // counter-steering bites harder so low-grip tips can still turn and stop
+      const vl = Math.hypot(t.vx, t.vz);
+      if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
       ax += ix * acc; az += iz * acc;
       t.spin -= Math.min(1, il) * 0.004 * dt;
     }
@@ -392,7 +395,7 @@ export class Sim {
     t.vx += ax * dt; t.vz += az * dt;
     t.vy -= G * dt * (t.fx.special > 0 && t.specialKind === 'skydive' && t.vy < 0 ? 2.2 : 1);
     if (t.grounded) {
-      const k = 0.22 + st.tipFriction * 0.4 + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
+      const k = 0.32 + st.tipFriction * 0.3 + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
       const f = Math.max(0, 1 - k * dt);
       t.vx *= f; t.vz *= f;
     }

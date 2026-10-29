@@ -99,7 +99,8 @@ export function computeStats(d: BladeDesign): BladeStats {
     height: 0.55 + d.tipHeight * 0.25,
     tipFriction: tip.friction,
     spinDecay: 0.011 * tip.decay * (1.25 - stamina * 0.6),
-    control: tip.control * (0.85 + speed * 0.3),
+    // tip sets the feel, but keep every blade drivable: ~0.85x .. 1.25x
+    control: (0.85 + (tip.control - 0.6) * 0.55) * (0.92 + speed * 0.16),
   };
 }
 
