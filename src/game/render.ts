@@ -1355,7 +1355,7 @@ export class GameView {
         v.yaw = c.yaw; v.cam3 = { sp: c.sp, back: c.back };
         v.tgt.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
         v.pos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
-        v.pos.y = this.clearSight(v.pos, [t]);
+        v.pos.y = Math.max(v.pos.y, c.py - 0.3); // never lag below the rig's height (it already clears the road)
         v.cam.position.copy(v.pos);
         if (this.shake > 0) { v.cam.position.x += (Math.random() - 0.5) * this.shake * 0.4; v.cam.position.y += (Math.random() - 0.5) * this.shake * 0.4; }
         v.cam.lookAt(v.tgt);
@@ -1402,6 +1402,7 @@ export class GameView {
         this.chaseYaw = c.yaw; this.chaseSt = { sp: c.sp, back: c.back };
         this.camTarget.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
         this.camPos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
+        this.camPos.y = Math.max(this.camPos.y, c.py - 0.3); // never lag below the rig's height (it already clears the road)
         if (this.camera.fov !== 62) { this.camera.fov = 62; this.camera.updateProjectionMatrix(); }
       } else {
         // fit every blade inside the part of the screen the HUD doesn't cover (works for portrait phones too)
@@ -1418,7 +1419,7 @@ export class GameView {
         this.camPos.lerp(new THREE.Vector3(quest ? cx : cx * 0.9, tgt.y + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2 * urgent));
       }
       // the ground must never hide your blade (e.g. the crest you just went over): lift the camera now, not after the lag
-      if (pts.length) this.camPos.y = this.clearSight(this.camPos, pts);
+      if (pts.length && !T) this.camPos.y = this.clearSight(this.camPos, pts);
     }
     this.camera.position.copy(this.camPos);
     if (this.shake > 0) {
@@ -1610,10 +1611,13 @@ export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | 
   let py = Math.min(heightAt(back), cy + up + back + 10); // (falling far below the road: don't fly off into the sky)
   const px = cx - fx * back, pz = cz - fz * back;
   // bridges: never put the camera inside (or above) a road deck that's above the blade
+  // (a "deck" is a DIFFERENT stretch of road overhead: well above our own road at that point. The slope behind you
+  // on a downhill is not a deck — mistaking it for one put the camera under the road.)
   if (deckAt) {
-    for (const [qx, qz] of [[px, pz], [(px + cx) / 2, (pz + cz) / 2]]) {
+    for (const [qx, qz, dd] of [[px, pz, back], [(px + cx) / 2, (pz + cz) / 2, back / 2]]) {
       const deck = deckAt(qx, qz);
-      if (deck > cy + 1.8 && deck < py + 2) py = Math.max(cy + 1.6, deck - 1.4);
+      const own = roadY(pf - dd / 0.5);
+      if (deck > own + 3 && deck > cy + 1.8 && deck < py + 2) py = Math.max(cy + 1.6, deck - 1.4);
     }
   }
   // aim: down the road ahead, but never so far that your blade drops toward the bottom of the screen (steep drops,
