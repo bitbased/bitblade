@@ -284,6 +284,7 @@ export const THEMES: Record<string, Theme> = {
   toxic: { floor: '#13261a', wall: '#1f4a2a', glow: '#74ff5a', sky1: '#020a05', sky2: '#0b2a14', grid: '#9cff7a' },
   ice: { floor: '#2c6390', wall: '#163a5c', glow: '#7fe6ff', sky1: '#050d1a', sky2: '#1b3a5e', grid: '#bfefff' },
   concrete: { floor: '#4f525b', wall: '#3a3d45', glow: '#ff3db4', sky1: '#0f1018', sky2: '#3a2448', grid: '#c9cbd6' },
+  tube: { floor: '#1b2a44', wall: '#2c4f7c', glow: '#ff8a1f', sky1: '#04060c', sky2: '#16223d', grid: '#7fa8ff' },
   royal: { floor: '#241433', wall: '#3d1f5c', glow: '#ffcc33', sky1: '#07030d', sky2: '#2a0d3d', grid: '#d6a2ff' },
 };
 
@@ -398,8 +399,8 @@ function trackArena(id: string, name: string, desc: string, theme: Theme, track:
   const S = sampleTrack(track);
   const markers: Marker[] = [];
   const at = (f: number) => Math.floor((((f % 1) + 1) % 1) * S.n);
-  // boost strips span most of the road so they're easy to hit
-  for (const f of track.boosts) { const i = at(f); markers.push({ kind: 'boost', x: S.x[i], z: S.z[i], rot: Math.atan2(S.tx[i], S.tz[i]), r: track.width * 0.36 }); }
+  // boost strips span most of the road so they're easy to hit (narrower down the bottom of a pipe)
+  for (const f of track.boosts) { const i = at(f); markers.push({ kind: 'boost', x: S.x[i], z: S.z[i], rot: Math.atan2(S.tx[i], S.tz[i]), r: track.width * (track.profile === 'pipe' ? 0.2 : 0.36) }); }
   for (const f of track.items) {
     const i = at(f);
     for (const o of [-0.3, 0, 0.3]) markers.push({ kind: 'item', x: S.x[i] - S.tz[i] * o * track.width, z: S.z[i] + S.tx[i] * o * track.width });
@@ -567,6 +568,43 @@ BUILTIN_ARENAS.push(
   }, [
     { f: 0.37, kind: 'bumper', lat: 0.4 }, { f: 0.39, kind: 'bumper', lat: -0.4 }, { f: 0.87, kind: 'bumper', lat: 0 },
   ]),
+);
+
+/** Figure-8 control points: both lobes cross flat at the origin (same height) so racers can T-bone each other. */
+function figure8(rx: number, rz: number, n: number, elev: (t: number) => number, skew = 0): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  for (let k = 0; k < n; k++) {
+    const t = Math.PI / 4 + (k / n) * Math.PI * 2; // start mid-lobe, away from the crossing
+    out.push([rx * Math.sin(t), rz * Math.sin(2 * t) + skew * Math.sin(t), elev(t)]);
+  }
+  return out;
+}
+
+BUILTIN_ARENAS.push(
+  trackArena('hyper-tube', 'Hyper Tube', 'A twisting half-pipe: the floor banks hard left and right all lap long. Ride the walls — but not over the rim.', THEMES.tube, {
+    width: 12, profile: 'pipe', depth: 3.2, twist: 0.42, twistWaves: 5,
+    pts: [[0, -50, 0], [40, -55, 2], [70, -35, 4], [75, 0, 6], [55, 30, 5], [25, 25, 3], [10, 45, 2], [-20, 60, 1], [-55, 50, 2], [-70, 20, 3], [-50, -5, 2], [-65, -35, 1], [-35, -55, 0]],
+    rails: [],
+    gaps: [[0.585, 0.595]],
+    boosts: [0.04, 0.3, 0.55, 0.8],
+    items: [0.17, 0.45, 0.7],
+  }),
+  trackArena('crossfire-8', 'Crossfire 8', 'Figure-eight with a flat X-crossing mid-lap — time it right or get T-boned.', THEMES.royal, {
+    width: 9,
+    pts: figure8(58, 34, 16, (t) => 4 * Math.sin(t) ** 2),
+    rails: [[0.03, 0.26], [0.53, 0.76]], // lobes only: the X-crossing stays wide open
+    gaps: [],
+    boosts: [0.2, 0.7],
+    items: [0.1, 0.45, 0.6, 0.95],
+  }),
+  trackArena('twin-clash', 'Twin Loop Clash', 'Big lopsided figure-eight: two crossings of traffic, a jump on each lobe, boosts into the X.', THEMES.neon, {
+    width: 9,
+    pts: figure8(74, 42, 18, (t) => 3 * Math.sin(t) ** 2 + 1.2 * Math.sin(t * 3) ** 2, 12),
+    rails: [[0.03, 0.22], [0.26, 0.3], [0.53, 0.72], [0.76, 0.8]], // keep clear of the crossing
+    gaps: [[0.235, 0.243], [0.735, 0.743]],
+    boosts: [0.2, 0.33, 0.7, 0.83],
+    items: [0.12, 0.38, 0.62, 0.88],
+  }),
 );
 
 export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';

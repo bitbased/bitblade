@@ -459,6 +459,20 @@ export class GameView {
         this.scene.add(m);
       }
       this.boostMeshes.push(new THREE.Mesh(new THREE.BufferGeometry(), chevMat)); // scroll the chevrons too
+      if (cfg.arena.track?.profile === 'pipe') {
+        const half = T.width / 2;
+        const hoopMat = new THREE.MeshBasicMaterial({ color: theme.glow, toneMapped: false });
+        const hoopGeo = new THREE.TorusGeometry(half + 0.6, 0.11, 6, 40, Math.PI);
+        for (let i = 6; i < T.n; i += 26) {
+          const y = this.terrain.height(T.x[i], T.z[i]);
+          if (y <= VOID) continue;
+          const hoop = new THREE.Mesh(hoopGeo, hoopMat);
+          hoop.rotation.order = 'YXZ';
+          hoop.rotation.y = Math.atan2(T.tx[i], T.tz[i]);
+          hoop.position.set(T.x[i], y + (cfg.arena.track.depth ?? 3) * 0.55, T.z[i]);
+          this.scene.add(hoop);
+        }
+      }
     }
     cfg.players.forEach((p) => this.addTopView(p.blade));
     this.camPos.set(0, S * 1.2, S * 1.1);

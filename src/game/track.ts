@@ -7,6 +7,11 @@ export interface TrackDef {
   gaps: [number, number][]; // fractions with no floor (jump them!)
   boosts: number[]; // fractions with boost pads
   items: number[]; // fractions with item box rows
+  /** cross-section: flat ribbon (default) or a U-shaped half-pipe you can ride up */
+  profile?: 'flat' | 'pipe';
+  depth?: number; // pipe wall height
+  twist?: number; // extra left/right banking that waves along the lap (slope, ~0..0.6)
+  twistWaves?: number; // how many bank flips per lap
 }
 
 export interface TrackSamples {
@@ -123,7 +128,18 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
           if (ds < 0) ds += S.total;
           if (ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
         }
-        if (d <= half) {
+        if (def.profile === 'pipe') {
+          // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
+          const D = def.depth ?? 3;
+          const bank = Math.max(-0.6, Math.min(0.6, -S.curv[best] * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
+          const y0 = S.y[best] + kick;
+          if (d <= half) {
+            const u = d / half;
+            h = inRanges(f, def.gaps) ? VOID : y0 + D * (1 - Math.sqrt(Math.max(0, 1 - u * u * 0.96))) + bank * side;
+          } else if (d <= half + 0.7 && !inRanges(f, def.gaps)) {
+            h = y0 + D * 0.8 + bank * side; // the rim: go over it and you're out
+          }
+        } else if (d <= half) {
           h = inRanges(f, def.gaps) ? VOID : base + Math.pow(d / half, 4) * 0.9 + kick;
         } else if (d <= half + 0.8 && inRanges(f, def.rails) && !inRanges(f, def.gaps)) {
           const t = (d - half) / 0.5;
