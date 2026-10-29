@@ -11,7 +11,7 @@ import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
 import type { TrackSamples } from './track';
-import { railPolyline, flipperHalf } from './pinball';
+import { railPolyline, railSegments, flipperHalf } from './pinball';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -224,6 +224,65 @@ export function buildRibbon(def: import('./track').TrackDef, S: import('./track'
   grid.position.set((b.x0 + b.x1) / 2, lo - 9.9, (b.z0 + b.z1) / 2);
   group.add(grid);
   return group;
+}
+
+export interface RailBuild { group: THREE.Group; slings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; nx: number; nz: number; x: number; z: number; t: number }[] }
+/**
+ * Curved walls as neon slabs along their smooth curves: dark at the foot, glowing along the top. Slingshot faces are
+ * separate meshes (pink) so they can snap out and flash when they kick. Used in matches and the Course Builder.
+ */
+export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme, groundY: (x: number, z: number) => number): RailBuild {
+  const group = new THREE.Group();
+  const slings: RailBuild['slings'] = [];
+  const foot = new THREE.Color(theme.wall).multiplyScalar(0.7);
+  const plain = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
+  const addRail = (r: import('./pinball').Rail, into: typeof plain, topCol: THREE.Color) => {
+    const pl = railPolyline(r);
+    if (pl.length < 2) return;
+    const half = (r.t ?? 0.45) / 2, H = r.h ?? 1.3;
+    const base = into.pos.length / 3;
+    for (let i = 0; i < pl.length; i++) {
+      const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
+      let tx = b[0] - a[0], tz = b[1] - a[1];
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const nx = -tz, nz = tx;
+      const [x, z] = pl[i];
+      const g = groundY(x, z);
+      for (const [sx, yy, c] of [[1, g - 0.3, foot], [1, g + H, topCol], [-1, g + H, topCol], [-1, g - 0.3, foot]] as const) {
+        into.pos.push(x + nx * half * sx, yy, z + nz * half * sx);
+        into.col.push(c.r, c.g, c.b);
+      }
+      if (i > 0) {
+        const p0 = base + (i - 1) * 4, p1 = base + i * 4;
+        into.idx.push(p0, p1, p0 + 1, p0 + 1, p1, p1 + 1);
+        into.idx.push(p0 + 1, p1 + 1, p0 + 2, p0 + 2, p1 + 1, p1 + 2);
+        into.idx.push(p0 + 2, p1 + 2, p0 + 3, p0 + 3, p1 + 2, p1 + 3);
+      }
+    }
+  };
+  const mesh = (d: typeof plain, mat: THREE.Material) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(d.pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(d.col, 3));
+    geo.setIndex(d.idx);
+    geo.computeVertexNormals();
+    return new THREE.Mesh(geo, mat);
+  };
+  const segs = railSegments(rails);
+  for (const r of rails) {
+    if (!r.kick) { addRail(r, plain, new THREE.Color(theme.glow)); continue; }
+    const one = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
+    addRail(r, one, new THREE.Color('#ffffff'));
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false, color: '#ff5cf4' });
+    const m = mesh(one, mat);
+    group.add(m);
+    // its kick direction = the face the sim kicks from
+    const pl = railPolyline(r), mid = pl[Math.floor(pl.length / 2)];
+    const sg = segs.find((q) => Math.hypot(q.ax - mid[0], q.az - mid[1]) < 0.6) ?? segs[0];
+    slings.push({ mesh: m, mat, nx: sg?.kx ?? 0, nz: sg?.kz ?? 0, x: mid[0], z: mid[1], t: 0 });
+  }
+  if (plain.idx.length) group.add(mesh(plain, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false })));
+  return { group, slings };
 }
 
 function trackBoundsOf(S: { n: number; x: Float32Array; z: Float32Array }) {
@@ -490,47 +549,16 @@ export class GameView {
   portals: THREE.Mesh[] = [];
   plungerRod: { g: THREE.Group; z0: number } | null = null;
 
-  /** rails: smooth neon walls along their curves — dark at the foot, glowing along the top (slingshots in pink) */
+  slings: RailBuild['slings'] = [];
+  bumpers: { g: THREE.Group; ring: THREE.Mesh; x: number; z: number; t: number }[] = [];
+
+  /** rails: smooth neon walls (shared with the Course Builder); slingshot faces are kept to animate */
   buildRails() {
     const rails = this.cfg.arena.rails;
     if (!rails?.length) return;
-    const theme = this.cfg.arena.theme;
-    const pos: number[] = [], col: number[] = [], idx: number[] = [];
-    const foot = new THREE.Color(theme.wall).multiplyScalar(0.7);
-    for (const r of rails) {
-      const pl = railPolyline(r);
-      if (pl.length < 2) continue;
-      const half = (r.t ?? 0.45) / 2, H = r.h ?? 1.3;
-      const top = new THREE.Color(r.kick ? '#ff5cf4' : theme.glow);
-      const base = pos.length / 3;
-      for (let i = 0; i < pl.length; i++) {
-        const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
-        let tx = b[0] - a[0], tz = b[1] - a[1];
-        const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-        const nx = -tz, nz = tx;
-        const [x, z] = pl[i];
-        const g = this.groundY(x, z);
-        // left foot, left top, right top, right foot
-        for (const [sx, yy, c] of [[1, g - 0.3, foot], [1, g + H, top], [-1, g + H, top], [-1, g - 0.3, foot]] as const) {
-          pos.push(x + nx * half * sx, yy, z + nz * half * sx);
-          col.push(c.r, c.g, c.b);
-        }
-        if (i > 0) {
-          const p0 = base + (i - 1) * 4, p1 = base + i * 4;
-          // left face, top, right face
-          idx.push(p0, p1, p0 + 1, p0 + 1, p1, p1 + 1);
-          idx.push(p0 + 1, p1 + 1, p0 + 2, p0 + 2, p1 + 1, p1 + 2);
-          idx.push(p0 + 2, p1 + 2, p0 + 3, p0 + 3, p1 + 2, p1 + 3);
-        }
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false }));
-    this.scene.add(mesh);
+    const b = buildRailMeshes(rails, this.cfg.arena.theme, (x, z) => this.groundY(x, z));
+    this.scene.add(b.group);
+    this.slings = b.slings;
   }
   boxMeshes: THREE.Mesh[] = [];
   crystalMeshes = new Map<number, THREE.Mesh>();
@@ -774,6 +802,7 @@ export class GameView {
           g.add(c, top);
           g.position.set(m.x, y, m.z);
           obj = g;
+          this.bumpers.push({ g, ring: top, x: m.x, z: m.z, t: 0 });
           break;
         }
         case 'flipper': {
@@ -1093,7 +1122,15 @@ export class GameView {
           if (e.what === 'gem' || e.what === 'flag') this.ring(e.x, e.y, e.z, c, 2.2, 0.4);
           break;
         }
-        case 'hazard': this.particles.burst(e.x, e.y, e.z, 25, 6, new THREE.Color('#ffb000'), 0.12, 0.4, 0.3); this.shake = Math.min(1, this.shake + 0.25); break;
+        case 'hazard': if (this.cfg.mode !== 'pinball') { this.particles.burst(e.x, e.y, e.z, 25, 6, new THREE.Color('#ffb000'), 0.12, 0.4, 0.3); this.shake = Math.min(1, this.shake + 0.25); } break;
+        case 'pin': {
+          const near = <T extends { x: number; z: number }>(list: T[]) => list.reduce<T | null>((best, o) => (!best || Math.hypot(o.x - e.x, o.z - e.z) < Math.hypot(best.x - e.x, best.z - e.z) ? o : best), null);
+          if (e.what === 'sling') { const sl = near(this.slings); if (sl) sl.t = 0.16; this.particles.burst(e.x, e.y + 0.4, e.z, 10, 5, new THREE.Color('#ff5cf4'), 0.08, 0.3, 0.2); }
+          if (e.what === 'bumper') { const bp = near(this.bumpers); if (bp) bp.t = 0.2; this.particles.burst(e.x, e.y + 0.6, e.z, 14, 6, new THREE.Color('#ff3db4'), 0.1, 0.35, 0.25); }
+          if (e.what === 'target' || e.what === 'rollover' || e.what === 'capture') this.particles.burst(e.x, e.y + 0.5, e.z, 16, 4, new THREE.Color(e.what === 'target' ? '#ffd23a' : '#38ffb0'), 0.1, 0.4, 0.2);
+          if (e.what === 'multiball' || e.what === 'tilt') this.shake = Math.min(1, this.shake + 0.5);
+          break;
+        }
         case 'dash': { const t = s.tops[e.id]; if (t) this.particles.burst(t.x, t.y + 0.2, t.z, 14, 3, this.tops[e.id].color, 0.2, 0.35, 0.1, 0.2); break; }
         case 'special': { const t = s.tops[e.id]; if (t) { this.ring(t.x, t.y + 0.1, t.z, '#' + this.tops[e.id].color.getHexString(), 4, 0.5); this.particles.burst(t.x, t.y + 0.5, t.z, 60, 7, this.tops[e.id].color, 0.2, 0.8, 0.8, 0.3); } break; }
         case 'use': { const t = s.tops[e.id]; if (t) { this.particles.burst(t.x, t.y + 0.8, t.z, e.item === 'surge' ? 60 : 20, e.item === 'surge' ? 7 : 3, new THREE.Color(ITEMS[e.item].color), 0.18, 0.5, 1, 0.3); if (e.item === 'surge') this.ring(t.x, t.y + 0.1, t.z, '#38ffb0', 4, 0.5); } break; }
@@ -1314,6 +1351,19 @@ export class GameView {
       if (this.plungerRod) this.plungerRod.g.position.z = this.plungerRod.z0 + s.pin.charge * 1.3;
     }
     for (const p of this.portals) p.rotation.z += dt * 2.5;
+    for (const sl of this.slings) {
+      sl.t = Math.max(0, sl.t - dt);
+      const k = sl.t / 0.16;
+      sl.mesh.position.set(sl.nx * 0.28 * k, 0, sl.nz * 0.28 * k);
+      sl.mat.color.set(k > 0 ? '#ffffff' : '#ff5cf4');
+    }
+    for (const bp of this.bumpers) {
+      bp.t = Math.max(0, bp.t - dt);
+      const k = bp.t / 0.2;
+      bp.g.scale.setScalar(1 + 0.18 * k);
+      (bp.ring.material as THREE.MeshBasicMaterial).color.set(k > 0 ? '#ffe9ff' : '#ffffff');
+      (bp.ring.material as THREE.MeshBasicMaterial).color.multiplyScalar(1 + 2 * k);
+    }
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
     // spin pads: swirl turns; flares up while someone is re-spinning on it
     // quest: checkpoints you've reached turn gold; the goal ring turns slowly

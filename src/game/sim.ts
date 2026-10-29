@@ -812,7 +812,7 @@ export class Sim {
         t.x = cx + nx * R; t.z = cz + nz * R;
         const vn = t.vx * nx + t.vz * nz;
         if (vn < 0) { const e = pinball ? 0.42 : 0.25; t.vx -= (1 + e) * vn * nx; t.vz -= (1 + e) * vn * nz; }
-        if (sg.kick > 0) {
+        if (sg.kick > 0 && nx * sg.kx + nz * sg.kz > 0.2) { // (only the front face kicks)
           const key = `k${si}:${t.id}`;
           if (!this.hazardHitCd.has(key)) {
             t.vx += nx * sg.kick; t.vz += nz * sg.kick;

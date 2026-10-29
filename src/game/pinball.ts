@@ -13,6 +13,8 @@ export interface Rail {
   closed?: boolean;
   /** slingshot: extra speed (m/s) added straight off the wall on contact */
   kick?: number;
+  /** which face kicks: 1 / -1 = left / right of the drawing direction; default: the face toward the table's middle */
+  kickSide?: 1 | -1;
 }
 
 const RAIL_STEP = 0.35;
@@ -40,12 +42,19 @@ export function railPolyline(r: Rail): [number, number][] {
 }
 
 /** a rail baked for fast distance queries */
-export interface RailSeg { ax: number; az: number; bx: number; bz: number; h: number; half: number; kick: number }
+/** (kx, kz): unit normal of the face that kicks (slingshots only kick from their front, like the rubber on a real one) */
+export interface RailSeg { ax: number; az: number; bx: number; bz: number; h: number; half: number; kick: number; kx: number; kz: number }
 export function railSegments(rails: Rail[] | undefined): RailSeg[] {
   const out: RailSeg[] = [];
   for (const r of rails ?? []) {
     const pl = railPolyline(r);
-    for (let i = 0; i + 1 < pl.length; i++) out.push({ ax: pl[i][0], az: pl[i][1], bx: pl[i + 1][0], bz: pl[i + 1][1], h: r.h ?? 1.3, half: (r.t ?? 0.45) / 2, kick: r.kick ?? 0 });
+    // the kicking face: chosen once per rail (its middle), toward the table's middle unless set
+    const mid = pl[Math.floor(pl.length / 2)], a0 = pl[0], a1 = pl[pl.length - 1];
+    let nx = -(a1[1] - a0[1]), nz = a1[0] - a0[0];
+    const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
+    const side = r.kickSide ?? (nx * -mid[0] + nz * -mid[1] >= 0 ? 1 : -1);
+    nx *= side; nz *= side;
+    for (let i = 0; i + 1 < pl.length; i++) out.push({ ax: pl[i][0], az: pl[i][1], bx: pl[i + 1][0], bz: pl[i + 1][1], h: r.h ?? 1.3, half: (r.t ?? 0.45) / 2, kick: r.kick ?? 0, kx: nx, kz: nz });
   }
   return out;
 }
@@ -92,6 +101,14 @@ export const flipperHalf = (u: number) => 0.42 - 0.22 * u;
 export const flipperSide = (m: Marker): 'L' | 'R' => ((m.r ?? -1) < 0 ? 'L' : 'R');
 
 // ------------------------------------------------------------------ built-in tables
+/**
+ * A slingshot like a real one: a closed triangle — the kicking rubber face a→b toward the playfield, and two plain
+ * walls b→c→a behind it so the ball can't get round the back.
+ */
+export function slingshot(a: [number, number], b: [number, number], c: [number, number], kick = 10): Rail[] {
+  return [{ pts: [a, b], kick, t: 0.5 }, { pts: [b, c], t: 0.4 }, { pts: [c, a], t: 0.4 }];
+}
+
 const flat = (w: number, h: number) => {
   const pieces = [];
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) pieces.push({ kind: 'flat' as const, x: i, y: j, rot: 0, level: 0 });
@@ -99,6 +116,44 @@ const flat = (w: number, h: number) => {
 };
 const NEON = { floor: '#120a2a', wall: '#3d1f6e', glow: '#3cf2ff', sky1: '#05030f', sky2: '#170a33', grid: '#5b3cff' };
 const SYNTH = { floor: '#1b0820', wall: '#5c1a4a', glow: '#ff5cf4', sky1: '#090211', sky2: '#24061f', grid: '#ff2a8a' };
+
+/**
+ * The lower playfield, built mirror-symmetric about the playfield's REAL middle `xc` (the plunger lane takes the
+ * right edge, so it isn't x = 0): on each side an inlane guide from the side wall down to its flipper, a closed
+ * slingshot triangle above the guide with an inlane of `lane` metres between them (fed from above along the side
+ * wall), and the flipper. `wallL` / `wallR` are the side walls' centre lines; `zF` the flipper pivots' row.
+ */
+export function lowerPlayfield(o: { wallL: number; wallR: number; zF: number; flip?: number; lane?: number; gap?: number }) {
+  const len = o.flip ?? 3.5, lane = o.lane ?? 2.8, gap = o.gap ?? 2.4, rest = 0.48;
+  const xc = (o.wallL + o.wallR) / 2;
+  const off = gap / 2 + Math.cos(rest) * len; // pivot distance from the middle so the tips leave `gap`
+  const rails: Rail[] = [], markers: Marker[] = [], problems: string[] = [];
+  const corner: Record<string, [number, number]> = {};
+  for (const sd of [-1, 1] as const) {
+    const wallX = sd < 0 ? o.wallL : o.wallR;
+    const px = xc + sd * off, pz = o.zF;
+    // inlane guide: side wall → just outside the flipper pivot
+    const g0: [number, number] = [wallX, pz - 7.2], g1: [number, number] = [px + sd * 0.15, pz - 0.15];
+    rails.push({ pts: [g0, g1] });
+    const slope = (g1[1] - g0[1]) / (g1[0] - g0[0]);
+    const zg = (x: number) => g0[1] + (x - g0[0]) * slope;
+    // the slingshot's corners sit at fixed x (3m in from the wall; 1m OUTSIDE the flipper pivot) and are lifted
+    // straight up-table until the inlane between them and the guide is `lane` wide — they never drift inward
+    const lift = (lane + 0.45) / Math.cos(Math.atan(Math.abs(slope)));
+    const cx = wallX - sd * 3.0, bx = px + sd * 1.0;
+    const c: [number, number] = [cx, zg(cx) - lift];
+    const b: [number, number] = [bx, zg(bx) - lift];
+    const a: [number, number] = [cx, c[1] - 4.6];
+    rails.push(...slingshot(a, b, c));
+    markers.push({ kind: 'flipper', x: px, z: pz, len, rot: sd < 0 ? rest : Math.PI - rest, r: sd < 0 ? -0.98 : 0.98 });
+    corner[sd < 0 ? 'L' : 'R'] = b;
+    const entry = Math.abs(cx - wallX) - 0.35 - 0.2;
+    if (entry < 1.8) problems.push(`${sd < 0 ? 'left' : 'right'} inlane entrance only ${entry.toFixed(2)}m`);
+  }
+  const middle = corner.R[0] - corner.L[0] - 0.5;
+  if (middle < 6) problems.push(`middle between the slingshots only ${middle.toFixed(2)}m`);
+  return { rails, markers, xc, problems };
+}
 
 /** mirror a list of points left↔right */
 const mx = (pts: [number, number][]) => pts.map(([x, z]) => [-x, z] as [number, number]);
@@ -110,10 +165,8 @@ const mx = (pts: [number, number][]) => pts.map(([x, z]) => [-x, z] as [number, 
 function neonClassic(): ArenaDef {
   const outer: [number, number][] = [[-11.5, 21], [-11.5, 6], [-11.5, -10], [-10.3, -16], [-6.4, -19.4], [0, -20.3], [6.4, -19.4], [10.3, -16], [11.5, -10], [11.5, 6], [11.5, 21]];
   const laneWall: [number, number][] = [[9.25, 20.8], [9.25, 4], [9.25, -9.5]];
-  const leftGuide: [number, number][] = [[-11.6, 9.5], [-8.6, 13.2], [-4.4, 16.3]];
-  const rightGuide: [number, number][] = [[9.25, 9.5], [7.2, 12.6], [4.4, 16.3]];
-  const leftSling: [number, number][] = [[-8.4, 6.6], [-6.4, 11.4]];
-  const rightSling: [number, number][] = mx(leftSling).map(([x, z]) => [x - 0.6, z] as [number, number]);
+  const low = lowerPlayfield({ wallL: -11.5, wallR: 9.25, zF: 16.5, flip: 3.5 });
+  const xc = low.xc;
   const orbit: [number, number][] = [[-7.8, 4.5], [-8.3, -4], [-7.3, -11], [-4.6, -15.3]];
   return {
     id: 'pin-neon-classic', name: 'Neon Classic', desc: 'A classic table: plunger lane, slingshots, three pop bumpers, an orbit and a target bank. Light all targets for MULTIBALL.',
@@ -123,28 +176,29 @@ function neonClassic(): ArenaDef {
       { pts: outer, h: 3, t: 0.7 },
       { pts: laneWall, h: 1.6 },
       { pts: [[9.25, 20.4], [11.5, 20.4]], h: 1.6 }, // plunger lane floor stop
-      { pts: leftGuide }, { pts: rightGuide },
-      { pts: leftSling, kick: 10, t: 0.5 }, { pts: rightSling, kick: 10, t: 0.5 },
+      ...low.rails,
       { pts: orbit, h: 1.1 },
     ],
     markers: [
       { kind: 'spawn', x: 10.42, z: 18.6 },
       { kind: 'plunger', x: 10.42, z: 18.6, r: 1.1, len: 1 },
-      { kind: 'flipper', x: -4.3, z: 16.5, len: 3.5, rot: 0.48, r: -0.98 },
-      { kind: 'flipper', x: 4.3, z: 16.5, len: 3.5, rot: Math.PI - 0.48, r: 0.98 },
-      { kind: 'bumper', x: -3.4, z: -8.2, r: 1.05 },
-      { kind: 'bumper', x: 3.4, z: -8.2, r: 1.05 },
-      { kind: 'bumper', x: 0, z: -12.6, r: 1.05 },
-      { kind: 'target', x: 5.2, z: -15.6, r: 0.8, rot: 0.6 },
-      { kind: 'target', x: 6.9, z: -13.8, r: 0.8, rot: 0.9 },
-      { kind: 'target', x: 8.1, z: -11.6, r: 0.8, rot: 1.2 },
+      ...low.markers,
+      { kind: 'bumper', x: xc - 3.4, z: -8.2, r: 1.05 },
+      { kind: 'bumper', x: xc + 3.4, z: -8.2, r: 1.05 },
+      { kind: 'bumper', x: xc, z: -12.6, r: 1.05 },
+      // (well clear of the arch: a ball must never be able to rest between a target and a wall)
+      // targets stand alone: ≥3.3m from each other, the bumpers and the walls (a gap narrower than a ball is a
+      // notch it settles into)
+      { kind: 'target', x: 3.0, z: -14.0, r: 0.8, rot: 0.6 },
+      { kind: 'target', x: 6.4, z: -11.0, r: 0.8, rot: 1.0 },
+      { kind: 'target', x: -4.0, z: -11.6, r: 0.8, rot: -1.0 },
       { kind: 'target', x: -5.2, z: 2.6, r: 0.8, rot: -1.3 },
       // spin on a table comes from saucers (catch, spin up, kick out) and rollovers, not pads
       { kind: 'saucer', x: 7.3, z: -7.4, r: 1.1, rot: 2.4, len: 17 },
       { kind: 'rollover', x: -9.9, z: -2, r: 0.9 },
       { kind: 'rollover', x: 10.4, z: -6, r: 0.9 },
       { kind: 'rollover', x: 0, z: -17.6, r: 0.9 },
-      { kind: 'item', x: 0, z: -2.6 },
+      { kind: 'item', x: xc, z: -2.6 },
     ],
   } as ArenaDef;
 }
@@ -156,6 +210,8 @@ function neonClassic(): ArenaDef {
 function synthCathedral(): ArenaDef {
   const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
   const laneWall: [number, number][] = [[12.3, 23.8], [12.3, 4], [12.3, -12]];
+  const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0 });
+  const xc = low.xc;
   return {
     id: 'pin-synth-cathedral', name: 'Synth Cathedral', desc: 'A big table: an upper flipper, a portal pair, a bumper triangle and a long orbit. Light the targets for MULTIBALL.',
     theme: SYNTH, custom: false, pinball: true, tilt: 0.15,
@@ -164,10 +220,7 @@ function synthCathedral(): ArenaDef {
       { pts: outer, h: 3, t: 0.7 },
       { pts: laneWall, h: 1.6 },
       { pts: [[12.3, 23.4], [14.5, 23.4]], h: 1.6 },
-      { pts: [[-14.5, 12.5], [-10.2, 16.6], [-4.8, 19.4]] },
-      { pts: [[12.3, 12.5], [9.4, 16.4], [4.8, 19.4]] },
-      { pts: [[-10.6, 9.6], [-8.2, 14.6]], kick: 10, t: 0.5 },
-      { pts: [[9.6, 9.6], [7.4, 14.6]], kick: 10, t: 0.5 },
+      ...low.rails,
       // right orbit: a long sweeping rail from the bottom right up around behind the bumpers
       { pts: [[8.6, 6], [9.2, -6], [8.2, -14.6], [4.4, -18.8]], h: 1.1 },
       // a short shelf under the upper-left flipper
@@ -176,12 +229,11 @@ function synthCathedral(): ArenaDef {
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
       { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 1.05 },
-      { kind: 'flipper', x: -4.8, z: 19.6, len: 4.0, rot: 0.48, r: -0.98 },
-      { kind: 'flipper', x: 4.8, z: 19.6, len: 4.0, rot: Math.PI - 0.48, r: 0.98 },
+      ...low.markers,
       { kind: 'flipper', x: -11, z: -0.2, len: 3, rot: 0.3, r: -0.95 },
-      { kind: 'bumper', x: -3.6, z: -9.4, r: 1.1 },
-      { kind: 'bumper', x: 3.6, z: -9.4, r: 1.1 },
-      { kind: 'bumper', x: 0, z: -14.2, r: 1.1 },
+      { kind: 'bumper', x: xc - 3.6, z: -9.4, r: 1.1 },
+      { kind: 'bumper', x: xc + 3.6, z: -9.4, r: 1.1 },
+      { kind: 'bumper', x: xc, z: -14.2, r: 1.1 },
       { kind: 'portal', x: -10.5, z: -16.5, r: 1.1, team: 0 },
       { kind: 'portal', x: 0, z: 4, r: 1.1, team: 0, rot: Math.PI / 2 },
       { kind: 'target', x: -6.4, z: -19.6, r: 0.8, rot: -0.6 },
