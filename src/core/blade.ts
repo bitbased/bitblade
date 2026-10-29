@@ -186,3 +186,79 @@ export function hslToHex(h: number, s: number, l: number) {
   const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
   return '#' + to(f(0)) + to(f(8)) + to(f(4));
 }
+
+// ---------------------------------------------------------------- randomizer
+export type RandomPart = 'all' | 'shape' | 'core' | 'paint' | 'decals';
+export type RandomStyle = 'any' | 'attack' | 'defense' | 'stamina' | 'balance';
+export type RandomPalette = 'any' | 'neon' | 'fire' | 'ice' | 'toxic' | 'royal' | 'mono' | 'metal' | 'complement';
+
+const PALETTES: Record<Exclude<RandomPalette, 'any' | 'complement'>, () => [string, string, string, string]> = {
+  neon: () => { const h = Math.random() * 360; return [hslToHex(h, 100, 55), '#05060f', hslToHex(h + 150, 100, 65), hslToHex(h + 40, 100, 60)]; },
+  fire: () => [hslToHex(Math.random() * 25, 95, 52), '#1a0500', '#ffd23a', hslToHex(25 + Math.random() * 15, 100, 55)],
+  ice: () => [hslToHex(185 + Math.random() * 25, 80, 72), '#0a2238', '#ffffff', hslToHex(190, 100, 65)],
+  toxic: () => [hslToHex(95 + Math.random() * 30, 90, 50), '#071408', hslToHex(280, 80, 60), hslToHex(110, 100, 60)],
+  royal: () => [hslToHex(265 + Math.random() * 20, 75, 45), '#120624', '#ffcc33', hslToHex(285, 100, 70)],
+  mono: () => { const h = Math.random() * 360; return [hslToHex(h, 15, 60), hslToHex(h, 10, 10), '#ffffff', hslToHex(h, 90, 60)]; },
+  metal: () => ['#b8c0cc', '#1a1d24', hslToHex(Math.random() * 360, 90, 55), hslToHex(Math.random() * 360, 100, 60)],
+};
+
+const NAME_A = ['Neo', 'Hyper', 'Dark', 'Storm', 'Blaze', 'Iron', 'Astro', 'Venom', 'Cyber', 'Turbo', 'Phantom', 'Crimson', 'Arc', 'Omega', 'Solar', 'Void'];
+const NAME_B = ['Fang', 'Wing', 'Drake', 'Fury', 'Comet', 'Golem', 'Shard', 'Talon', 'Viper', 'Reaper', 'Kraken', 'Mantis', 'Tempest', 'Nova', 'Wraith', 'Pegasus'];
+
+/** Randomize parts of a design in place-style (returns a new object). Style biases the shape toward a battle type. */
+export function randomizeDesign(base: BladeDesign, part: RandomPart = 'all', style: RandomStyle = 'any', palette: RandomPalette = 'any', keepName = true): BladeDesign {
+  const r = Math.random;
+  const lerp = (a: number, b: number) => a + (b - a) * r();
+  const d: BladeDesign = JSON.parse(JSON.stringify(base));
+  const tipsFor: Record<RandomStyle, TipType[]> = {
+    any: Object.keys(TIPS) as TipType[], attack: ['flat', 'rubber', 'wheel'], defense: ['ball', 'wheel', 'sharp'], stamina: ['sharp', 'needle', 'ball'], balance: ['ball', 'wheel', 'flat'],
+  };
+  if (part === 'all' || part === 'shape') {
+    switch (style) {
+      case 'attack': Object.assign(d, { wings: 2 + Math.floor(r() * 3), wingLength: lerp(0.65, 1), wingWidth: lerp(0.25, 0.55), wingCurve: lerp(0.4, 1) * (r() < 0.5 ? -1 : 1), wingSharp: lerp(0.7, 1), wingTilt: lerp(0, 0.8), ringThickness: lerp(0.2, 0.5) }); break;
+      case 'defense': Object.assign(d, { wings: 5 + Math.floor(r() * 4), wingLength: lerp(0.15, 0.45), wingWidth: lerp(0.7, 1), wingCurve: lerp(-0.3, 0.3), wingSharp: lerp(0, 0.3), wingTilt: lerp(-0.5, 0), ringThickness: lerp(0.75, 1) }); break;
+      case 'stamina': Object.assign(d, { wings: 3 + Math.floor(r() * 4), wingLength: lerp(0.2, 0.5), wingWidth: lerp(0.4, 0.7), wingCurve: lerp(-0.6, 0.6), wingSharp: lerp(0.2, 0.5), wingTilt: lerp(-0.2, 0.2), ringThickness: lerp(0.4, 0.7) }); break;
+      case 'balance': Object.assign(d, { wings: 3 + Math.floor(r() * 3), wingLength: lerp(0.4, 0.7), wingWidth: lerp(0.4, 0.7), wingCurve: lerp(-0.6, 0.6), wingSharp: lerp(0.4, 0.7), wingTilt: lerp(-0.3, 0.4), ringThickness: lerp(0.4, 0.7) }); break;
+      default: Object.assign(d, { wings: 1 + Math.floor(r() * 8), wingLength: r(), wingWidth: r(), wingCurve: r() * 2 - 1, wingSharp: r(), wingTilt: r() * 2 - 1, ringThickness: r() });
+    }
+    d.ringRadius = r();
+    if (r() < 0.3) d.spinDir = d.spinDir === 1 ? -1 : 1;
+  }
+  if (part === 'all' || part === 'core') {
+    const tips = tipsFor[style];
+    d.tip = tips[Math.floor(r() * tips.length)];
+    d.tipHeight = r();
+    d.discSize = style === 'stamina' ? lerp(0.7, 1) : r();
+    d.discWeight = style === 'defense' ? lerp(0.75, 1) : style === 'attack' ? lerp(0.3, 0.7) : r();
+    d.discNotches = Math.floor(r() * 9);
+  }
+  if (part === 'all' || part === 'paint') {
+    const pal = palette === 'any' ? (['neon', 'fire', 'ice', 'toxic', 'royal', 'mono', 'metal', 'complement'] as const)[Math.floor(r() * 8)] : palette;
+    if (pal === 'complement') {
+      const h = r() * 360;
+      [d.primary, d.secondary, d.accent, d.glow] = [hslToHex(h, 85, 55), hslToHex(h + 180, 40, 12), hslToHex(h + 180, 90, 65), hslToHex(h + 30, 100, 60)];
+    } else [d.primary, d.secondary, d.accent, d.glow] = PALETTES[pal]();
+    d.emblemColor = r() < 0.5 ? '#ffffff' : d.accent;
+    d.metal = pal === 'metal' ? lerp(0.8, 1) : r();
+    d.rough = lerp(0.05, 0.6);
+    d.pattern = PATTERNS[Math.floor(r() * PATTERNS.length)];
+    d.emblem = EMBLEMS[1 + Math.floor(r() * (EMBLEMS.length - 1))];
+  }
+  if (part === 'all' || part === 'decals') {
+    const n = part === 'decals' ? 1 + Math.floor(r() * 5) : Math.floor(r() * 4);
+    const sym = r() < 0.6 ? 1 + Math.floor(r() * 3) : 1; // radial symmetry copies
+    const glyph = EMBLEMS[1 + Math.floor(r() * (EMBLEMS.length - 1))];
+    d.decals = [];
+    for (let i = 0; i < n; i++) {
+      const a = r() * Math.PI * 2, rad = lerp(0.35, 0.8), size = lerp(0.1, 0.3);
+      const g = r() < 0.5 ? glyph : EMBLEMS[1 + Math.floor(r() * (EMBLEMS.length - 1))];
+      const color = [d.accent, d.glow, '#ffffff', d.secondary][Math.floor(r() * 4)];
+      for (let k = 0; k < sym; k++) {
+        const aa = a + (k / sym) * Math.PI * 2;
+        d.decals.push({ glyph: g, x: Math.cos(aa) * rad, y: Math.sin(aa) * rad, size, rot: aa + Math.PI / 2, color });
+      }
+    }
+  }
+  if (!keepName || part === 'all') d.name = `${NAME_A[Math.floor(r() * NAME_A.length)]} ${NAME_B[Math.floor(r() * NAME_B.length)]}`;
+  return d;
+}

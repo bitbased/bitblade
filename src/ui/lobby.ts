@@ -2,7 +2,7 @@
 import { h, MenuNav, type App, type Screen } from './app';
 import { allBlades, findBlade, PRESETS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
-import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaSize } from '../game/terrain';
+import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
 import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
 import { cloudRelayUrl, hostCloud, hostLocal } from '../net/transport';
@@ -109,7 +109,9 @@ export class LobbyScreen implements Screen {
     const m = this.mode;
     L.target = m.target;
     L.time = m.time;
-    const ok = m.arenas.includes(L.arenaId) || allArenas().find((x) => x.id === L.arenaId)?.custom;
+    const cur = allArenas().find((x) => x.id === L.arenaId);
+    const ok = !!cur && this.fits(cur, id) && (m.arenas.includes(L.arenaId) || !!cur.custom);
+    if (id === 'race' || L.sizeFilter === 'TRACK') L.sizeFilter = 'ALL';
     if (!keepArena || !ok) L.arenaId = m.arenas[0];
     if (L.slots.length > m.maxPlayers) L.slots = L.slots.filter((s, i) => i < m.maxPlayers || s.ctrl.type === 'remote');
     this.assignTeams();
@@ -202,12 +204,15 @@ export class LobbyScreen implements Screen {
     );
   }
 
+  /** arenas that make sense for a mode: races need a track, everything else needs an arena/course */
+  fits(a: ArenaDef, mode = L.mode) { return mode === 'race' ? !!a.track : !a.track; }
+
   arenaOrder() {
     const m = this.mode;
-    const arenas = allArenas();
+    const arenas = allArenas().filter((a) => this.fits(a));
     let order = [...m.arenas.map((id) => arenas.find((a) => a.id === id)!).filter(Boolean), ...arenas.filter((a) => !m.arenas.includes(a.id))];
     if (L.sizeFilter !== 'ALL') order = order.filter((a) => arenaSize(a) === L.sizeFilter);
-    if (!order.length) order = [findArena(L.arenaId)];
+    if (!order.length) order = arenas.length ? arenas : [findArena(L.arenaId)];
     if (!order.some((a) => a.id === L.arenaId)) L.arenaId = order[0].id;
     return order;
   }
@@ -227,11 +232,11 @@ export class LobbyScreen implements Screen {
   }
 
   stepSize(d: number) {
-    const sizes: ('ALL' | ArenaSize)[] = ['ALL', 'S', 'M', 'L', 'TRACK'];
-    const i = sizes.indexOf(L.sizeFilter);
+    const sizes: ('ALL' | ArenaSize)[] = L.mode === 'race' ? ['ALL'] : ['ALL', 'S', 'M', 'L'];
+    const i = Math.max(0, sizes.indexOf(L.sizeFilter));
     L.sizeFilter = sizes[(i + d + sizes.length) % sizes.length];
     const m = this.mode;
-    const first = allArenas().find((a) => L.sizeFilter === 'ALL' || arenaSize(a) === L.sizeFilter);
+    const first = allArenas().find((a) => this.fits(a) && (L.sizeFilter === 'ALL' || arenaSize(a) === L.sizeFilter));
     if (first && L.sizeFilter !== 'ALL' && arenaSize(findArena(L.arenaId)) !== L.sizeFilter) L.arenaId = (m.arenas.map(findArena).find((a) => arenaSize(a) === L.sizeFilter) ?? first).id;
     this.rebuild();
   }

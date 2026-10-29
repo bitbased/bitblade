@@ -174,3 +174,10 @@
   .bd-editor { order: 2; }
   .bd-lib { order: 3; }
 }
+
+/* randomizer bar */
+.bd-rand { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; padding: 8px 10px; background: rgba(10, 14, 30, 0.7); border: 1px solid rgba(120, 160, 255, 0.25); }
+.bd-rand .bd-rand-main { background: linear-gradient(135deg, #ffd23a, #ff7b1c); color: #120800; font-weight: 700; padding-left: 14px; padding-right: 14px; }
+.bd-rand .bd-rand-main:hover, .bd-rand .bd-rand-main.focus { filter: brightness(1.15); box-shadow: 0 0 18px rgba(255, 210, 58, 0.6); }
+.bd-rand .ico { width: 15px; height: 15px; vertical-align: -3px; }
+.bd-rsel { background: rgba(0, 0, 0, 0.45); color: var(--text, #e8f0ff); border: 1px solid rgba(120, 160, 255, 0.3); font-family: var(--font-h, sans-serif); font-size: 11px; letter-spacing: 0.08em; padding: 5px 6px; }

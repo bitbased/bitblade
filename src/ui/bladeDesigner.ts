@@ -3,10 +3,11 @@ import * as THREE from 'three';
 import './bladeDesigner.css';
 import { h, MenuNav, type App, type Screen } from './app';
 import { icon, ICONS } from './icons';
+import type { RandomPalette, RandomPart, RandomStyle } from '../core/blade';
 import { getRenderer } from '../game/render';
 import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import {
-  computeStats, defaultDesign, EMBLEMS, loadCustomBlades, newBladeId, PATTERNS, PRESETS, randomDesign, saveCustomBlades, TIPS,
+  computeStats, defaultDesign, EMBLEMS, loadCustomBlades, newBladeId, PATTERNS, PRESETS, randomDesign, randomizeDesign, saveCustomBlades, TIPS,
   type BladeDesign, type Decal, type TipType,
 } from '../core/blade';
 
@@ -95,6 +96,45 @@ class BladeDesigner implements Screen {
   }
 
   /** Apply a change; forks presets into a custom copy first. */
+  randStyle: RandomStyle = 'any';
+  randPalette: RandomPalette = 'any';
+  randHistory: BladeDesign[] = [];
+  undoBtn: HTMLButtonElement | null = null;
+
+  buildRandomizer() {
+    const sel = <T extends string>(opts: T[], get: () => T, set: (v: T) => void, title: string) => {
+      const el = h('select.bd-rsel.nav', { title }, ...opts.map((o) => h('option', { value: o, selected: o === get() }, o.toUpperCase()))) as HTMLSelectElement;
+      el.addEventListener('change', () => set(el.value as T));
+      return el;
+    };
+    const btn = (part: RandomPart, label: string, primary = false) =>
+      h('button.bd-mini.nav' + (primary ? '.bd-rand-main' : ''), { onclick: () => this.randomize(part), title: part === 'all' ? 'Randomize everything (R)' : `Randomize ${part} only` }, primary ? icon('dice') : null, primary ? ' ' : null, label);
+    this.undoBtn = h('button.bd-mini.nav', { onclick: () => this.undoRandom(), title: 'Undo last randomize', disabled: true }, 'Undo') as HTMLButtonElement;
+    return h('div.bd-rand', null,
+      btn('all', 'RANDOMIZE', true), btn('shape', 'Shape'), btn('core', 'Core'), btn('paint', 'Paint'), btn('decals', 'Decals'),
+      sel<RandomStyle>(['any', 'attack', 'defense', 'stamina', 'balance'], () => this.randStyle, (v) => (this.randStyle = v), 'Battle style bias'),
+      sel<RandomPalette>(['any', 'neon', 'fire', 'ice', 'toxic', 'royal', 'mono', 'metal', 'complement'], () => this.randPalette, (v) => (this.randPalette = v), 'Color palette'),
+      this.undoBtn);
+  }
+
+  randomize(part: RandomPart) {
+    this.randHistory.push(clone(this.cur));
+    if (this.randHistory.length > 30) this.randHistory.shift();
+    const next = randomizeDesign(this.cur, part, this.randStyle, this.randPalette, part !== 'all');
+    this.modify((d) => { const id = d.id; Object.assign(d, next, { id }); }, true);
+    this.nameInput.value = this.cur.name;
+    if (this.undoBtn) this.undoBtn.disabled = false;
+    this.app.sfx.play('select');
+  }
+
+  undoRandom() {
+    const prev = this.randHistory.pop();
+    if (!prev) return;
+    this.modify((d) => { const id = d.id; Object.assign(d, prev, { id }); }, true);
+    this.nameInput.value = this.cur.name;
+    if (this.undoBtn) this.undoBtn.disabled = this.randHistory.length === 0;
+  }
+
   modify(fn: (d: BladeDesign) => void, rerenderTab = false) {
     if (this.isPreset) {
       const copy = clone(this.cur);
@@ -201,6 +241,8 @@ class BladeDesigner implements Screen {
   update(dt: number) {
     this.time += dt;
     this.nav.update(dt);
+    const tag = (document.activeElement as HTMLElement | null)?.tagName;
+    if (this.app.input.pressed.has('KeyR') && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') this.randomize('all');
     if (this.model) {
       if (this.spinOn) this.angle += this.cur.spinDir * dt * (2 + this.spinSpeed * 40);
       this.model.spinner.rotation.y = this.angle;
@@ -300,6 +342,7 @@ class BladeDesigner implements Screen {
     const center = h('div.bd-center', null,
       h('div.bd-namebar', null, this.nameInput, spinBtn, spd),
       this.stage,
+      this.buildRandomizer(),
       h('div.bd-panel', null, this.statsEl),
     );
     this.bindStage();

@@ -6,6 +6,7 @@ $name = 'bitblade-dev'
 $hostname = 'bitblade-dev.bitbased.net'
 $cf = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
 if (-not $cf) { $cf = 'C:\Program Files (x86)\cloudflared\cloudflared.exe' }
+if (-not (Test-Path $cf)) { $cf = Join-Path $env:USERPROFILE '.prism\connect\cloudflare\bin\cloudflared.exe' }  # copy bundled with Prism
 if (-not (Test-Path $cf)) { throw 'cloudflared not found — winget install Cloudflare.cloudflared' }
 
 $list = & $cf tunnel list --output json | ConvertFrom-Json

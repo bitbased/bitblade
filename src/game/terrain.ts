@@ -2,7 +2,8 @@ import { fillTrackHeights, sampleTrack, trackBounds, type TrackDef, type TrackSa
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
-export type PieceKind = 'flat' | 'bowl' | 'quarter' | 'half' | 'corner' | 'kicker' | 'spine' | 'hump' | 'ramp' | 'pit' | 'wall' | 'dome' | 'cradle';
+export type PieceKind = 'flat' | 'bowl' | 'quarter' | 'half' | 'corner' | 'kicker' | 'spine' | 'hump' | 'ramp' | 'pit' | 'wall' | 'dome' | 'cradle'
+  | 'bank' | 'pyramid' | 'volcano' | 'bumps' | 'stairs';
 
 export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
   flat: { label: 'Flat', desc: 'Plain deck' },
@@ -18,6 +19,11 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
   wall: { label: 'Rail Wall', desc: 'Low wall on one edge' },
   dome: { label: 'Dome', desc: 'Center bump' },
   cradle: { label: 'Cradle', desc: 'Shallow dish' },
+  bank: { label: 'Bank', desc: 'Steep straight slope up to one edge' },
+  pyramid: { label: 'Pyramid', desc: 'Four-sided launch box' },
+  volcano: { label: 'Volcano', desc: 'Ring rim around a crater' },
+  bumps: { label: 'Bumps', desc: 'Rolling waves — pump for speed' },
+  stairs: { label: 'Stairs', desc: 'Three stepped ramps up to the next level' },
 };
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
@@ -225,6 +231,23 @@ function pieceHeight(kind: PieceKind, u: number, v: number, T: number): number {
     case 'ramp': return LEVEL_H * smooth(v);
     case 'pit': return Math.hypot(u - 0.5, v - 0.5) < 0.24 ? VOID : 0;
     case 'wall': return v > 0.88 ? 1.4 * smooth((v - 0.88) / 0.08) : 0;
+    case 'bank': return 2.4 * v; // ~22° straight slope, high edge at v=1
+    case 'pyramid': {
+      const m = Math.max(Math.abs(u - 0.5), Math.abs(v - 0.5));
+      return 1.4 * Math.max(0, Math.min(1, (0.45 - m) / 0.3));
+    }
+    case 'volcano': {
+      const r = Math.hypot(u - 0.5, v - 0.5);
+      if (r < 0.26) return 0.35 + 1.15 * smooth(r / 0.26);
+      if (r < 0.5) return 1.5 * smooth(1 - (r - 0.26) / 0.24);
+      return 0;
+    }
+    case 'bumps': return 0.6 * (0.5 - 0.5 * Math.cos(v * Math.PI * 4));
+    case 'stairs': {
+      const t = Math.min(v * 3, 2.9999);
+      const k = Math.floor(t);
+      return (LEVEL_H / 3) * (k + smooth((t - k - 0.55) / 0.4));
+    }
   }
 }
 

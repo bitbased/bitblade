@@ -8,6 +8,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
+import type { TrackSamples } from './track';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -920,22 +921,11 @@ export class GameView {
       for (const t of pts) spread = Math.max(spread, Math.hypot(t.x - cx, t.z - cz * 1.0));
       const T = this.terrain.track;
       if (T && pts.length) {
-        // chase camera: sit behind the (leading) followed blade, looking down the track
-        const lead = pts.reduce((a, b) => (b.lap * T.n + b.prog > a.lap * T.n + a.prog ? b : a));
-        let hx = 0, hz = 0;
-        for (let k = 0; k < 14; k++) { const q = (lead.prog + k) % T.n; hx += T.tx[q]; hz += T.tz[q]; }
-        const want = Math.atan2(hx, hz);
-        if (this.chaseYaw === null) this.chaseYaw = want;
-        let d = want - this.chaseYaw;
-        while (d > Math.PI) d -= Math.PI * 2;
-        while (d < -Math.PI) d += Math.PI * 2;
-        this.chaseYaw += d * Math.min(1, dt * 2.5);
-        const fx = Math.sin(this.chaseYaw), fz = Math.cos(this.chaseYaw);
-        const back = Math.min(30, 9 + spread * 1.2);
-        const up = 5 + spread * 0.55;
-        const gy = Math.max(cy, -2);
-        this.camTarget.lerp(new THREE.Vector3(cx + fx * 7, gy + 0.6, cz + fz * 7), Math.min(1, dt * 5));
-        this.camPos.lerp(new THREE.Vector3(cx - fx * back, gy + up, cz - fz * back), Math.min(1, dt * 4));
+        const c = chaseCamera(T, pts, this.chaseYaw, spread, dt);
+        this.chaseYaw = c.yaw;
+        this.camTarget.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
+        this.camPos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
+        if (this.camera.fov !== 62) { this.camera.fov = 62; this.camera.updateProjectionMatrix(); }
       } else {
         const dist = Math.min(S * 2.2, Math.max(11, spread * 1.7 + 8));
         this.camTarget.lerp(new THREE.Vector3(cx, cy * 0.5, cz), Math.min(1, dt * 3));
@@ -967,6 +957,34 @@ export class GameView {
     });
     this.composer.dispose();
   }
+}
+
+/** Race chase camera: behind the leading followed blade, looking down the track (pure, unit-testable). */
+export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | null, spread: number, dt: number) {
+  const lead = pts.reduce((a, b) => (b.lap * T.n + b.prog > a.lap * T.n + a.prog ? b : a));
+  let cx = 0, cz = 0, cy = 0;
+  for (const t of pts) { cx += t.x; cz += t.z; cy += Math.max(-2, t.y); }
+  cx /= pts.length; cz /= pts.length; cy /= pts.length;
+  // heading: the track direction a little ahead, blended with actual travel direction when moving fast
+  let hx = 0, hz = 0;
+  for (let k = 2; k < 22; k++) { const q = (lead.prog + k) % T.n; hx += T.tx[q]; hz += T.tz[q]; }
+  const hl = Math.hypot(hx, hz) || 1;
+  hx /= hl; hz /= hl;
+  const sp = Math.hypot(lead.vx, lead.vz);
+  if (sp > 4 && lead.alive) {
+    const vx = lead.vx / sp, vz = lead.vz / sp;
+    if (vx * hx + vz * hz > 0) { const w = Math.min(0.35, (sp - 4) / 30); hx = hx * (1 - w) + vx * w; hz = hz * (1 - w) + vz * w; }
+  }
+  const want = Math.atan2(hx, hz);
+  let yaw = prevYaw ?? want;
+  let d = want - yaw;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  yaw += d * Math.min(1, dt * 3);
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  const back = Math.min(28, 8.5 + spread * 1.2);
+  const up = 4 + spread * 0.5;
+  return { yaw, fx, fz, tx: cx + fx * 11, ty: cy + 0.4, tz: cz + fz * 11, px: cx - fx * back, py: cy + up, pz: cz - fz * back };
 }
 
 function sync<T extends { id: number }>(map: Map<number, THREE.Mesh>, list: T[], make: () => THREE.Mesh, scene: THREE.Scene) {
