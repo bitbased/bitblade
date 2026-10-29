@@ -338,6 +338,7 @@ export class Sim {
       return;
     }
 
+    if (t.held !== undefined) return; // sitting in a capture saucer (pinball)
     const canAct = s.phase === 'battle' && t.fx.frozen <= 0;
     // ---- abilities
     if (canAct) {
@@ -476,6 +477,7 @@ export class Sim {
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
+    if (this.cfg.mode === 'pinball') this.pinballBounds(t);
 
     const wasGrounded = t.grounded;
     t.grounded = false;
@@ -573,6 +575,9 @@ export class Sim {
     // direct impact damage (a surging top shrugs off half)
     A.spin -= (approach * 0.003 + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
     B.spin -= (approach * 0.003 + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
+    // pinball: your own balls bounce off each other, no battle damage
+    const friendly = this.cfg.mode === 'pinball' && A.team === B.team;
+    if (friendly) { A.spin = before[0]; B.spin = before[1]; }
     const lossA = Math.max(0, before[0] - A.spin), lossB = Math.max(0, before[1] - B.spin);
     A.dmg += lossB; B.dmg += lossA;
     A.special = Math.min(1, A.special + lossB * 2.2 + 0.015);
@@ -583,8 +588,8 @@ export class Sim {
     const I = jn + Math.abs(jt);
     const bth = 8;
     if (I > bth) {
-      if (B.fx.shield <= 0) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin);
-      if (A.fx.shield <= 0) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin);
+      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin);
+      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin);
     }
     // flag carriers drop on hard hits
     if (I > 6) { if (A.flag >= 0) this.dropFlag(A); if (B.flag >= 0) this.dropFlag(B); }
@@ -826,6 +831,24 @@ export class Sim {
     owner.score += n;
   }
 
+  /**
+   * The table's glass cover and cabinet: a ball launched by a ramp bounces off the glass instead of flying away,
+   * and can't leave through the sides or top — only the drain at the bottom.
+   */
+  pinballBounds(t: TopState) {
+    const c = this.cfg.arena.course;
+    const g = this.terrain.height(t.x, t.z);
+    if (g > VOID) {
+      const glass = g + 1.15; // just under the lowest rail: a ball can never hop a wall
+      if (t.y > glass) { t.y = glass; if (t.vy > 0) t.vy = -t.vy * 0.3; }
+    }
+    if (!c) return;
+    const hw = (c.w * c.tile) / 2 - 0.6, hh = (c.h * c.tile) / 2 - 0.6;
+    if (t.x < -hw) { t.x = -hw; t.vx = Math.abs(t.vx) * 0.4; }
+    if (t.x > hw) { t.x = hw; t.vx = -Math.abs(t.vx) * 0.4; }
+    if (t.z < -hh) { t.z = -hh; t.vz = Math.abs(t.vz) * 0.4; }
+  }
+
   /** is this ball sitting in the plunger lane? */
   inPlunger(t: TopState) {
     const pl = this.markers.find((m) => m.kind === 'plunger');
@@ -951,6 +974,42 @@ export class Sim {
         }
       }
     });
+    // capture saucers: catch the ball, spin it right back up while it sits there, then kick it out (rot = the
+    // kick direction, len = kick speed). On a table you can't stop on a spin pad — this is where spin comes from.
+    for (const t of s.tops) {
+      if (!t.alive) continue;
+      if (t.held !== undefined) {
+        const m = ms[t.held];
+        t.x = m.x; t.z = m.z; t.vx = t.vz = 0;
+        t.spin = Math.min(1, t.spin + dt * 0.55);
+        t.heldT = (t.heldT ?? 0) - dt;
+        if (t.heldT <= 0) {
+          const a = m.rot ?? -Math.PI / 2, v = m.len ?? 18;
+          t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
+          t.x += Math.cos(a) * ((m.r ?? 1) + 0.3); t.z += Math.sin(a) * ((m.r ?? 1) + 0.3);
+          t.held = undefined; t.portalT = 0.6;
+          this.ev({ k: 'pin', what: 'kickout', x: m.x, y: t.y, z: m.z });
+        }
+        continue;
+      }
+      if (t.portalT) continue;
+      const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8);
+      if (mi < 0) continue;
+      t.held = mi; t.heldT = 1.6;
+      this.addScore(t, 750);
+      this.ev({ k: 'pin', what: 'capture', x: ms[mi].x, y: t.y, z: ms[mi].z, pts: 750 });
+    }
+    // spin rollovers: roll through a lane switch for a burst of spin (and points)
+    for (const t of s.tops) {
+      if (!t.alive) continue;
+      if (t.rollT) { t.rollT = Math.max(0, t.rollT - dt); continue; }
+      const m = ms.find((q) => q.kind === 'rollover' && Math.hypot(t.x - q.x, t.z - q.z) < (q.r ?? 0.9));
+      if (!m) continue;
+      t.spin = Math.min(1, t.spin + 0.12);
+      t.rollT = 0.7;
+      this.addScore(t, 100);
+      this.ev({ k: 'pin', what: 'rollover', x: m.x, y: t.y, z: m.z, pts: 100 });
+    }
     // portals: in one, out of its partner (same team number), keeping your speed
     for (const t of s.tops) {
       if (!t.alive) continue;

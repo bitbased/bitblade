@@ -83,7 +83,9 @@ export interface TopState {
   qcp?: number; home?: number;
   lap: number;
   /** pinball: a multiball ball (no lives, no respawn) / portal cooldown */
-  extra?: boolean; portalT?: number; prog: number; cp: number; place: number; finishT: number;
+  extra?: boolean; portalT?: number;
+  /** pinball: held in a capture saucer (marker index) and for how much longer */
+  held?: number; heldT?: number; rollT?: number; prog: number; cp: number; place: number; finishT: number;
   /** race: seconds spent on the wrong segment of the track (took a crossing); 0 = on course */
   off: number;
 }
@@ -111,7 +113,7 @@ export type GameEvent =
   | { k: 'hazard'; x: number; y: number; z: number; id: number }
   | { k: 'announce'; text: string; sub?: string; color?: string }
   | { k: 'go' }
-  | { k: 'pin'; what: 'flip' | 'bumper' | 'sling' | 'target' | 'plunge' | 'portal' | 'tilt' | 'danger' | 'multiball'; x: number; y: number; z: number; pts?: number }
+  | { k: 'pin'; what: 'flip' | 'bumper' | 'sling' | 'target' | 'plunge' | 'portal' | 'tilt' | 'danger' | 'multiball' | 'capture' | 'kickout' | 'rollover'; x: number; y: number; z: number; pts?: number }
   | { k: 'count'; n: number };
 
 export interface GameState {

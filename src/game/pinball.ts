@@ -114,7 +114,7 @@ function neonClassic(): ArenaDef {
   const rightGuide: [number, number][] = [[9.25, 9.5], [7.2, 12.6], [4.4, 16.3]];
   const leftSling: [number, number][] = [[-8.4, 6.6], [-6.4, 11.4]];
   const rightSling: [number, number][] = mx(leftSling).map(([x, z]) => [x - 0.6, z] as [number, number]);
-  const orbit: [number, number][] = [[-8.8, 4.5], [-9.3, -4], [-8.2, -11], [-5.2, -15.8]];
+  const orbit: [number, number][] = [[-7.8, 4.5], [-8.3, -4], [-7.3, -11], [-4.6, -15.3]];
   return {
     id: 'pin-neon-classic', name: 'Neon Classic', desc: 'A classic table: plunger lane, slingshots, three pop bumpers, an orbit and a target bank. Light all targets for MULTIBALL.',
     theme: NEON, custom: false, pinball: true, tilt: 0.16,
@@ -138,8 +138,12 @@ function neonClassic(): ArenaDef {
       { kind: 'target', x: 5.2, z: -15.6, r: 0.8, rot: 0.6 },
       { kind: 'target', x: 6.9, z: -13.8, r: 0.8, rot: 0.9 },
       { kind: 'target', x: 8.1, z: -11.6, r: 0.8, rot: 1.2 },
-      { kind: 'target', x: -6.6, z: 1.8, r: 0.8, rot: -1.3 },
-      { kind: 'spinpad', x: 0, z: 2.5, r: 1.4 },
+      { kind: 'target', x: -5.2, z: 2.6, r: 0.8, rot: -1.3 },
+      // spin on a table comes from saucers (catch, spin up, kick out) and rollovers, not pads
+      { kind: 'saucer', x: 7.3, z: -7.4, r: 1.1, rot: 2.4, len: 17 },
+      { kind: 'rollover', x: -9.9, z: -2, r: 0.9 },
+      { kind: 'rollover', x: 10.4, z: -6, r: 0.9 },
+      { kind: 'rollover', x: 0, z: -17.6, r: 0.9 },
       { kind: 'item', x: 0, z: -2.6 },
     ],
   } as ArenaDef;
@@ -165,7 +169,7 @@ function synthCathedral(): ArenaDef {
       { pts: [[-10.6, 9.6], [-8.2, 14.6]], kick: 10, t: 0.5 },
       { pts: [[9.6, 9.6], [7.4, 14.6]], kick: 10, t: 0.5 },
       // right orbit: a long sweeping rail from the bottom right up around behind the bumpers
-      { pts: [[9.8, 6], [10.6, -6], [9.4, -15], [5, -19.6]], h: 1.1 },
+      { pts: [[8.6, 6], [9.2, -6], [8.2, -14.6], [4.4, -18.8]], h: 1.1 },
       // a short shelf under the upper-left flipper
       { pts: [[-14.6, -2], [-11.2, -0.4]] },
     ],
@@ -184,8 +188,11 @@ function synthCathedral(): ArenaDef {
       { kind: 'target', x: -3.4, z: -21.2, r: 0.8, rot: -0.2 },
       { kind: 'target', x: 9.2, z: 2.6, r: 0.8, rot: 1.4 },
       { kind: 'target', x: -9.6, z: 6.8, r: 0.8, rot: -1.4 },
-      { kind: 'spinpad', x: -6, z: -4, r: 1.3 },
-      { kind: 'spinpad', x: 6, z: -1, r: 1.3 },
+      { kind: 'saucer', x: -6.5, z: -4, r: 1.1, rot: 0.9, len: 17 },
+      { kind: 'saucer', x: 6.5, z: -1, r: 1.1, rot: 2.3, len: 17 },
+      { kind: 'rollover', x: 10.8, z: -4, r: 0.9 },
+      { kind: 'rollover', x: 13.4, z: -9, r: 0.9 },
+      { kind: 'rollover', x: 0, z: -20.6, r: 0.9 },
       { kind: 'item', x: 0, z: -4.5 },
     ],
   } as ArenaDef;

@@ -30,7 +30,7 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
-export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal';
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal' | 'saucer' | 'rollover';
 export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }

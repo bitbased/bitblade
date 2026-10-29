@@ -825,6 +825,33 @@ export class GameView {
           this.plungerRod = { g: rod, z0: m.z + 2.1 };
           break;
         }
+        case 'saucer': {
+          // capture saucer: a dark cup with a glowing rim and an arrow showing where it kicks the ball out
+          const r = m.r ?? 1;
+          const cup = new THREE.Mesh(new THREE.CircleGeometry(r * 0.85, 32), new THREE.MeshBasicMaterial({ color: '#05060c' }));
+          cup.rotation.x = -Math.PI / 2;
+          cup.position.set(m.x, y + 0.04, m.z);
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.88, 0.1, 8, 40), new THREE.MeshBasicMaterial({ color: '#38ffb0', toneMapped: false }));
+          rim.rotation.x = Math.PI / 2;
+          rim.position.set(m.x, y + 0.1, m.z);
+          const a = m.rot ?? -Math.PI / 2;
+          const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.6, 3), new THREE.MeshBasicMaterial({ color: '#38ffb0', toneMapped: false, transparent: true, opacity: 0.7 }));
+          arrow.rotation.order = 'YXZ'; arrow.rotation.y = -a + Math.PI / 2; arrow.rotation.x = Math.PI / 2;
+          arrow.position.set(m.x + Math.cos(a) * (r + 0.5), y + 0.1, m.z + Math.sin(a) * (r + 0.5));
+          this.scene.add(cup, rim, arrow);
+          this.portals.push(rim);
+          break;
+        }
+        case 'rollover': {
+          // spin rollover: a lane light on the floor
+          const r = m.r ?? 0.9;
+          const disc = new THREE.Mesh(new THREE.RingGeometry(r * 0.45, r * 0.7, 6), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.8, toneMapped: false, side: THREE.DoubleSide, depthWrite: false }));
+          disc.rotation.x = -Math.PI / 2;
+          disc.position.set(m.x, y + 0.05, m.z);
+          this.scene.add(disc);
+          this.portals.push(disc);
+          break;
+        }
         case 'portal': {
           const colors = ['#b46bff', '#3cf2ff', '#ffd23a', '#38ffb0'];
           const col = colors[(m.team ?? 0) % colors.length];
