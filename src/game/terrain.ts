@@ -282,8 +282,8 @@ export const THEMES: Record<string, Theme> = {
   neon: { floor: '#1b2340', wall: '#2c3b74', glow: '#3cf2ff', sky1: '#05060f', sky2: '#1a0b3a', grid: '#5f7bff' },
   inferno: { floor: '#2b1410', wall: '#5a1d10', glow: '#ff6a1f', sky1: '#0d0303', sky2: '#3a0f05', grid: '#ff9b4a' },
   toxic: { floor: '#13261a', wall: '#1f4a2a', glow: '#74ff5a', sky1: '#020a05', sky2: '#0b2a14', grid: '#9cff7a' },
-  ice: { floor: '#cfe6f5', wall: '#7fb4d9', glow: '#5fd6ff', sky1: '#0a1626', sky2: '#24496e', grid: '#ffffff' },
-  concrete: { floor: '#7d7f86', wall: '#5d6068', glow: '#ff3db4', sky1: '#0f1018', sky2: '#3a2448', grid: '#c9cbd6' },
+  ice: { floor: '#2c6390', wall: '#163a5c', glow: '#7fe6ff', sky1: '#050d1a', sky2: '#1b3a5e', grid: '#bfefff' },
+  concrete: { floor: '#4f525b', wall: '#3a3d45', glow: '#ff3db4', sky1: '#0f1018', sky2: '#3a2448', grid: '#c9cbd6' },
   royal: { floor: '#241433', wall: '#3d1f5c', glow: '#ffcc33', sky1: '#07030d', sky2: '#2a0d3d', grid: '#d6a2ff' },
 };
 
