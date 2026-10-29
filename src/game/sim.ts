@@ -332,7 +332,7 @@ export class Sim {
         let dx = ix, dz = iz;
         if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
         const dl = Math.hypot(dx, dz) || 1;
-        const dashV = this.cfg.mode === 'race' ? 11 : 9;
+        const dashV = (this.cfg.mode === 'race' ? 11 : 9) * this.rpmK(t);
         t.vx += (dx / dl) * dashV; t.vz += (dz / dl) * dashV;
         t.spin -= this.cfg.mode === 'race' ? 0.01 : 0.025;
         t.dashCd = 1.1;
@@ -374,7 +374,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      let acc = 17 * (this.cfg.mode === 'race' ? 1.2 * (this.draft[i] ? 1.12 : 1) : 1) * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      let acc = 17 * this.rpmK(t) * (this.cfg.mode === 'race' ? 1.2 * (this.draft[i] ? 1.12 : 1) : 1) * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
       // counter-steering bites harder so low-grip tips can still turn and stop
       const vl = Math.hypot(t.vx, t.vz);
       if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
@@ -431,7 +431,7 @@ export class Sim {
     }
     const hs = Math.hypot(t.vx, t.vz);
     const race = this.cfg.mode === 'race';
-    const cap = (race ? 16 : 12.5) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const cap = (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
@@ -625,6 +625,12 @@ export class Sim {
   }
 
   // ---------------- finishes / respawns ----------------
+  /**
+   * Spin speed drives the blade: full spin = 1 (unchanged balance), winding down to ~0.78 near spin-out,
+   * overcharge (Spin Surge) up to ~1.09. Scales dash strength, acceleration and top speed.
+   */
+  rpmK(t: TopState) { const s = Math.max(0, t.spin); return 0.72 + 0.28 * Math.min(1, s) + 0.25 * Math.max(0, Math.min(0.35, s - 1)); }
+
   /** a racer who has crossed the line: coasts to a stop as a ghost while the rest finish (can't be knocked out) */
   safeFinished(t: TopState) { return this.cfg.mode === 'race' && t.finishT >= 0; }
 

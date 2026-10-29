@@ -70,3 +70,6 @@
   .ts-left, .ts-right, .ts-stage, .ts-profwrap { grid-column: 1; grid-row: auto; }
   .ts-stage { height: 50vh; }
 }
+.ts-issue { cursor: pointer; }
+.ts-issue:hover { color: #fff; }
+.ts-goto { color: var(--accent); font-size: 11px; }

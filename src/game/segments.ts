@@ -48,7 +48,7 @@ export interface SegCourse {
   segs: Seg[];
 }
 
-export interface CompiledCourse { arena: ArenaDef; issues: string[]; length: number; rise: number }
+export interface CompiledCourse { arena: ArenaDef; issues: string[]; length: number; rise: number; /** where each problem is (distance along the track) */ spots?: { d: number; msg: string }[] }
 
 /** walk the chain: control points every ~4m, plus where each segment starts/ends along the path */
 function walk(c: SegCourse) {
@@ -281,19 +281,34 @@ export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse 
   }
   if (!c.closed) { const g = Math.max(0, S.n - 10); markers.push({ kind: 'goal', ...pos(g), r: Math.max(2.6, half * 0.8), rot: Math.atan2(S.tx[g], S.tz[g]) }); }
   const issues: string[] = [];
-  if (checks) outer: for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
-    if (c.closed && S.n - (j - i) < 40) continue;
-    if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < c.width + 1.5 && Math.abs(S.y[i] - S.y[j]) > 0.4) {
-      issues.push(`passes over itself at ${Math.round(S.cum[i])}m and ${Math.round(S.cum[j])}m: crossings must be at the same height`);
-      break outer;
+  const spots: { d: number; msg: string }[] = [];
+  if (checks) {
+    // every place the road passes over itself at a different height (each crossing reported once)
+    let lastJ = -1e9;
+    for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
+      if (c.closed && S.n - (j - i) < 40) continue;
+      if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < c.width + 1.5 && Math.abs(S.y[i] - S.y[j]) > 0.4) {
+        if (Math.abs(S.cum[j] - lastJ) < 30) continue;
+        lastJ = S.cum[j];
+        const msg = `overlaps itself at ${Math.round(S.cum[i])}m / ${Math.round(S.cum[j])}m (heights ${S.y[i].toFixed(1)}m vs ${S.y[j].toFixed(1)}m)`;
+        if (issues.length < 6) issues.push(msg);
+        spots.push({ d: S.cum[i], msg: 'overlap' }, { d: S.cum[j], msg: 'overlap' });
+        i += 20;
+        break;
+      }
     }
+    let lastS = -1e9;
+    for (let i = 4; i < S.n; i += 4) {
+      const slope = Math.abs(S.y[i] - S.y[i - 4]) / 2;
+      if (slope > 0.75 && S.cum[i] - lastS > 25) { lastS = S.cum[i]; issues.push(`too steep at ${Math.round(S.cum[i])}m (${Math.round(Math.atan(slope) * 57)}°): spread the height change over more distance`); spots.push({ d: S.cum[i], msg: 'too steep' }); }
+    }
+    let lastB = -1e9;
+    for (let i = 0; i < S.n; i++) if (Math.abs(S.curv[i]) > 0.12 && S.cum[i] - lastB > 25) { lastB = S.cum[i]; issues.push(`very tight bend at ${Math.round(S.cum[i])}m: move those points further apart`); spots.push({ d: S.cum[i], msg: 'tight bend' }); }
   }
-  for (let i = 4; i < S.n; i += 4) { const slope = Math.abs(S.y[i] - S.y[i - 4]) / 2; if (slope > 0.75) { issues.push(`too steep near ${Math.round(S.cum[i])}m (${Math.round(Math.atan(slope) * 57)}°): spread the height change over more distance`); break; } }
-  for (let i = 0; i < S.n; i++) if (Math.abs(S.curv[i]) > 0.12) { issues.push(`very tight bend near ${Math.round(S.cum[i])}m: move those points further apart`); break; }
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < S.n; i++) { lo = Math.min(lo, S.y[i]); hi = Math.max(hi, S.y[i]); }
   const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers };
-  return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1) };
+  return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1), spots };
 }
 
 /** convert a segment course (e.g. Rollercoaster Run) into editable points: one at each segment end, more on big curves */

@@ -7,8 +7,8 @@
 // The 3D VIEW tab builds the full arena (only then — editing never waits on 3D).
 import * as THREE from 'three';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { buildArenaMesh, getRenderer } from '../game/render';
-import { COASTER, THEMES, Terrain, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { getRenderer } from '../game/render';
+import { COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
 import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
 import { sampleTrack, type TrackSamples } from '../game/track';
 import { icon } from './icons';
@@ -57,6 +57,8 @@ class TrackStudio {
   S!: TrackSamples;
   ranges: ReturnType<typeof spanRanges> = [];
   issues: string[] = [];
+  /** where the problems are, for markers on the map / in 3D */
+  spots: { d: number; msg: string }[] = [];
   compiled: ReturnType<typeof compileNodeCourse> | null = null;
   // pointer state
   drag: { mode: 'node' | 'pan' | 'height' | 'draw'; i?: number; x: number; y: number; moved: boolean } | null = null;
@@ -142,16 +144,27 @@ class TrackStudio {
   }
 
   // ------------------------------------------------------------------ derived data
+  /** centre the view on the k-th reported problem */
+  goToSpot(k: number) {
+    const msg = this.issues[k] ?? '';
+    const m = msg.match(/(\d+)m/);
+    const d = m ? +m[1] : this.spots[k]?.d ?? 0;
+    const i = Math.max(0, Math.min(this.S.n - 1, Math.round((d / this.S.total) * this.S.n)));
+    if (this.view === 'map') { this.cx = this.S.x[i]; this.cz = this.S.z[i]; this.scale = Math.max(this.scale, 3); this.drawMap(); }
+    else { this.target.set(this.S.x[i], this.S.y[i], this.S.z[i]); this.dist = Math.min(this.dist, 80); }
+  }
+
   /** cheap derived data for drawing; `light` skips the overlap/steepness checks (used while dragging) */
   recompute(light = false) {
     const def = nodeTrackDef(this.cur);
     this.S = sampleTrack(def);
     this.ranges = spanRanges(this.cur, this.S);
     this.compiled = compileNodeCourse(this.cur, !light);
-    if (!light) this.issues = this.compiled.issues;
+    if (!light) { this.issues = this.compiled.issues; this.spots = this.compiled.spots ?? []; }
     this.el.stats.textContent = `${Math.round(this.S.total)}m · ${this.rise()}m of height · ${this.cur.nodes.length} points · ${this.cur.closed ? 'race loop' : 'adventure (start → goal)'}`;
     this.drawMap();
     this.drawProfile();
+    if (this.view === '3d') this.refresh3d();
   }
 
   rise() { let lo = Infinity, hi = -Infinity; for (let i = 0; i < this.S.n; i++) { lo = Math.min(lo, this.S.y[i]); hi = Math.max(hi, this.S.y[i]); } return Math.round(hi - lo); }
@@ -310,6 +323,16 @@ class TrackStudio {
       g.fillStyle = a.color; g.beginPath(); g.arc(sx, sy, 6, 0, Math.PI * 2); g.fill();
       g.fillStyle = '#05060a'; g.fillText(a.letter, sx, sy + 0.5);
     }
+    // problems, marked where they are
+    for (const sp of this.spots) {
+      const i = Math.max(0, Math.min(S.n - 1, Math.round((sp.d / S.total) * S.n)));
+      const [sx, sy] = this.w2s(S.x[i], S.z[i]);
+      g.strokeStyle = '#ff3b4a'; g.lineWidth = 3; g.beginPath(); g.arc(sx, sy, 14 + 3 * Math.sin(performance.now() / 200), 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#ff3b4a'; g.beginPath(); g.arc(sx, sy - 22, 9, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#fff'; g.font = '900 12px Orbitron, sans-serif'; g.fillText('!', sx, sy - 21.5);
+      g.font = '700 10px Rajdhani, sans-serif'; g.fillStyle = '#ff8a94'; g.fillText(sp.msg.toUpperCase(), sx, sy + 24);
+    }
+    g.font = '700 11px Rajdhani, sans-serif';
     // start / goal
     const flag = (i: number, col: string, txt: string) => { const [sx, sy] = this.w2s(S.x[i], S.z[i]); g.fillStyle = col; g.fillRect(sx - 15, sy - 22, 30, 13); g.fillStyle = '#05060a'; g.fillText(txt, sx, sy - 15); };
     flag(Math.min(S.n - 1, 6), '#38ff7a', 'START');
@@ -395,7 +418,7 @@ class TrackStudio {
   }
 
   // ------------------------------------------------------------------ editing ops
-  select(s: Sel) { this.sel = s; this.drawMap(); this.drawProfile(); this.renderPanel(); }
+  select(s: Sel) { this.sel = s; this.drawMap(); this.drawProfile(); this.renderPanel(); if (this.view === '3d') this.refresh3d(); }
 
   insertAt(sample: number) {
     this.snapshot();
@@ -494,7 +517,7 @@ class TrackStudio {
     } else if (s.kind === 'node') {
       const n = c.nodes[s.i];
       el.append(h('div.ts-sec.ts-selsec', null,
-        h('h3', null, `POINT ${s.i + 1}`), h('div.ts-dim', null, 'Drag it on the map to move it. Only the road next to it changes.'),
+        h('h3', null, `POINT ${s.i + 1}`), h('div.ts-dim', null, 'Drag it on the map or in 3D to move it (Shift-drag in 3D: up/down). Only the road next to it changes.'),
         h('div.ts-grid', null,
           num('HEIGHT m', n.y, -10, 60, 0.5, (v) => { n.y = v; }, 'Also draggable on the height strip below'),
           num('TILT', n.bank ?? 0, -0.5, 0.5, 0.05, (v) => { n.bank = v; }, 'Leans the road: + raises the left edge, - the right'),
@@ -524,10 +547,10 @@ class TrackStudio {
       const list = h('div.ts-attlist');
       (sp.att ?? []).forEach((a, ai) => {
         const along = h<HTMLInputElement>('input', { type: 'range', min: '0', max: '1', step: '0.02', value: String(a.at) });
-        along.addEventListener('input', () => { a.at = +along.value; this.drawMap(); });
+        along.addEventListener('input', () => { a.at = +along.value; this.recompute(true); });
         along.addEventListener('change', () => this.changed(true));
         const across = h<HTMLInputElement>('input', { type: 'range', min: '-1', max: '1', step: '0.05', value: String(a.lat ?? 0) });
-        across.addEventListener('input', () => { a.lat = +across.value; this.drawMap(); });
+        across.addEventListener('input', () => { a.lat = +across.value; this.recompute(true); });
         across.addEventListener('change', () => this.changed(true));
         list.append(h('div.ts-attrow', null,
           h('span.ts-attname', { style: { color: A[a.kind].color } }, A[a.kind].label),
@@ -556,7 +579,7 @@ class TrackStudio {
         h('button.btn.small.nav', { onclick: () => this.reverse(), title: 'Drive it the other way' }, 'Reverse'),
         h('button.btn.small.nav', { onclick: () => this.fit(), title: 'Fit the track in view' }, 'Fit view')),
       h('div.ts-sub', null, 'CHECKS'),
-      ...(this.issues.length ? this.issues.map((i) => h('div.ts-bad', null, '⚠ ' + i)) : [h('div.ts-ok', null, '✓ No overlaps · slopes and bends OK')]),
+      ...(this.issues.length ? this.issues.map((i, k) => h('div.ts-bad.ts-issue', { title: 'Show me', onclick: () => this.goToSpot(k) }, '⚠ ' + i, h('span.ts-goto', null, ' → show'))) : [h('div.ts-ok', null, '✓ No overlaps · slopes and bends OK')]),
     ));
     el.scrollTop = keepScroll;
     this.nav?.focus(this.nav.idx);
@@ -571,7 +594,7 @@ class TrackStudio {
     for (const c of all) el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : ''), { onclick: () => { if (c.id !== this.cur.id) { this.persist(); this.open(clone(c)); } } }, h('b', null, c.name), h('span', null, c.closed ? 'Race loop' : 'Adventure')));
   }
 
-  open(c: NodeCourse) { this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.view3dKey = ''; this.recompute(); this.fit(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
+  open(c: NodeCourse) { this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.framed3d = false; this.recompute(); this.fit(); if (this.view === '3d') this.frame3d(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
 
   persist() {
     const i = this.courses.findIndex((c) => c.id === this.cur.id);
@@ -667,42 +690,165 @@ class TrackStudio {
     this.view = v;
     this.root.classList.toggle('ts-3d', v === '3d');
     this.el.tabs.querySelectorAll('.ts-tab').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === v));
-    this.el.help.textContent = v === '3d' ? 'Drag to orbit · right-drag to pan · wheel to zoom' : '';
-    if (v === '3d') this.build3d(); else this.drawMap();
+    this.el.help.textContent = v === '3d' ? 'Drag a point to move it (Shift-drag: up/down) · click the road to select a stretch · double-click to add a point · drag empty space to orbit · right-drag to pan · wheel to zoom' : '';
+    if (v === '3d') { this.refresh3d(); if (!this.framed3d) this.frame3d(); } else this.drawMap();
   }
 
-  build3d() {
-    const key = JSON.stringify(this.cur);
-    if (key === this.view3dKey && this.arenaMesh) return;
-    this.view3dKey = key;
-    const arena = compileNodeCourse(this.cur).arena;
-    const ter = new Terrain(arena);
-    if (this.arenaMesh) { this.scene.remove(this.arenaMesh); this.arenaMesh.traverse((o) => (o as THREE.Mesh).geometry?.dispose?.()); }
-    this.arenaMesh = buildArenaMesh(ter, this.cur.theme);
-    this.scene.add(this.arenaMesh);
-    const T = ter.track!;
+  // ---- the 3D scene is drawn straight from the track curve (no heightfield build), so it updates instantly
+  road = new THREE.Group();
+  handles = new THREE.Group();
+  things = new THREE.Group();
+  framed3d = false;
+  ray = new THREE.Raycaster();
+
+  frame3d() {
+    const S = this.S;
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, y = 0;
-    for (let i = 0; i < T.n; i += 4) { x0 = Math.min(x0, T.x[i]); x1 = Math.max(x1, T.x[i]); z0 = Math.min(z0, T.z[i]); z1 = Math.max(z1, T.z[i]); y += T.y[i]; }
-    this.target.set((x0 + x1) / 2, y / Math.ceil(T.n / 4), (z0 + z1) / 2);
+    for (let i = 0; i < S.n; i += 4) { x0 = Math.min(x0, S.x[i]); x1 = Math.max(x1, S.x[i]); z0 = Math.min(z0, S.z[i]); z1 = Math.max(z1, S.z[i]); y += S.y[i]; }
+    this.target.set((x0 + x1) / 2, y / Math.ceil(S.n / 4), (z0 + z1) / 2);
     this.dist = Math.max(60, Math.hypot(x1 - x0, z1 - z0) * 0.8);
+    this.framed3d = true;
   }
+
+  refresh3d() {
+    if (!this.road.parent) this.scene.add(this.road, this.handles, this.things);
+    for (const grp of [this.road, this.handles, this.things]) for (const o of [...grp.children]) { grp.remove(o); (o as THREE.Mesh).geometry?.dispose?.(); }
+    const S = this.S, comp = this.compiled ?? compileNodeCourse(this.cur, false);
+    const track = comp.arena.track!;
+    const inR = (f: number, rs: [number, number][]) => rs.some(([a, b]) => f >= a && f <= b);
+    const theme = this.cur.theme;
+    // road surface + side skirts, broken at gaps; the selected stretch glows
+    const sel = this.sel.kind === 'span' ? this.ranges[this.sel.i] : null;
+    const pos: number[] = [], col: number[] = [], idx: number[] = [];
+    const cFloor = new THREE.Color(theme.floor).lerp(new THREE.Color(theme.glow), 0.25), cEdge = new THREE.Color(theme.glow), cSel = new THREE.Color('#ffd23a'), cSkirt = new THREE.Color(theme.wall).multiplyScalar(0.6);
+    const last = this.cur.closed ? S.n : S.n - 1;
+    for (let i = 0; i <= last; i++) {
+      const j = i % S.n;
+      const hw = S.w[j] / 2;
+      // tilt: curvature banking + explicit tilt, as in the game
+      const bankK = Math.max(-1.2, Math.min(1.2, -S.curv[j] * hw * 6)) * 0.5 / Math.max(0.01, hw);
+      const yL = S.y[j] + (S.bank[j] + bankK) * hw, yR = S.y[j] - (S.bank[j] + bankK) * hw;
+      const lx = S.x[j] - S.tz[j] * hw, lz = S.z[j] + S.tx[j] * hw, rx = S.x[j] + S.tz[j] * hw, rz = S.z[j] - S.tx[j] * hw;
+      const inSel = !!sel && j >= sel.i0 && j <= (sel.i1 || S.n - 1);
+      const c = inSel ? cSel : cFloor;
+      pos.push(lx, yL, lz, rx, yR, rz, lx, yL - 2, lz, rx, yR - 2, rz);
+      for (const cc of [c, c, cSkirt, cSkirt]) col.push(cc.r, cc.g, cc.b);
+      if (i > 0) {
+        const f = S.cum[(i - 1) % S.n] / S.total;
+        if (inR(f, track.gaps)) continue;
+        const a = (i - 1) * 4, b = i * 4;
+        idx.push(a, b, a + 1, a + 1, b, b + 1); // top
+        idx.push(a + 2, b + 2, a, a, b + 2, b); // left skirt
+        idx.push(a + 1, b + 1, a + 3, a + 3, b + 1, b + 3); // right skirt
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    const roadMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+    roadMesh.name = 'road';
+    this.road.add(roadMesh);
+    // glowing edges (rails brighter)
+    for (const side of [1, -1]) {
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= last; i += 2) { const j = i % S.n, hw = S.w[j] / 2; pts.push(new THREE.Vector3(S.x[j] - S.tz[j] * hw * side, S.y[j] + S.bank[j] * hw * side + (inR(S.cum[j] / S.total, track.rails) ? 1.1 : 0.06), S.z[j] + S.tx[j] * hw * side)); }
+      this.road.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: cEdge })));
+    }
+    // obstacles & things as simple coloured shapes
+    for (const m of comp.arena.markers) {
+      const a = A[m.kind as SegAttachKind];
+      if (!a) continue;
+      let k = 0, bd = Infinity;
+      for (let i = 0; i < S.n; i += 3) { const d = (S.x[i] - m.x) ** 2 + (S.z[i] - m.z) ** 2; if (d < bd) { bd = d; k = i; } }
+      const y = S.y[k];
+      const mat = new THREE.MeshBasicMaterial({ color: a.color, toneMapped: false });
+      let obj: THREE.Object3D;
+      if (m.kind === 'checkpoint') { obj = new THREE.Mesh(new THREE.BoxGeometry((m.r ?? 2.2) * 2, 0.3, 0.3), mat); obj.position.set(m.x, y + 2.4, m.z); obj.rotation.y = m.rot ?? 0; }
+      else if (m.kind === 'boost' || m.kind === 'item') { obj = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1), mat); obj.position.set(m.x, y + 0.4, m.z); }
+      else { obj = new THREE.Mesh(new THREE.CylinderGeometry(m.kind === 'pillar' ? 0.7 : 0.5, 0.6, m.kind === 'pillar' ? 2.4 : 1.2, 10), mat); obj.position.set(m.x, y + 0.8, m.z); }
+      this.things.add(obj);
+    }
+    // problems: red beacons where they are
+    for (const sp of this.spots) {
+      const i = Math.max(0, Math.min(S.n - 1, Math.round((sp.d / S.total) * S.n)));
+      const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 14, 10, 1, true), new THREE.MeshBasicMaterial({ color: '#ff3b4a', transparent: true, opacity: 0.55, toneMapped: false, side: THREE.DoubleSide }));
+      beacon.position.set(S.x[i], S.y[i] + 7, S.z[i]);
+      this.things.add(beacon);
+    }
+    // point handles
+    this.cur.nodes.forEach((n, i) => {
+      const selN = this.sel.kind === 'node' && this.sel.i === i;
+      const hnd = new THREE.Mesh(new THREE.SphereGeometry(selN ? 1.6 : 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: selN ? '#ffd23a' : '#3cf2ff', toneMapped: false, depthTest: false, transparent: true, opacity: 0.95 }));
+      hnd.position.set(n.x, n.y + 2.2, n.z);
+      hnd.renderOrder = 20;
+      hnd.userData.node = i;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.2, 6), new THREE.MeshBasicMaterial({ color: '#3cf2ff', toneMapped: false }));
+      stem.position.set(n.x, n.y + 1.1, n.z);
+      this.handles.add(hnd, stem);
+    });
+  }
+
+  /** screen point → ray against handles / road */
+  pick3d(e: PointerEvent | MouseEvent) {
+    const r = this.app.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.camera);
+    const hNode = this.ray.intersectObjects(this.handles.children.filter((o) => o.userData.node !== undefined))[0];
+    if (hNode) return { node: hNode.object.userData.node as number };
+    const hRoad = this.ray.intersectObject(this.road.children[0] ?? new THREE.Object3D())[0];
+    if (hRoad) {
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < this.S.n; i++) { const d = (this.S.x[i] - hRoad.point.x) ** 2 + (this.S.z[i] - hRoad.point.z) ** 2; if (d < bd) { bd = d; best = i; } }
+      return { road: best };
+    }
+    return {};
+  }
+
+  drag3d: { node: number; y0: number; sx: number; sy: number; vertical: boolean; moved: boolean } | null = null;
 
   bind3d(stage: HTMLElement) {
     stage.addEventListener('pointerdown', (e) => {
       if (this.view !== '3d') return;
       stage.setPointerCapture(e.pointerId);
-      this.orbit = { x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey };
+      if (e.button === 0) {
+        const p = this.pick3d(e);
+        if (p.node !== undefined) { this.select({ kind: 'node', i: p.node }); this.snapshot(); this.drag3d = { node: p.node, y0: this.cur.nodes[p.node].y, sx: e.clientX, sy: e.clientY, vertical: e.shiftKey, moved: false }; return; }
+        if (p.road !== undefined) { this.select({ kind: 'span', i: this.spanAtSample(p.road) }); }
+      }
+      this.orbit = { x: e.clientX, y: e.clientY, pan: e.button !== 0 };
     });
     stage.addEventListener('pointermove', (e) => {
+      const d = this.drag3d;
+      if (d) {
+        d.moved = true;
+        const n = this.cur.nodes[d.node];
+        if (d.vertical || e.shiftKey) {
+          n.y = Math.max(-10, Math.min(60, Math.round((d.y0 - (e.clientY - d.sy) * this.dist * 0.0012) * 2) / 2));
+        } else {
+          // move on the horizontal plane at the point's height
+          const r = this.app.canvas.getBoundingClientRect();
+          this.ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), this.camera);
+          const hit = new THREE.Vector3();
+          if (this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -n.y), hit)) { n.x = Math.round(hit.x * 2) / 2; n.z = Math.round(hit.z * 2) / 2; }
+        }
+        this.recompute(true);
+        return;
+      }
       if (!this.orbit) return;
       const dx = e.clientX - this.orbit.x, dy = e.clientY - this.orbit.y;
       this.orbit.x = e.clientX; this.orbit.y = e.clientY;
       if (this.orbit.pan) {
         const k = this.dist * 0.0015, s = Math.sin(this.yaw), c = Math.cos(this.yaw);
-        this.target.x -= (dx * c - dy * s) * k; this.target.z -= (-dx * s - dy * c) * k;
+        this.target.x -= (dx * c + dy * s) * k; this.target.z -= (-dx * s + dy * c) * k;
       } else { this.yaw -= dx * 0.006; this.pitch = Math.max(0.12, Math.min(1.5, this.pitch + dy * 0.005)); }
     });
-    stage.addEventListener('pointerup', () => { this.orbit = null; });
+    stage.addEventListener('pointerup', () => {
+      if (this.drag3d) { if (this.drag3d.moved) this.changed(true); else this.undoStack.pop(); this.drag3d = null; this.renderPanel(); }
+      this.orbit = null;
+    });
+    stage.addEventListener('dblclick', (e) => { if (this.view !== '3d') return; const p = this.pick3d(e); if (p.road !== undefined && p.node === undefined) this.insertAt(p.road); });
     stage.addEventListener('contextmenu', (e) => e.preventDefault());
     stage.addEventListener('wheel', (e) => { if (this.view !== '3d') return; e.preventDefault(); this.dist = Math.max(25, Math.min(1500, this.dist * Math.pow(1.12, Math.sign(e.deltaY)))); }, { passive: false });
   }
@@ -721,6 +867,9 @@ class TrackStudio {
       const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
       this.camera.position.set(this.target.x + Math.sin(this.yaw) * cp * this.dist, this.target.y + sp * this.dist, this.target.z + Math.cos(this.yaw) * cp * this.dist);
       this.camera.lookAt(this.target);
+      // handles stay a usable size at any zoom
+      const k = Math.max(1, this.dist / 90);
+      for (const o of this.handles.children) if (o.userData.node !== undefined) o.scale.setScalar(k);
       this.renderer.setRenderTarget(null);
       this.renderer.render(this.scene, this.camera);
     }
