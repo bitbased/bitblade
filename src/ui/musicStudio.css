@@ -15,6 +15,12 @@
 .ms-panel { background: rgba(5, 7, 14, 0.92); border: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
 .ms-panel h3 { font-family: var(--font-h); font-size: 12px; letter-spacing: 0.18em; color: #ff5cf4; margin: 4px 0 0; }
 .ms-list { display: flex; flex-direction: column; gap: 3px; }
+.ms-left { overflow: hidden; }
+.ms-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; flex: none; }
+.ms-actions .btn { padding: 6px 8px; font-size: 10px; text-align: center; }
+.ms-actions .btn.on { border-color: var(--gold); color: var(--gold); }
+.ms-actions .ms-wide { grid-column: 1 / -1; }
+.ms-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
 .ms-item { display: flex; flex-direction: column; gap: 1px; padding: 6px 9px; background: rgba(255, 255, 255, 0.04); border-left: 3px solid transparent; cursor: pointer; font-size: 13px; }
 .ms-item span { color: var(--muted); font-size: 11px; }
 .ms-item.on { border-left-color: #ff5cf4; background: rgba(255, 92, 244, 0.12); }
@@ -70,7 +76,7 @@
 @media (max-width: 900px) {
   /* phones: everything stacks and the page scrolls (no section squeezed to nothing) */
   .ms-root { display: flex; flex-direction: column; overflow-y: auto; }
-  .ms-left { max-height: 200px; flex: none; }
+  .ms-left { max-height: 340px; flex: none; }
   .ms-main { flex: none; overflow: visible; }
   .ms-right { flex: none; overflow: visible; }
   .ms-grid, .ms-roll { grid-template-columns: 58px minmax(0, 1fr); }

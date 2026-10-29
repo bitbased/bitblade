@@ -143,22 +143,26 @@ class MusicStudio {
     const item = (s: Song) => h('div.ms-item.nav' + (s.id === this.song.id ? '.on' : ''), { onclick: () => { if (s.id !== this.song.id) this.open(s); } },
       h('b', null, s.name), h('span', null, `${s.custom ? '' : '★ '}${SCALES[s.scale].mood} · ${s.bpm}`));
     const isMenu = musicPrefs.menu === this.song.id;
+    // actions stay pinned at the top; only the song lists scroll (a long library never hides them)
     L.append(
-      h('h3', null, 'MY SONGS'),
-      h('div.ms-list', null, ...(this.custom.length ? this.custom.map(item) : [h('div.ms-muted', null, 'Nothing yet — start from a preset or a new song.')])),
-      h('h3', null, 'PRESETS'),
-      h('div.ms-list', null, ...PRESET_SONGS.map(item)),
-      h('div.ms-btns', null,
-        h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.custom.unshift(s); saveCustomSongs(this.custom); this.open(s); } }, '+ New song'),
-        h('button.btn.small.nav', { onclick: () => this.surprise() }, '🎲 Surprise me'),
+      h('div.ms-actions', null,
+        h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.custom.unshift(s); saveCustomSongs(this.custom); this.open(s); } }, '+ New'),
+        h('button.btn.small.nav', { onclick: () => this.surprise() }, '🎲 Surprise'),
         h('button.btn.small.nav', { onclick: () => { const c = { ...clone(this.song), id: newSong().id, name: this.song.name + ' copy', custom: true }; this.custom.unshift(c); saveCustomSongs(this.custom); this.open(c); } }, 'Duplicate'),
-        h('button.btn.small.nav' + (isMenu ? '.on' : ''), { onclick: () => { musicPrefs.menu = isMenu ? 'neon-drive' : this.song.id; saveMusicPrefs(); this.persist(); this.renderList(); this.app.toast(isMenu ? 'Menu music back to Neon Drive' : `${this.song.name} is now the menu music`); } }, isMenu ? '♪ Menu music ✓' : '♪ Use as menu music'),
         h('button.btn.small.nav', { onclick: () => this.exportSong() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importSong() }, 'Import'),
         this.isPreset ? null : h('button.btn.small.nav.ms-danger', { onclick: () => this.deleteSong() }, 'Delete'),
+        h('button.btn.small.nav.ms-wide' + (isMenu ? '.on' : ''), { onclick: () => { musicPrefs.menu = isMenu ? 'neon-drive' : this.song.id; saveMusicPrefs(); this.persist(); this.renderList(); this.app.toast(isMenu ? 'Menu music back to Neon Drive' : `${this.song.name} is now the menu music`); } }, isMenu ? '♪ Menu music ✓' : '♪ Use as menu music'),
       ),
-      h('div.ms-muted', null, 'Pick a song for a track or course in Track Studio / Course Builder. Settings chooses menu & match music.'),
+      h('div.ms-scroll', null,
+        h('h3', null, `MY SONGS (${this.custom.length})`),
+        h('div.ms-list', null, ...(this.custom.length ? this.custom.map(item) : [h('div.ms-muted', null, 'Nothing yet — start from a preset or a new song.')])),
+        h('h3', null, 'PRESETS'),
+        h('div.ms-list', null, ...PRESET_SONGS.map(item)),
+        h('div.ms-muted', null, 'Pick a song for a track or course in Track Studio / Course Builder. Settings chooses menu & match music.'),
+      ),
     );
+    L.querySelector('.ms-item.on')?.scrollIntoView({ block: 'nearest' });
   }
 
   renderMain() {
