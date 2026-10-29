@@ -198,6 +198,18 @@ export class Hud {
   }
 
   /** only the controls the players in this match are actually using */
+  /** fractions of the screen covered by the top bar and the bottom cards (for camera framing) */
+  safeInsets() {
+    const H = innerHeight || 1;
+    let top = 0, bottom = 0;
+    for (const el of [this.scores, this.obj]) { const r = el.getBoundingClientRect(); if (r.height && r.bottom < H * 0.5) top = Math.max(top, r.bottom / H); }
+    if (this.cards.style.display !== 'none') {
+      const r = this.cards.getBoundingClientRect();
+      if (r.height) { if (r.top > H * 0.5) bottom = Math.max(bottom, (H - r.top) / H); else top = Math.max(top, r.bottom / H); }
+    }
+    return { top: Math.min(0.4, top + 0.01), bottom: Math.min(0.45, bottom + 0.01) };
+  }
+
   controlsHelp(local: number[] = []) {
     const used = new Set<string>(local.map((i) => this.cfg.players[i]?.ctrl.type as string).filter((t) => !!t && t !== 'cpu' && t !== 'remote'));
     if (!used.size) used.add(document.body.classList.contains('dev-touch') ? 'touch' : 'kb1');

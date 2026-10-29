@@ -384,6 +384,11 @@ export class GameView {
   focus: number[] = []; // local player ids the camera should follow (race)
   camFwd = { x: 0, z: -1 }; // camera forward on the ground plane (controls are camera-relative)
   chaseYaw: number | null = null;
+  /** screen fractions covered by HUD at the top / bottom — the arena camera keeps every blade between them */
+  safe = { top: 0, bottom: 0 };
+  private fitCam = new THREE.PerspectiveCamera();
+  private fitDist = 0;
+  private fitV = new THREE.Vector3();
   /** split-screen: one chase camera per local racer */
   splits: { id: number; cam: THREE.PerspectiveCamera; pos: THREE.Vector3; tgt: THREE.Vector3; yaw: number | null; fwd: { x: number; z: number } }[] = [];
 
@@ -1026,9 +1031,16 @@ export class GameView {
         this.camPos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
         if (this.camera.fov !== 62) { this.camera.fov = 62; this.camera.updateProjectionMatrix(); }
       } else {
-        const dist = Math.min(S * 2.2, Math.max(11, spread * 1.7 + 8));
-        this.camTarget.lerp(new THREE.Vector3(cx, cy * 0.5, cz), Math.min(1, dt * 3));
-        this.camPos.lerp(new THREE.Vector3(cx * 0.9, cy * 0.5 + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2));
+        // fit every blade inside the part of the screen the HUD doesn't cover (works for portrait phones too)
+        const tgt = new THREE.Vector3(cx, cy * 0.5, cz);
+        const base = Math.min(S * 2.2, Math.max(11, spread * 1.7 + 8));
+        const need = this.fitDistance(pts, tgt, cx, cz, base);
+        this.fitDist = this.fitDist ? this.fitDist + (need - this.fitDist) * Math.min(1, dt * (need > this.fitDist ? 7 : 1.5)) : need;
+        const dist = this.fitDist;
+        // follow faster while blades are near the edge of the free band, gently otherwise
+        const urgent = need > dist * 1.05 ? 2 : 1;
+        this.camTarget.lerp(tgt, Math.min(1, dt * 3 * urgent));
+        this.camPos.lerp(new THREE.Vector3(cx * 0.9, cy * 0.5 + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2 * urgent));
       }
     }
     this.camera.position.copy(this.camPos);
@@ -1038,8 +1050,38 @@ export class GameView {
       this.shake = Math.max(0, this.shake - dt * 3);
     }
     this.camera.lookAt(this.camTarget);
+    if (!this.terrain.track && !this.attract && (this.safe.top || this.safe.bottom)) {
+      const W = innerWidth, H = innerHeight;
+      this.camera.setViewOffset(W, H, 0, ((this.safe.bottom - this.safe.top) / 2) * H, W, H);
+    } else if (this.camera.view) this.camera.clearViewOffset();
     const fx = this.camTarget.x - this.camPos.x, fz = this.camTarget.z - this.camPos.z, fl = Math.hypot(fx, fz) || 1;
     this.camFwd.x = fx / fl; this.camFwd.z = fz / fl;
+  }
+
+  /** smallest camera distance (along the usual arena angle) that keeps all points inside the HUD-free band */
+  private fitDistance(pts: { x: number; y: number; z: number }[], tgt: THREE.Vector3, cx: number, cz: number, base: number) {
+    const c = this.fitCam, cam = this.camera;
+    c.fov = cam.fov; c.aspect = cam.aspect; c.near = cam.near; c.far = cam.far;
+    const top = this.safe.top, bot = this.safe.bottom;
+    const ylim = Math.max(0.25, 1 - top - bot) * 0.86, xlim = this.camera.aspect < 1 ? 0.8 : 0.88; // extra margin so fast dashes stay in view
+    // the view offset recentres the projection on the free band, so the fit is symmetric about the centre
+    let d = base;
+    for (let it = 0; it < 3; it++) {
+      c.position.set(cx * 0.9, tgt.y + d * 0.82, cz + d * 0.72);
+      c.lookAt(tgt);
+      c.updateMatrixWorld();
+      c.updateProjectionMatrix();
+      let worst = 0;
+      for (const p of pts) {
+        for (const [ox, oz] of [[1.2, 0], [-1.2, 0], [0, 1.2], [0, -1.2]]) {
+          const v = this.fitV.set(p.x + ox, Math.max(0, p.y), p.z + oz).project(c);
+          worst = Math.max(worst, Math.abs(v.x) / xlim, Math.abs(v.y) / ylim);
+        }
+      }
+      if (worst <= 0) break;
+      d = Math.max(11, Math.min(this.terrain.size * 3, d * Math.max(0.85, worst)));
+    }
+    return d;
   }
 
   perfVersion = -1;

@@ -43,6 +43,7 @@ export class MatchScreen implements Screen {
   ended = false;
   wrongT = 0;
   splitWrongT: number[] = [];
+  safeT = 0;
   unsubRoom: (() => void) | null = null;
   wrap!: HTMLElement;
   private pendingCtl = new Map<number, { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }>();
@@ -217,6 +218,18 @@ export class MatchScreen implements Screen {
     this.view.update(renderState, dt, launchPower);
     this.hud.update(renderState, dt);
     this.hud.tips(renderState, this.view.focus);
+    this.safeT -= dt;
+    if (this.safeT <= 0) {
+      this.safeT = 0.5;
+      const safe = this.hud.safeInsets();
+      // on-screen touch buttons / joystick cover the bottom of the screen too
+      const H = innerHeight || 1;
+      for (const el of this.wrap.querySelectorAll<HTMLElement>('.touch-btns .tb, .touch-base')) {
+        const r = el.getBoundingClientRect();
+        if (r.height && r.top > H * 0.4) safe.bottom = Math.min(0.45, Math.max(safe.bottom, (H - r.top) / H + 0.01));
+      }
+      this.view.safe = safe;
+    }
     const TS = this.view.terrain.track;
     if (TS && renderState.phase === 'battle') {
       const isWrong = (t: (typeof renderState.tops)[number]) => t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog] < -2.5;
