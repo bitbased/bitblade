@@ -292,6 +292,15 @@ export class Sim {
     const s = this.s;
     const st = this.st[i];
     const c = this.controls[i];
+    // match over / race finished: brake to a stop where you are (no drifting off an edge with no one steering)
+    if (t.alive && (s.phase === 'matchEnd' || this.safeFinished(t))) {
+      const k = Math.max(0, 1 - dt * 2.5);
+      t.vx *= k; t.vz *= k;
+      if (t.spin < 0.4) t.spin = 0.4;
+      // already sailing off an edge when you crossed the line: quietly put you back on the road, no penalty
+      const TS = this.terrain.track;
+      if (TS && this.safeFinished(t) && t.y < this.ground(t.x, t.z) - 6) { this.placeTop(t, TS.x[t.prog], TS.z[t.prog], 1); t.vx = t.vz = 0; }
+    }
     for (const k in t.fx) { const kk = k as keyof typeof t.fx; if (t.fx[kk] > 0) t.fx[kk] = Math.max(0, t.fx[kk] - dt); }
     t.dashCd = Math.max(0, t.dashCd - dt);
     t.jumpCd = Math.max(0, t.jumpCd - dt);
@@ -470,6 +479,7 @@ export class Sim {
       for (let j = i + 1; j < tops.length; j++) {
         const A = tops[i], B = tops[j];
         if (!A.alive || !B.alive) continue;
+        if (this.safeFinished(A) || this.safeFinished(B)) continue; // finished racers are ghosts
         const dx = B.x - A.x, dz = B.z - A.z, dy = B.y - A.y;
         const rA = this.radius(A), rB = this.radius(B);
         const dist = Math.hypot(dx, dz);
@@ -615,8 +625,13 @@ export class Sim {
   }
 
   // ---------------- finishes / respawns ----------------
+  /** a racer who has crossed the line: coasts to a stop as a ghost while the rest finish (can't be knocked out) */
+  safeFinished(t: TopState) { return this.cfg.mode === 'race' && t.finishT >= 0; }
+
   finish(t: TopState, type: FinishType, by = -1) {
     if (!t.alive) return;
+    // once the round/match is decided (or you've finished the race) nothing can knock you out or cost a life
+    if (this.s.phase !== 'battle' || this.safeFinished(t)) return;
     t.alive = false;
     t.out = type;
     t.outT = 0;
