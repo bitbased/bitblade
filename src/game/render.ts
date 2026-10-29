@@ -375,6 +375,7 @@ export class GameView {
   flagViews: { pole: THREE.Group; orb: THREE.Mesh; base: THREE.Mesh }[] = [];
   zoneMesh: THREE.Mesh | null = null;
   boostMeshes: THREE.Mesh[] = [];
+  spinPads: { swirl: THREE.Group; beam: THREE.Mesh; ring: THREE.Mesh; x: number; z: number; r: number }[] = [];
   camTarget = new THREE.Vector3();
   camPos = new THREE.Vector3();
   shake = 0;
@@ -627,10 +628,29 @@ export class GameView {
           break;
         }
         case 'spinpad': {
-          const pad = new THREE.Mesh(new THREE.RingGeometry((m.r ?? 1.1) * 0.6, m.r ?? 1.1, 48), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.6, toneMapped: false, depthWrite: false }));
-          pad.rotation.x = -Math.PI / 2;
-          pad.position.set(m.x, y + 0.04, m.z);
-          this.scene.add(pad);
+          const r = m.r ?? 1.1;
+          const col = '#38ffb0';
+          const g = new THREE.Group();
+          g.position.set(m.x, y + 0.04, m.z);
+          const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.82, r, 48), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+          ring.rotation.x = -Math.PI / 2;
+          g.add(ring);
+          // three swirl arms that spin (so it reads as "re-spin here")
+          const swirl = new THREE.Group();
+          const armMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
+          for (let k = 0; k < 3; k++) {
+            const arm = new THREE.Mesh(new THREE.RingGeometry(r * 0.25, r * 0.7, 24, 1, (k * Math.PI * 2) / 3, Math.PI / 2.2), armMat);
+            arm.rotation.x = -Math.PI / 2;
+            swirl.add(arm);
+          }
+          swirl.position.y = 0.01;
+          g.add(swirl);
+          // soft light column so pads are visible across the arena
+          const beam = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r, 2.2, 32, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.1, toneMapped: false, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+          beam.position.y = 1.1;
+          g.add(beam);
+          this.scene.add(g);
+          this.spinPads.push({ swirl, beam, ring, x: m.x, z: m.z, r });
           break;
         }
       }
@@ -793,6 +813,14 @@ export class GameView {
       else if (p.kind === 'saw') { h.m.position.set(p.ax, this.groundY(p.ax, p.az), p.az); h.m.rotation.y = p.angle; if (Math.random() < 0.3) this.particles.emit(p.ax, h.m.position.y + 0.35, p.az, (Math.random() - 0.5) * 6, 2, (Math.random() - 0.5) * 6, new THREE.Color('#ffc46b'), 0.07, 0.25); }
     }
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
+    // spin pads: swirl turns; flares up while someone is re-spinning on it
+    for (const p of this.spinPads) {
+      const busy = s.tops.some((t) => t.alive && t.spin < 1 && Math.hypot(t.x - p.x, t.z - p.z) < p.r);
+      p.swirl.rotation.y += dt * (busy ? 9 : 2.5);
+      const bm = p.beam.material as THREE.MeshBasicMaterial;
+      bm.opacity += ((busy ? 0.32 : 0.08 + 0.04 * Math.sin(this.time * 3 + p.x)) - bm.opacity) * Math.min(1, dt * 6);
+      p.ring.scale.setScalar(busy ? 1 + 0.06 * Math.sin(this.time * 18) : 1);
+    }
     // boxes
     s.boxes.forEach((b, i) => {
       const m = this.boxMeshes[i];

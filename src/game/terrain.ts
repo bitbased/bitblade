@@ -635,6 +635,47 @@ BUILTIN_ARENAS.push(
   trefoilTrack(),
 );
 
+/**
+ * Make sure every built-in arena has spin pads to fight over (S: 2, M: 3, L: 4). Pads go on flat, solid ground,
+ * clear of spawns, item boxes, the KOTH zone and each other.
+ */
+function ensureSpinPads(a: ArenaDef) {
+  if (a.track) return;
+  const want = arenaSize(a) === 'S' ? 2 : arenaSize(a) === 'M' ? 3 : 4;
+  const have = a.markers.filter((m) => m.kind === 'spinpad').length;
+  if (have >= want) return;
+  const hAt = (x: number, z: number) => (a.stadium ? stadiumHeight(a.stadium, x, z) : courseHeight(a.course!, x, z));
+  const half = a.stadium ? a.stadium.radius : (Math.max(a.course!.w, a.course!.h) * a.course!.tile) / 2;
+  let tol = 0.35; // relaxed for all-bowl arenas that have no truly flat ground
+  const flat = (x: number, z: number) => {
+    const h0 = hAt(x, z);
+    if (h0 <= VOID) return false;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const h1 = hAt(x + dx * 1.3, z + dz * 1.3); if (h1 <= VOID || Math.abs(h1 - h0) > tol) return false; }
+    return true;
+  };
+  const taken = a.markers.filter((m) => m.kind !== 'gem');
+  const clear = (x: number, z: number) => taken.every((m) => Math.hypot(m.x - x, m.z - z) > (m.kind === 'zone' ? (m.r ?? 3) + 2 : 3.2));
+  const cands: { x: number; z: number; score: number }[] = [];
+  for (let pass = 0; pass < 3 && cands.length < want; pass++, tol += 0.3) for (const f of [0.42, 0.55, 0.68, 0.3, 0.8]) {
+    for (let k = 0; k < 24; k++) {
+      const ang = (k / 24) * Math.PI * 2 + f;
+      const x = Math.cos(ang) * half * f, z = Math.sin(ang) * half * f;
+      if (flat(x, z) && clear(x, z)) cands.push({ x, z, score: 0 });
+    }
+  }
+  // spread them out: greedily take the candidate farthest from every pad so far
+  const placed = a.markers.filter((m) => m.kind === 'spinpad').map((m) => ({ x: m.x, z: m.z }));
+  while (placed.length < want && cands.length) {
+    let best = -1, bd = -1;
+    cands.forEach((c, i) => { const d = placed.length ? Math.min(...placed.map((p) => Math.hypot(p.x - c.x, p.z - c.z))) : Math.hypot(c.x, c.z); if (d > bd) { bd = d; best = i; } });
+    if (best < 0 || (placed.length && bd < 5)) break;
+    const c = cands.splice(best, 1)[0];
+    placed.push(c);
+    a.markers.push({ kind: 'spinpad', x: +c.x.toFixed(2), z: +c.z.toFixed(2), r: 1.2 });
+  }
+}
+for (const a of BUILTIN_ARENAS) ensureSpinPads(a);
+
 export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';
 export const SIZE_LABEL: Record<ArenaSize, string> = { S: 'SMALL', M: 'MEDIUM', L: 'LARGE', TRACK: 'TRACK' };
 export function arenaSize(a: ArenaDef): ArenaSize {

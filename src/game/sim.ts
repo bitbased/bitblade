@@ -392,6 +392,9 @@ export class Sim {
         const ride = t.spin * (st.tipFriction + 0.35) * 9 * t.dir;
         ax += -nz * ride; az += nx * ride;
         if (Math.random() < dt * 20) this.ev({ k: 'grind', x: t.x, y: t.y, z: t.z, id: t.id });
+        // grind regen: a fast wall ride feeds spin back in (rewards style; slow crawling up a wall doesn't count)
+        const sp = Math.hypot(t.vx, t.vz);
+        if (sp > 6 && t.spin < 1) t.spin = Math.min(1, t.spin + Math.min(0.08, 0.05 + (sp - 6) * 0.005) * dt);
       }
     } else {
       t.tx *= 1 - dt * 2; t.tz *= 1 - dt * 2;
@@ -541,7 +544,8 @@ export class Sim {
           if (!top.alive || !top.grounded) continue;
           const dx = top.x - m.x, dz = top.z - m.z;
           if (m.kind === 'spinpad') {
-            if (Math.hypot(dx, dz) < (m.r ?? 1.1)) top.spin = Math.min(1, top.spin + 0.09 * dt);
+            // spin pads: park on one to re-spin (worth fighting over); fastest when nearly spun out
+            if (Math.hypot(dx, dz) < (m.r ?? 1.1)) top.spin = Math.min(1, top.spin + (0.13 + (1 - top.spin) * 0.12) * dt);
           } else {
             const a = m.rot ?? 0, fx = Math.sin(a), fz = Math.cos(a);
             const along = dx * fx + dz * fz, side = dx * fz - dz * fx;
@@ -666,7 +670,10 @@ export class Sim {
       const pos = (t.place || racers) / racers;
       pool = pos <= 0.2 ? ['mine', 'shield', 'shock', 'mine'] : pos < 0.6 ? ['turbo', 'shield', 'mine', 'comet', 'shock', 'surge'] : ['turbo', 'turbo', 'comet', 'comet', 'surge', 'titan', 'vortex'];
     }
-    t.item = pool[Math.floor(this.rnd() * pool.length)];
+    // smart surge odds: the lower your spin, the likelier a Spin Surge; near full spin you won't get one
+    const pSurge = Math.max(0, Math.min(0.55, (0.72 - t.spin) * 1.5));
+    if (t.spin > 0.85) pool = pool.filter((k) => k !== 'surge');
+    t.item = this.rnd() < pSurge ? 'surge' : pool[Math.floor(this.rnd() * pool.length)];
     t.roll = 1.2;
   }
 
