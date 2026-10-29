@@ -128,12 +128,12 @@ export class MatchScreen implements Screen {
     for (const sp of specs) {
       const c = inp.read(sp, top);
       if (Math.hypot(c.mx, c.mz) > Math.hypot(out.mx, out.mz)) { out.mx = c.mx; out.mz = c.mz; }
-      out.dash ||= c.dash; out.jump ||= c.jump; out.item ||= c.item; out.special ||= c.special;
+      out.dash ||= c.dash; out.jump ||= c.jump; out.item ||= c.item; out.special ||= c.special; out.hold ||= c.hold;
     }
     if (inp.mouseButtons & 7 || inp.mousePressed & 6) {
       const c = inp.read({ type: 'mouse' }, top);
       if (Math.hypot(c.mx, c.mz) > 0) { out.mx = c.mx; out.mz = c.mz; }
-      out.dash ||= c.dash;
+      out.dash ||= c.dash; out.hold ||= c.hold;
     }
     return out;
   }

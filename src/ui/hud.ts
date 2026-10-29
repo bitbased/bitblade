@@ -189,7 +189,8 @@ export class Hud {
       if (c.low) {
         const key = ITEM_KEY[this.cfg.players[i]?.ctrl.type ?? ''] ?? 'ITEM';
         const crit = t.spin < 0.18;
-        if (t.item === 'surge' && t.roll <= 0) html = `<b>USE SPIN SURGE</b> <i class="k">${key}</i>`;
+        if (t.od) html = `<b>${crit ? 'SPIN CRITICAL' : 'LOW SPIN'}</b> let go of dash — overdrive is burning your spin`;
+        else if (t.item === 'surge' && t.roll <= 0) html = `<b>USE SPIN SURGE</b> <i class="k">${key}</i>`;
         else if (race) html = `<b>${crit ? 'SPIN CRITICAL' : 'LOW SPIN'}</b> carve the track edge · roll over a <span class="g-pad">green pad</span> · grab item boxes`;
         else html = `<b>${crit ? 'SPIN CRITICAL' : 'LOW SPIN'}</b> ${pads ? 'park on a <span class="g-pad">green spin pad</span> · ' : ''}wall-ride fast · grab item boxes`;
         if (crit) c.tip.classList.add('crit'); else c.tip.classList.remove('crit');

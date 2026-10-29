@@ -414,6 +414,10 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   if (lv < 3) { const wob = (3 - lv) * 0.12 * Math.sin(s.t * 2.1 + ai.aimErr); const cx = c.mx, cz = c.mz; c.mx = cx * Math.cos(wob) - cz * Math.sin(wob); c.mz = cx * Math.sin(wob) + cz * Math.cos(wob); }
   // dash: on straights when slower than we could be, and right before jumps
   const straight = worst < 0.012;
+  // overdrive (hold dash) up steep climbs while there's spin to spare
+  const climb = T.y[(t.prog + 24) % T.n] - T.y[t.prog];
+  c.hold = lv >= 2 && t.grounded && climb > 2.5 && t.spin > 0.55 && straight;
+  if (c.hold && !t.od && t.dashCd <= 0) c.dash = true;
   if (t.dashCd <= 0 && t.grounded) {
     if (gapK >= 0 && gapK < 14 && speed < 15) c.dash = true;
     else if (straight && speed < target - 1 && t.spin > 0.5 && Math.random() < dt * [0, 0.6, 1.5, 3][lv]) c.dash = true;

@@ -53,7 +53,7 @@ export interface MatchConfig {
   rubber?: number;
 }
 
-export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }
+export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean; /** dash button held down (overdrive) */ hold?: boolean }
 export const NO_CONTROL: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
 
 export interface TopFx { turbo: number; shield: number; titan: number; vortex: number; frozen: number; special: number; dash: number; /** Spin Surge overcharge time left */ surge: number }
@@ -72,6 +72,8 @@ export interface TopState {
   respawnT: number; lastHit: number; lastHitT: number;
   /** seconds of respawn grace left: obstacles pass through you (no knock-off-the-edge loops) */
   graceT?: number;
+  /** overdrive: dash held past the burst — faster (and climbs harder) at the cost of spin, steers wider */
+  od?: boolean; holdT?: number;
   launch: number; launchLocked: boolean;
   drone?: boolean; scale: number;
   /** quest: index (into the arena's markers) of the last checkpoint touched, -1 = start; drones: their hive marker */

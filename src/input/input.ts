@@ -5,11 +5,11 @@ const K1 = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], dash
 const K2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], dash: ['Enter', 'Numpad0'], jump: ['ShiftRight', 'NumpadDecimal'], item: ['Slash', 'NumpadEnter'], special: ['Period', 'Numpad1'] };
 
 export const CONTROL_HELP: Record<string, string> = {
-  kb1: 'WASD move · Space dash · F/LShift jump · E item · Q special',
-  kb2: 'Arrows move · Enter dash · RShift jump · / item · . special',
-  mouse: 'Hold LMB to steer to cursor · RMB dash · Space jump · E item · Q special',
-  pad: 'Stick move · A/RT dash · B/LB jump · X/RB item · Y/LT special',
-  touch: 'Left thumb joystick (or tilt) · right buttons: dash / jump / item / special',
+  kb1: 'WASD move · Space dash (hold: overdrive) · F/LShift jump · E item · Q special',
+  kb2: 'Arrows move · Enter dash (hold: overdrive) · RShift jump · / item · . special',
+  mouse: 'Hold LMB to steer to cursor · RMB dash (hold: overdrive) · Space jump · E item · Q special',
+  pad: 'Stick move · A/RT dash (hold: overdrive) · B/LB jump · X/RB item · Y/LT special',
+  touch: 'Left thumb joystick (or tilt) · right buttons: dash (hold: overdrive) / jump / item / special',
   cpu: 'Computer controlled',
   remote: 'Online player',
 };
@@ -144,6 +144,7 @@ export class Input {
       c.mx = (this.anyKey(L.right) ? 1 : 0) - (this.anyKey(L.left) ? 1 : 0);
       c.mz = (this.anyKey(L.down) ? 1 : 0) - (this.anyKey(L.up) ? 1 : 0);
       c.dash = this.anyPressed(L.dash);
+      c.hold = this.anyKey(L.dash);
       c.jump = this.anyPressed(L.jump);
       c.item = this.anyPressed(L.item);
       c.special = this.anyPressed(L.special);
@@ -159,6 +160,7 @@ export class Input {
           if (this.mouseButtons & 1) { c.mx = (dx / d) * mag; c.mz = (dz / d) * mag; }
           if (this.mousePressed & 4) { c.mx = dx / d; c.mz = dz / d; c.dash = true; }
           if (this.mousePressed & 2) { c.mx = dx / d; c.mz = dz / d; c.dash = true; }
+          c.hold = !!(this.mouseButtons & 6);
         }
         c.jump = this.anyPressed(['Space']);
         c.item = this.anyPressed(['KeyE']) || !!(this.mousePressed & 8);
@@ -181,6 +183,7 @@ export class Input {
         if (this.padBtn(i, 13)) y = 1;
         c.mx = x; c.mz = y;
         c.dash = this.padEdge(i, 0) || this.padEdge(i, 7);
+        c.hold = this.padBtn(i, 0) || this.padBtn(i, 7);
         c.jump = this.padEdge(i, 1) || this.padEdge(i, 4);
         c.item = this.padEdge(i, 2) || this.padEdge(i, 5);
         c.special = this.padEdge(i, 3) || this.padEdge(i, 6);
@@ -191,6 +194,7 @@ export class Input {
         if (t) {
           c.mx = t.jx; c.mz = t.jy;
           c.dash = t.edge.dash; c.jump = t.edge.jump; c.item = t.edge.item; c.special = t.edge.special;
+          c.hold = t.dashHeld;
         }
         if (spec.gyro && this.gyro.on) {
           const gx = (this.gyro.gamma - this.gyro.g0) / 25, gz = (this.gyro.beta - this.gyro.b0) / 25;
@@ -224,6 +228,7 @@ export class TouchControls {
   root: HTMLDivElement;
   jx = 0; jy = 0;
   edge = { dash: false, jump: false, item: false, special: false };
+  dashHeld = false;
   private stickId = -1;
   private cx = 0; private cy = 0;
   private knob: HTMLDivElement;
@@ -282,10 +287,13 @@ export class TouchControls {
         e.preventDefault();
         const k = b.dataset.b as keyof TouchControls['edge'];
         this.edge[k] = true;
+        if (k === 'dash') this.dashHeld = true;
         b.classList.add('down');
         navigator.vibrate?.(8);
       }, { passive: false });
-      b.addEventListener('touchend', () => b.classList.remove('down'));
+      const up = () => { b.classList.remove('down'); if (b.dataset.b === 'dash') this.dashHeld = false; };
+      b.addEventListener('touchend', up);
+      b.addEventListener('touchcancel', up);
     });
   }
   endFrame() { this.edge.dash = this.edge.jump = this.edge.item = this.edge.special = false; }

@@ -172,7 +172,7 @@ export class Sim {
   setControl(i: number, c: Control) {
     const p = this.controls[i];
     if (!p) return;
-    p.mx = c.mx; p.mz = c.mz;
+    p.mx = c.mx; p.mz = c.mz; p.hold = c.hold;
     p.dash ||= c.dash; p.jump ||= c.jump; p.item ||= c.item; p.special ||= c.special;
   }
 
@@ -377,11 +377,20 @@ export class Sim {
     const st = this.st[i];
     const c = this.controls[i];
     let ax = 0, az = 0;
+    // overdrive: keep holding dash after the burst → more speed and climbing push, paid for in spin, steering wider
+    t.holdT = c.hold && control && t.alive ? (t.holdT ?? 0) + dt : 0;
+    t.od = t.holdT > 0.35 && t.spin > 0.12;
+    if (t.od) t.spin -= (this.cfg.mode === 'race' ? 0.09 : 0.13) * dt;
     if (control) {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      let acc = 17 * this.rpmK(t) * (this.cfg.mode === 'race' ? 1.2 * (this.draft[i] ? 1.12 : 1) : 1) * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      if (t.od) {
+        // wider turns: the part of your input across your travel direction is weaker
+        const vl0 = Math.hypot(t.vx, t.vz);
+        if (vl0 > 2) { const ux = t.vx / vl0, uz = t.vz / vl0, along = ix * ux + iz * uz; ix = ux * along + (ix - ux * along) * 0.6; iz = uz * along + (iz - uz * along) * 0.6; }
+      }
+      let acc = 17 * this.rpmK(t) * (this.cfg.mode === 'race' ? 1.2 * (this.draft[i] ? 1.12 : 1) : 1) * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.od ? 1.45 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
       // counter-steering bites harder so low-grip tips can still turn and stop
       const vl = Math.hypot(t.vx, t.vz);
       if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
@@ -438,7 +447,7 @@ export class Sim {
     }
     const hs = Math.hypot(t.vx, t.vz);
     const race = this.cfg.mode === 'race';
-    const cap = (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const cap = (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) * (t.od ? 1.22 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
