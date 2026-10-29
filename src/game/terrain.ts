@@ -900,7 +900,8 @@ BUILTIN_ARENAS.push(
   // 2. Sky Spire: a switchback climb up ~8 levels; narrow ledges, kicker gaps, a hive halfway up
   walkLevel('quest-sky-steps', 'Sky Spire', 'Switchback climb up a floating spire: ramps, stairs and kicker gaps on narrow ledges, about 13m of height to the top.', THEMES.sunset,
     { width: 1, hive: 7 },
-    '..E./..k .s..C' + 'R.R' + './.E.k .H..s.Z.C' + 'L.L' + '/.k .E.s..C..' + 'R.R' + '..s.E.k ./..E.G'),
+    // switchbacks turn LEFT first so each higher row is further north — away from the camera, never in front of you
+    '..E./..k .s..C' + 'L.L' + './.E.k .H..s.Z.C' + 'R.R' + '/.k .E.s..C..' + 'L.L' + '..s.E.k ./..E.G'),
   // 4. Glacier Ascent: a wide icy staircase climbing north-east, with jumps between terraces
   walkLevel('quest-glacier', 'Glacier Ascent', 'Climb an icy staircase of terraces: stairs and ramps up, kicker leaps between ledges, two hives — about 14m up.', THEMES.ice,
     { width: 2, walls: true, hive: 8 },
