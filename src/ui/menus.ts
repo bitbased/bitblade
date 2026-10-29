@@ -108,12 +108,22 @@ export class MainMenu extends Base {
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library' }, '✓')
         : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); } }, '💾')) : null,
+      h('button.mm-ic.nav' + (on && musicPrefs.radio ? '.on' : ''), {
+        title: on && musicPrefs.radio ? 'Radio on: a new surprise song every 45s or so — click to stay on this one' : 'Radio: keep playing new surprise songs (each one at least 45s)',
+        onclick: () => { musicPrefs.radio = !(on && musicPrefs.radio); saveMusicPrefs(); if (!on) roll(); else { sfx.useMusic('menu'); redo(); } },
+      }, '📻'),
       on ? h('button.mm-ic.nav', { title: 'Back to your usual music', onclick: () => { musicPrefs.menu = musicPrefs.menuPrev && musicPrefs.menuPrev !== 'surprise' ? musicPrefs.menuPrev : 'neon-drive'; saveMusicPrefs(); sfx.useMusic('menu'); redo(); } }, '✕') : null,
     );
     this.chip = el;
     return el;
   }
   chip: HTMLElement | null = null;
+  update(dt: number) {
+    super.update(dt);
+    // radio / random switched songs by itself: show the new name
+    this.app.sfx.onSongChange = () => { const old = this.chip; if (old?.isConnected) old.replaceWith(this.musicChip()); };
+  }
+  unmount() { this.app.sfx.onSongChange = null; super.unmount(); }
   onBack() { this.app.go('title'); }
 }
 

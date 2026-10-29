@@ -18,6 +18,9 @@ export class Sfx {
   private cycleLoops = 0;
   /** the menu's 🎲 Surprise song: made fresh each session, kept only in memory until you save it */
   surprise: Song | null = null;
+  /** told whenever the music changes by itself (radio / random), e.g. so the menu can show the new name */
+  onSongChange: ((s: Song | null) => void) | null = null;
+  private songStart = 0;
   private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
 
   constructor() {
@@ -149,6 +152,7 @@ export class Sfx {
 
   /** play a specific song (Music Studio preview); restart=false keeps going if it's already this song */
   playSong(song: Song | null, restart = true) {
+    if (restart || this.wanted?.id !== song?.id) this.songStart = this.ctx?.currentTime ?? 0;
     this.wanted = song;
     this.cycleLoops = 0;
     if (this.player) { this.player.onLoop = null; this.player.solo = null; this.player.play(song, restart); }
@@ -171,7 +175,17 @@ export class Sfx {
     this.playSong(song, !same);
     if (random && this.player) {
       // random: a new song every couple of times round
-      this.player.onLoop = () => { if (++this.cycleLoops >= 2) { this.cycleLoops = 0; const n = randomSong(this.wanted?.id); this.wanted = n; this.player!.play(n); } };
+      this.player.onLoop = () => { if (++this.cycleLoops >= 2) { this.cycleLoops = 0; const n = randomSong(this.wanted?.id); this.wanted = n; this.player!.play(n); this.onSongChange?.(n); } };
+    }
+    if (pref === 'surprise' && where === 'menu' && musicPrefs.radio && this.player) {
+      // 📻 radio: once a song has had 45s, the next time it comes round to its start, a brand-new one takes over
+      this.player.onLoop = () => {
+        if (!this.ctx || this.ctx.currentTime - this.songStart < 45) return;
+        const n = surpriseSong();
+        this.surprise = n; this.wanted = n; this.songStart = this.ctx.currentTime;
+        this.player!.play(n);
+        this.onSongChange?.(n);
+      };
     }
   }
 

@@ -231,7 +231,7 @@ export function sanitizeSong(s: Partial<Song>): Song {
  * What plays where. menu: a song id, 'random' (cycles) or 'off'. game: 'track' (each track/course's own song,
  * else a fitting preset), a song id (always that), 'random' (cycles) or 'off'.
  */
-export const musicPrefs = { menu: 'neon-drive', game: 'track', /** what menu music to go back to when Surprise is switched off */ menuPrev: 'neon-drive' };
+export const musicPrefs = { menu: 'neon-drive', game: 'track', /** what menu music to go back to when Surprise is switched off */ menuPrev: 'neon-drive', /** 📻 radio: surprise songs keep coming (each ≥45s, switching at the end of a loop) */ radio: false };
 try { Object.assign(musicPrefs, JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')); } catch { /* ignore */ }
 export function saveMusicPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(musicPrefs)); } catch { /* ignore */ } }
 
