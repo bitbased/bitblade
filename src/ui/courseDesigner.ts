@@ -56,7 +56,8 @@ const DIRECTIONAL = new Set<PieceKind>(['quarter', 'half', 'corner', 'kicker', '
 const PIECE_ABBR: Record<PieceKind, string> = { flat: 'F', bowl: 'B', quarter: 'Q', half: 'H', corner: 'C', kicker: 'K', spine: 'S', hump: 'X', ramp: 'R', pit: 'P', wall: 'W', dome: 'D', cradle: 'U', bank: 'N', pyramid: 'Y', volcano: 'V', bumps: '~', stairs: 'T' };
 const PIECE_COL: Record<PieceKind, string> = { flat: '#39405e', bowl: '#2a6f9e', quarter: '#3d7fcf', half: '#4f63d6', corner: '#3b9ec9', kicker: '#d9a326', spine: '#c95c2a', hump: '#7d58c9', ramp: '#3fae6a', pit: '#111', wall: '#8a8aa8', dome: '#a2468f', cradle: '#26897a', bank: '#5a8f3a', pyramid: '#b0607a', volcano: '#c23a1e', bumps: '#3a8f8f', stairs: '#7a9f3a' };
 const PIECE_GROUPS: { label: string; kinds: PieceKind[] }[] = [
-  { label: 'POOL', kinds: ['flat', 'quarter', 'corner', 'half', 'bowl', 'cradle'] },
+  // (no separate Corner: a corner is the quarter pipe aimed at a tile corner)
+  { label: 'POOL', kinds: ['flat', 'quarter', 'half', 'bowl', 'cradle'] },
   { label: 'STREET', kinds: ['kicker', 'bank', 'hump', 'pyramid', 'wall', 'stairs'] },
   { label: 'FEATURES', kinds: ['spine', 'dome', 'volcano', 'bumps', 'ramp', 'pit'] },
 ];
@@ -270,6 +271,8 @@ class CourseEditor {
   paintLevel = 0;
   brush = 1;
   autoOrient = true;
+  /** single-tile placement: the edge / corner of the tile under the cursor sets the rotation (no R needed) */
+  aimCursor = true;
   symX = false;
   symZ = false;
   snap: SnapMode = 'grid';
@@ -482,13 +485,13 @@ class CourseEditor {
       for (const g of PIECE_GROUPS) {
         const pal = h('div.cd-palette');
         for (const k of g.kinds) {
-          const rot = DIRECTIONAL.has(k) ? this.paintRot : 0;
-          const key = k + ':' + rot;
+          const pk = k === this.pieceKind ? this.paintPiece() : { kind: k, rot: DIRECTIONAL.has(k) ? this.paintRot % 4 : 0 };
+          const key = pk.kind + ':' + pk.rot;
           let ic = this.iconCache.get(key);
-          if (!ic) { ic = pieceIcon(k, rot); this.iconCache.set(key, ic); }
+          if (!ic) { ic = pieceIcon(pk.kind, pk.rot); this.iconCache.set(key, ic); }
           const cv = ic.cloneNode() as HTMLCanvasElement;
           cv.getContext('2d')!.drawImage(ic, 0, 0);
-          pal.append(h('button.cd-pal' + (this.pieceKind === k ? '.cd-on' : ''), { title: PIECES[k].desc, onclick: () => { this.pieceKind = k; this.renderRight(); this.refreshOverlay(true); } }, cv, h('span', null, PIECES[k].label)));
+          pal.append(h('button.cd-pal' + (this.pieceKind === k ? '.cd-on' : ''), { title: k === 'quarter' ? 'Curved pool wall — point at a tile edge for a quarter pipe, at a corner for a rounded corner' : PIECES[k].desc, onclick: () => { this.pieceKind = k; if (k !== 'quarter') this.paintRot %= 4; this.renderRight(); this.refreshOverlay(true); } }, cv, h('span', null, k === 'quarter' ? 'Quarter / Corner' : PIECES[k].label)));
         }
         R.append(h('div.cd-sub', null, g.label), pal);
       }
@@ -496,12 +499,13 @@ class CourseEditor {
         h('div.cd-row', null,
           h('label', null, 'Rotate'),
           h('button.cd-chip', { title: 'Rotate left (Q)', onclick: () => this.rotatePaint(-1) }, '⟲'),
-          h('span.cd-val', null, `${this.paintRot * 90}°`),
+          h('span.cd-val', null, `${(this.paintRot % 4) * 90}°${this.paintRot >= 4 ? ' corner' : ''}`),
           h('button.cd-chip', { title: 'Rotate right (E / R / wheel)', onclick: () => this.rotatePaint(1) }, '⟳'),
           h('label', null, 'Level'),
           h('button.cd-chip', { title: 'Level down ([)', onclick: () => this.setPaintLevel(this.paintLevel - 1) }, '−'),
           h('span.cd-val', null, String(this.paintLevel)),
           h('button.cd-chip', { title: 'Level up (])', onclick: () => this.setPaintLevel(this.paintLevel + 1) }, '+')),
+        h('div.cd-row', null, this.toggleBtn('Aim at cursor', this.aimCursor, () => { this.aimCursor = !this.aimCursor; this.renderRight(); this.refreshOverlay(true); }, 'Point at the edge or corner of the tile you want the wall / lip / high side on — the piece turns to it (centre of the tile: auto-orient decides)')),
         h('div.cd-row', null, this.toggleBtn('Auto-orient walls', this.autoOrient, () => { this.autoOrient = !this.autoOrient; this.renderRight(); this.refreshOverlay(true); }, 'Walls/corners face outward, kickers face open space, ramps face higher tiles')),
         brushRow(), symRow(),
         h('div.cd-row', null,
@@ -561,8 +565,10 @@ class CourseEditor {
   }
 
   rotatePaint(d: number) {
-    this.paintRot = (this.paintRot + d + 4) % 4;
-    if (this.autoOrient && DIRECTIONAL.has(this.pieceKind)) { this.autoOrient = false; this.app.toast('Auto-orient off — manual rotation'); }
+    // the quarter pipe turns through its 4 edges, then its 4 corners
+    const n = this.pieceKind === 'quarter' ? 8 : 4;
+    this.paintRot = (this.paintRot + d + n) % n;
+    if ((this.autoOrient || this.aimCursor) && DIRECTIONAL.has(this.pieceKind)) { this.autoOrient = false; this.aimCursor = false; this.app.toast('Auto-orient and aim-at-cursor off — manual rotation'); }
     this.renderRight();
     this.refreshOverlay(true);
   }
@@ -837,6 +843,33 @@ class CourseEditor {
     return true;
   }
 
+  /**
+   * Aim at cursor: where the cursor sits inside the hovered tile picks the rotation. Near an edge → the wall / high
+   * side / kicker lip goes on that edge; near a corner → a corner piece (a quarter-pipe becomes one) facing it;
+   * the middle of the tile → null (auto-orient / manual rotation decide).
+   */
+  /** the piece + rotation manual rotation gives (quarter pipe rotations 4-7 are its corners) */
+  paintPiece(): { kind: PieceKind; rot: number } {
+    if (this.pieceKind === 'quarter' && this.paintRot >= 4) return { kind: 'corner', rot: this.paintRot - 4 };
+    return { kind: this.pieceKind, rot: this.paintRot % 4 };
+  }
+
+  cursorAim(): { kind: PieceKind; rot: number } | null {
+    const k = this.pieceKind, p = this.hoverPt, cell = this.hover, c = this.def.course!;
+    if (!this.aimCursor || !p || !cell || !DIRECTIONAL.has(k) || this.brush !== 1 || this.drag?.kind === 'rect') return null;
+    const u = (p.x + (c.w * c.tile) / 2) / c.tile - cell.i - 0.5, v = (p.z + (c.h * c.tile) / 2) / c.tile - cell.j - 0.5;
+    if (Math.max(Math.abs(u), Math.abs(v)) < 0.17) return null;
+    const nearCorner = Math.abs(u) > 0.27 && Math.abs(v) > 0.27;
+    if (k === 'corner' || (k === 'quarter' && nearCorner)) {
+      // (a corner piece aimed at an edge: the corner of that edge nearest the cursor)
+      const sx = u >= 0 ? 1 : -1, sz = v >= 0 ? 1 : -1;
+      return { kind: 'corner', rot: Math.max(0, CORNER_DIR.findIndex(([x, z]) => x === sx && z === sz)) };
+    }
+    // EDGE_DIR: rot0 +z, rot1 -x, rot2 -z, rot3 +x
+    const rot = Math.abs(u) > Math.abs(v) ? (u > 0 ? 3 : 1) : v > 0 ? 0 : 2;
+    return { kind: k, rot: k === 'half' || k === 'spine' ? rot % 2 : rot };
+  }
+
   /** auto orientation for one placed piece based on its final neighbourhood */
   autoFor(p: Piece): { kind: PieceKind; rot: number } | null {
     const c = this.def.course!;
@@ -874,10 +907,13 @@ class CourseEditor {
     const all = this.withMirrors(cells);
     let changed = false;
     const painted: Piece[] = [];
+    const aim = op === 'paint' && cells.length === 1 ? this.cursorAim() : null;
     for (const { i, j, mx, mz } of all) {
       if (op === 'paint') {
-        const rot = DIRECTIONAL.has(this.pieceKind) ? CourseEditor.mirrorRot(this.pieceKind, this.paintRot, mx, mz) : 0;
-        if (this.setPiece(i, j, this.pieceKind, rot, this.paintLevel)) changed = true;
+        const pp = aim ?? this.paintPiece();
+        const kind = pp.kind;
+        const rot = DIRECTIONAL.has(kind) ? CourseEditor.mirrorRot(kind, pp.rot, mx, mz) : 0;
+        if (this.setPiece(i, j, kind, rot, this.paintLevel)) changed = true;
         const p = pieceAt(c, i, j);
         if (p) painted.push(p);
       } else if (op === 'erase') {
@@ -889,7 +925,7 @@ class CourseEditor {
         if (nl !== p.level) { p.level = nl; changed = true; }
       }
     }
-    if (op === 'paint' && this.autoOrient) {
+    if (op === 'paint' && this.autoOrient && !aim) {
       for (const p of painted) {
         const o = this.autoFor(p);
         if (o && (o.kind !== p.kind || o.rot !== p.rot)) { p.kind = o.kind; p.rot = o.rot; changed = true; }
@@ -1278,7 +1314,7 @@ class CourseEditor {
   refreshOverlay(force = false) {
     const c = this.def?.course;
     const rect = this.drag?.kind === 'rect' && this.drag.startCell && this.hover ? this.rectCells(this.drag.startCell, this.hover) : null;
-    const key = JSON.stringify([this.tool, this.hover, this.pieceKind, this.paintRot, this.paintLevel, this.brush, this.autoOrient, this.symX, this.symZ, rect?.length, this.drag?.startCell]);
+    const key = JSON.stringify([this.tool, this.hover, this.tool === 'paint' ? this.cursorAim() : null, this.aimCursor, this.pieceKind, this.paintRot, this.paintLevel, this.brush, this.autoOrient, this.symX, this.symZ, rect?.length, this.drag?.startCell]);
     if (!force && key === this.overlayKey) { this.updateHint(); return; }
     this.overlayKey = key;
     this.clearOverlay();
@@ -1294,8 +1330,10 @@ class CourseEditor {
       this.overlay.add(this.cellOutline(cell.i, cell.j, cur && this.tool === 'paint' ? '#ffd23a' : col));
       if (this.tool !== 'paint') continue;
       // ghost of the exact piece that will be placed (after auto-orient)
-      let kind = this.pieceKind, rot = DIRECTIONAL.has(kind) ? CourseEditor.mirrorRot(kind, this.paintRot, cell.mx, cell.mz) : 0;
-      if (this.autoOrient && cells.length <= 9) {
+      const aim = base.length === 1 ? this.cursorAim() : null;
+      const pp = aim ?? this.paintPiece();
+      let kind = pp.kind, rot = DIRECTIONAL.has(kind) ? CourseEditor.mirrorRot(kind, pp.rot, cell.mx, cell.mz) : 0;
+      if (this.autoOrient && !aim && cells.length <= 9) {
         const had = pieceAt(c, cell.i, cell.j);
         const tmp: Piece = { kind, x: cell.i, y: cell.j, rot, level: this.paintLevel };
         if (!had) c.pieces.push(tmp);
@@ -1420,7 +1458,8 @@ class CourseEditor {
         } else if (this.hover) {
           const p = pieceAt(this.def.course!, this.hover.i, this.hover.j);
           if (!p) return;
-          this.pieceKind = p.kind; this.paintRot = p.rot; this.paintLevel = p.level;
+          if (p.kind === 'corner') { this.pieceKind = 'quarter'; this.paintRot = p.rot + 4; } else { this.pieceKind = p.kind; this.paintRot = p.rot; }
+          this.paintLevel = p.level;
           this.setTool('paint');
           this.app.toast(`Picked ${PIECES[p.kind].label}`);
         }
@@ -1779,6 +1818,7 @@ let editor: CourseEditor | null = null;
 export const courseDesignerScreen: Screen = {
   mount(app: App) {
     editor = new CourseEditor(app);
+    if (import.meta.env.DEV) (window as any).__cd = editor; // headless checks
   },
   unmount() {
     editor?.dispose();
