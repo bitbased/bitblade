@@ -313,7 +313,7 @@ export class MatchScreen implements Screen {
   }
 
   /**
-   * Pause menu MUSIC: ◀ ▶ through this course's own song, 📻 surprise radio (new surprise songs keep
+   * Pause menu MUSIC: ◀ ▶ through this course's own song, 📻 radio (new generated songs keep
    * coming), and every song in your library. It switches straight away, for this match.
    */
   musicIdx = 0;
@@ -322,7 +322,7 @@ export class MatchScreen implements Screen {
     type Opt = { label: string; play: () => void };
     const opts: Opt[] = [
       { label: this.arg.cfg.song ? `♪ Room song — ${this.arg.cfg.song.name}` : '♪ This course\'s song', play: () => (this.arg.cfg.song ? sfx.playSong(this.arg.cfg.song) : sfx.useMusic('game', this.arg.cfg.arena)) },
-      { label: '📻 Surprise radio', play: () => sfx.startRadio() },
+      { label: '📻 Radio', play: () => sfx.startRadio() },
       ...allSongs().map((s) => ({ label: `♪ ${s.name}${s.custom ? '' : ' ★'}`, play: () => sfx.playSong(s) })),
     ];
     const val = h('b', null, opts[this.musicIdx]?.label ?? opts[0].label);
