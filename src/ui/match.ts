@@ -35,6 +35,7 @@ export class MatchScreen implements Screen {
   pendingEvents: GameEvent[] = [];
   lastSnapAt = 0;
   sendAcc = 0;
+  lastSent = new Map<number, { mx: number; mz: number }>();
   ended = false;
   wrongT = 0;
   unsubRoom: (() => void) | null = null;
@@ -160,12 +161,19 @@ export class MatchScreen implements Screen {
       }
     });
     if (this.arg.client) {
+      // send immediately on any change or button press (no batching delay), plus a 15 Hz keepalive
       this.sendAcc += dt;
-      if (this.sendAcc > 1 / 30) {
-        this.sendAcc = 0;
-        for (const [i, c] of this.pendingCtl) clientRoom.send({ t: 'in', p: i, c });
-        this.pendingCtl.clear();
+      for (const [i, c] of this.pendingCtl) {
+        const last = this.lastSent.get(i);
+        const edge = c.dash || c.jump || c.item || c.special;
+        const changed = !last || Math.abs(last.mx - c.mx) > 0.04 || Math.abs(last.mz - c.mz) > 0.04;
+        if (edge || changed || this.sendAcc > 1 / 15) {
+          clientRoom.send({ t: 'in', p: i, c });
+          this.lastSent.set(i, { mx: c.mx, mz: c.mz });
+          this.pendingCtl.delete(i);
+        }
       }
+      if (this.sendAcc > 1 / 15) this.sendAcc = 0;
     }
     // simulate
     if (this.sim) {
@@ -177,7 +185,7 @@ export class MatchScreen implements Screen {
       if (this.arg.host) {
         this.pendingEvents.push(...ev);
         this.snapAcc += dt;
-        if (this.snapAcc > 1 / 30) {
+        if (this.snapAcc > 1 / 45) {
           this.snapAcc = 0;
           hostRoom.send('all', { t: 'snap', s: { ...this.sim.s, events: this.pendingEvents } });
           this.pendingEvents = [];
@@ -188,7 +196,12 @@ export class MatchScreen implements Screen {
     let renderState = this.state;
     if (this.arg.client && this.lastSnapAt) {
       const age = Math.min(0.1, (performance.now() - this.lastSnapAt) / 1000);
-      renderState = { ...this.state, tops: this.state.tops.map((t) => ({ ...t, x: t.x + t.vx * age, y: t.y + t.vy * age, z: t.z + t.vz * age })) };
+      // dead-reckon everyone to "now"; lead our own blades a little further to hide the input round trip
+      const mine = this.arg.client.mine;
+      renderState = { ...this.state, tops: this.state.tops.map((t, i) => {
+        const a = age + (mine.includes(i) && t.alive ? 0.05 : 0);
+        return { ...t, x: t.x + t.vx * a, y: t.y + t.vy * a, z: t.z + t.vz * a };
+      }) };
     }
     const launchPower = 0.5 - 0.5 * Math.cos(renderState.phaseT * 4.2);
     this.view.update(renderState, dt, launchPower);
