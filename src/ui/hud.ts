@@ -28,6 +28,8 @@ export class Hud {
     this.cfg = cfg;
     parent.append(this.root);
     this.root.append(this.scores, this.obj, this.cards, this.ann, this.hint, this.wrong);
+    // pinball: the table fills the middle — the player card goes to the corner
+    this.root.classList.toggle('hud-pin', this.cfg.mode === 'pinball');
     const mode = MODES.find((m) => m.id === cfg.mode)!;
     const teams = Math.max(...cfg.players.map((p) => p.team)) + 1;
     const teamScores = mode.id !== 'gauntlet';
@@ -135,8 +137,15 @@ export class Hud {
     this.scoreEls.forEach((el, i) => (el.textContent = this.cfg.mode === 'koth' ? Math.floor(s.teamScores[i] ?? 0).toString() : String(s.teamScores[i] ?? 0)));
     if (this.cfg.mode === 'gauntlet') this.obj.textContent = `GEMS ${s.teamScores[0] ?? 0} / ${this.cfg.target} · ${Math.ceil(tl)}s`;
     if (this.cfg.mode === 'quest') { const cps = this.cfg.arena.markers.filter((m) => m.kind === 'checkpoint').length; const gems = this.cfg.arena.markers.filter((m) => m.kind === 'gem').length; this.obj.textContent = `REACH THE GOAL · GEMS ${s.teamScores[0] ?? 0}/${gems}${cps ? ` · ${cps} CHECKPOINTS` : ''}`; }
+    if (this.cfg.mode === 'pinball') {
+      // pinball: the score up top, the ball and the controls under it
+      const p0 = s.tops.find((t) => !t.extra && !t.drone);
+      this.timer.textContent = (s.teamScores[0] | 0).toLocaleString();
+      this.scoreEls.forEach((el) => (el.style.display = 'none'));
+      this.obj.textContent = `BALL ${Math.min(3, 4 - (p0?.lives ?? 3))}/3${s.pin?.tilted ? ' · TILT!' : ''}`;
+    }
     this.hint.style.display = s.phase === 'launch' ? '' : 'none';
-    if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? 'PRESS DASH WHEN THE RING IS GREEN!' : '';
+    if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? (this.cfg.mode === 'pinball' ? 'HOLD ↓ TO PULL THE PLUNGER — LET GO TO FIRE' : 'PRESS DASH WHEN THE RING IS GREEN!') : '';
     if (this.standings) {
       const order = s.tops.map((t, i) => ({ t, i })).sort((a, b) => (a.t.place || 99) - (b.t.place || 99));
       const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${this.cfg.players[i].name}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
@@ -160,6 +169,10 @@ export class Hud {
       const bits: string[] = [];
       if (this.cfg.mode === 'rush') bits.push(`${iconSvg('gem')} ${t.crystals}`);
       if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') bits.push(`${iconSvg('heart')} ${t.lives}`, `${iconSvg('diamond')} ${t.score}`);
+      if (this.cfg.mode === 'pinball' && !t.extra) {
+        const tilt = s.pin?.tilted ? '<b style="color:#ff3b4a">TILT</b>' : s.pin && s.pin.tilt > 0.25 ? `tilt <b style="color:${s.pin.tilt > 0.7 ? '#ff3b4a' : '#ffd23a'}">${'▮'.repeat(Math.ceil(s.pin.tilt * 5))}</b>` : '';
+        bits.push(`${iconSvg('target')} ${(s.teamScores[t.team] | 0).toLocaleString()}`, `BALL ${Math.min(3, 4 - t.lives)}/3`, ...(tilt ? [tilt] : []));
+      }
       if (this.cfg.mode === 'ctf' && t.flag >= 0) bits.push(`${iconSvg('hex')} CARRYING CORE`);
       if (this.cfg.mode === 'race') bits.push(`${iconSvg('finish')} LAP ${Math.min(t.lap + 1, this.cfg.target)}/${this.cfg.target}`, `<b class="place">P${t.place}</b>`);
       if (t.kos) bits.push(`KO ${t.kos}`);

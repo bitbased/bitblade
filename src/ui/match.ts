@@ -130,7 +130,7 @@ export class MatchScreen implements Screen {
     for (const sp of specs) {
       const c = inp.read(sp, top);
       if (Math.hypot(c.mx, c.mz) > Math.hypot(out.mx, out.mz)) { out.mx = c.mx; out.mz = c.mz; }
-      out.dash ||= c.dash; out.jump ||= c.jump; out.item ||= c.item; out.special ||= c.special; out.hold ||= c.hold;
+      out.dash ||= c.dash; out.jump ||= c.jump; out.item ||= c.item; out.special ||= c.special; out.hold ||= c.hold; out.flipL ||= c.flipL; out.flipR ||= c.flipR;
     }
     if (inp.mouseButtons & 7 || inp.mousePressed & 6) {
       const c = inp.read({ type: 'mouse' }, top);
@@ -290,6 +290,12 @@ export class MatchScreen implements Screen {
         case 'dash': sfx.play('dash'); break;
         case 'jump': sfx.play('jump'); break;
         case 'hazard': sfx.play('hazard'); this.rumble([e.id], 0.6); break;
+        case 'pin': {
+          // table sounds from the existing set
+          const snd = ({ flip: 'tick', bumper: 'clash', sling: 'land', target: 'gem', plunge: 'launch', portal: 'special', tilt: 'burst', danger: 'count', multiball: 'win' } as const)[e.what];
+          if (snd) sfx.play(snd);
+          break;
+        }
         case 'announce': this.hud.announce(e.text, e.sub, e.color); break;
         case 'count': this.hud.count(e.n); sfx.play('count'); break;
         case 'go': sfx.play('go'); sfx.play('launch'); break;

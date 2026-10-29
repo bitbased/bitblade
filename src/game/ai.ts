@@ -3,6 +3,7 @@ import type { Sim } from './sim';
 import type { Control, TopState } from './types';
 import { VOID } from './terrain';
 import { hazardPose } from './hazards';
+import { flipperPose, flipperSide, segDist } from './pinball';
 
 export interface AIState {
   level: 1 | 2 | 3;
@@ -13,6 +14,10 @@ export interface AIState {
   wander: number;
   /** stuck watch: where we were a moment ago, and a short break-out manoeuvre (side alternates per try) */
   sx?: number; sz?: number; st?: number; unstuck?: number; unSide?: number;
+  /** pinball: how long the plunger has been held */
+  plungeT?: number;
+  /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
+  holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
 
 export function newAI(level: number, rnd: () => number): AIState {
@@ -30,6 +35,7 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   }
   if (sim.terrain.track && sim.cfg.mode === 'race') return raceControl(sim, t, ai, dt, c);
   if (sim.cfg.mode === 'quest' && !t.drone) return questControl(sim, t, ai, dt, c);
+  if (sim.cfg.mode === 'pinball' && !t.drone) return pinballControl(sim, t, ai, dt, c);
   // steering toward goal (with lead on moving enemy)
   let gx = ai.tx, gz = ai.tz;
   const raceBrake = 0;
@@ -115,6 +121,44 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
       default: if (near && near < 8 && Math.random() < dt * 1.5) c.item = true;
     }
   }
+  return c;
+}
+
+/**
+ * Pinball CPU: pull the plunger back a moment and let go; flip a side when a ball is about to cross that
+ * flipper (a short look ahead along its velocity — weaker CPUs look less far, so they're late more often).
+ */
+function pinballControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control): Control {
+  if (t.extra) return c;
+  if (sim.inPlunger(t)) {
+    ai.plungeT = (ai.plungeT ?? 0) + dt;
+    if (ai.plungeT < 0.5 + ai.level * 0.25) c.mz = 1; else ai.plungeT = 0;
+    return c;
+  }
+  ai.plungeT = 0;
+  const look = [0, 0.03, 0.06, 0.09][ai.level];
+  let wantL = false, wantR = false;
+  for (const m of sim.markers) {
+    if (m.kind !== 'flipper') continue;
+    const P = flipperPose(m, m.rot ?? 0);
+    for (const b of sim.s.tops) {
+      if (!b.alive || b.drone) continue;
+      const fx = b.x + b.vx * look, fz = b.z + b.vz * look;
+      const near = segDist(P, fx, fz).d < 1.7 || segDist(P, b.x, b.z).d < 1.5;
+      // only when the ball is on the playfield side of the flipper (above its line), not behind it
+      if (near && b.z < Math.max(P.az, P.bz) + 0.4) { if (flipperSide(m) === 'L') wantL = true; else wantR = true; }
+    }
+  }
+  // a flip is a short press: hold at most ~0.3s, then let the flipper drop before flipping again
+  const side = (want: boolean, hold: number, rest: number) => {
+    if (rest > 0) return { up: false, hold: 0, rest: rest - dt };
+    if (!want) return { up: false, hold: 0, rest: 0 };
+    if (hold > 0.3) return { up: false, hold: 0, rest: 0.22 };
+    return { up: true, hold: hold + dt, rest: 0 };
+  };
+  const l = side(wantL, ai.holdL ?? 0, ai.restL ?? 0), r = side(wantR, ai.holdR ?? 0, ai.restR ?? 0);
+  ai.holdL = l.hold; ai.restL = l.rest; ai.holdR = r.hold; ai.restR = r.rest;
+  c.flipL = l.up; c.flipR = r.up;
   return c;
 }
 

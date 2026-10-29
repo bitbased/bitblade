@@ -52,7 +52,7 @@ export class Input {
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
       if (!this.keys.has(e.code)) this.pressed.add(e.code);
       this.keys.add(e.code);
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Slash'].includes(e.code) && document.body.classList.contains('ingame')) e.preventDefault();
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Slash', 'Tab'].includes(e.code) && document.body.classList.contains('ingame')) e.preventDefault();
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
@@ -145,6 +145,9 @@ export class Input {
       c.mz = (this.anyKey(L.down) ? 1 : 0) - (this.anyKey(L.up) ? 1 : 0);
       c.dash = this.anyPressed(L.dash);
       c.hold = this.anyKey(L.dash);
+      // pinball flippers — several keys each side (5 Shift presses wake Windows Sticky Keys; Ctrl / Tab / Enter don't)
+      c.flipL = this.anyKey(['ShiftLeft', 'ControlLeft', 'Tab', 'KeyZ']);
+      c.flipR = this.anyKey(['ShiftRight', 'ControlRight', 'Enter', 'NumpadEnter', 'Slash']);
       c.jump = this.anyPressed(L.jump);
       c.item = this.anyPressed(L.item);
       c.special = this.anyPressed(L.special);
@@ -184,6 +187,8 @@ export class Input {
         c.mx = x; c.mz = y;
         c.dash = this.padEdge(i, 0) || this.padEdge(i, 7);
         c.hold = this.padBtn(i, 0) || this.padBtn(i, 7);
+        c.flipL = this.padBtn(i, 4) || this.padBtn(i, 6);
+        c.flipR = this.padBtn(i, 5) || this.padBtn(i, 7);
         c.jump = this.padEdge(i, 1) || this.padEdge(i, 4);
         c.item = this.padEdge(i, 2) || this.padEdge(i, 5);
         c.special = this.padEdge(i, 3) || this.padEdge(i, 6);

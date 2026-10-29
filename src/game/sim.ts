@@ -2,6 +2,7 @@
 import { computeStats, type BladeStats } from '../core/blade';
 import { Terrain, VOID, type Marker } from './terrain';
 import { hazardPose, closestOnSeg } from './hazards';
+import { flipperHalf, flipperPose, flipperSide, railSegments, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
 import { aiControl, newAI, type AIState } from './ai';
 import { globalNearest, nearestSample } from './track';
 import {
@@ -19,7 +20,7 @@ export function fmtTime(sec: number) {
   return `${m}:${r.toFixed(2).padStart(5, '0')}`;
 }
 
-const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race', 'quest']);
+const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race', 'quest', 'pinball']);
 
 function mulberry(seed: number) {
   let a = seed >>> 0;
@@ -96,6 +97,11 @@ export class Sim {
       this.s.gemsLeft = this.s.gems.length;
       this.hiveCool = this.markers.map(() => 1.5);
     }
+    this.railSegs = railSegments(this.cfg.arena.rails);
+    // pinball tables (and any arena with flippers): table state
+    if (this.cfg.mode === 'pinball' || this.markers.some((m) => m.kind === 'flipper')) {
+      this.s.pin = { flip: this.markers.map((m) => (m.kind === 'flipper' ? m.rot ?? 0 : 0)), lit: this.markers.map(() => false), charge: 0, mult: 0, litT: 0, tilt: 0, tilted: false, warned: false };
+    }
     this.startLaunch();
   }
 
@@ -137,7 +143,7 @@ export class Sim {
       grounded: false, air: 0, alive: true, out: '', outT: 0, burst: 0, special: 0, specialKind: best[0],
       dashCd: 0, jumpCd: 0, itemCd: 0, item: null, roll: 0,
       fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 },
-      flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : this.cfg.mode === 'quest' ? 5 : 99, qcp: -1,
+      flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' || this.cfg.mode === 'pinball' ? 3 : this.cfg.mode === 'quest' ? 5 : 99, qcp: -1,
       respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
       lap: 0, prog: 0, cp: 0, place: 0, finishT: -1, off: 0,
     };
@@ -172,7 +178,7 @@ export class Sim {
   setControl(i: number, c: Control) {
     const p = this.controls[i];
     if (!p) return;
-    p.mx = c.mx; p.mz = c.mz; p.hold = c.hold;
+    p.mx = c.mx; p.mz = c.mz; p.hold = c.hold; p.flipL = c.flipL; p.flipR = c.flipR;
     p.dash ||= c.dash; p.jump ||= c.jump; p.item ||= c.item; p.special ||= c.special;
   }
 
@@ -193,7 +199,7 @@ export class Sim {
       this.placeTop(t, sp.x, sp.z, 1.6);
     });
     s.tops = s.tops.filter((t) => !t.drone);
-    this.ev({ k: 'announce', text: this.rounds ? `ROUND ${s.round}` : this.mode.name.toUpperCase(), sub: 'Press DASH at full power to launch!' });
+    this.ev({ k: 'announce', text: this.rounds ? `ROUND ${s.round}` : this.mode.name.toUpperCase(), sub: this.cfg.mode === 'pinball' ? 'Hold ↓ to pull the plunger, let go to fire' : 'Press DASH at full power to launch!' });
   }
 
   launchPower(t = this.s.phaseT) { return 0.5 - 0.5 * Math.cos(t * 4.2); }
@@ -230,6 +236,7 @@ export class Sim {
         t.vz = (dz / d) * sp + (dx / d) * t.dir * 2;
         const TS = this.terrain.track;
         if (TS) { t.vx = TS.tx[t.prog] * (4 + p * 8); t.vz = TS.tz[t.prog] * (4 + p * 8); }
+        if (this.cfg.mode === 'pinball') { t.vx = t.vz = 0; t.spin = 1; }
         t.vy = -2;
       }
       s.phase = 'battle';
@@ -262,7 +269,9 @@ export class Sim {
     s.tops.forEach((t, i) => { this.terrain.hintY = t.y + 0.5; this.updateTop(t, i, dt); });
     this.terrain.hintY = undefined;
     this.collideTops(dt);
+    if (this.railSegs.length) this.collideRails();
     this.hazards(dt);
+    if (this.s.pin) this.pinballUpdate(dt);
     this.updateObjects(dt);
     this.clearEdges();
     if (s.phase === 'battle') this.modeUpdate(dt);
@@ -335,8 +344,14 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
+      if (this.cfg.mode === 'pinball') {
+        c.jump = false; c.hold = false;
+        if (c.flipL || c.flipR) c.dash = false; // (RT is a flipper on pads)
+        if (c.dash && this.inPlunger(t)) { this.plunge(t, 1); c.dash = false; }
+      }
       if (c.dash && t.dashCd <= 0 && t.spin > 0.08) {
         let dx = ix, dz = iz;
+        if (this.cfg.mode === 'pinball') { const a = this.pinAim(t); if (a) { dx = a.x - t.x; dz = a.z - t.z; } }
         if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
         const dl = Math.hypot(dx, dz) || 1;
         const dashV = (this.cfg.mode === 'race' ? 11 : 9) * this.rpmK(t);
@@ -385,6 +400,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
+      if (this.cfg.mode === 'pinball') { const k = this.s.pin?.tilted || t.extra ? 0 : 0.22; ix *= k; iz *= k; }
       if (t.od) {
         // wider turns: the part of your input across your travel direction is weaker
         const vl0 = Math.hypot(t.vx, t.vz);
@@ -420,12 +436,12 @@ export class Sim {
       const targetTz = grad.gz * 0.35 + Math.sin(prec) * wob * 0.35;
       t.tx += (targetTx - t.tx) * Math.min(1, dt * 8);
       t.tz += (targetTz - t.tz) * Math.min(1, dt * 8);
-      const drift = t.spin * st.tipFriction * 10 * t.dir;
+      const drift = t.spin * st.tipFriction * 10 * t.dir * (this.cfg.mode === 'pinball' ? 0.25 : 1);
       ax += -t.tz * drift;
       az += t.tx * drift;
       const slope = Math.hypot(grad.gx, grad.gz);
       // wall riding: steep surface + spin = grind along it (xtreme dash)
-      if (slope > 1.2) {
+      if (slope > 1.2 && this.cfg.mode !== 'pinball') { // (no wall-riding on a pinball table: walls just bounce)
         const nx = -grad.gx / slope, nz = -grad.gz / slope; // horizontal normal (pointing downhill)
         const ride = t.spin * (st.tipFriction + 0.35) * 9 * t.dir;
         ax += -nz * ride; az += nx * ride;
@@ -450,13 +466,13 @@ export class Sim {
     t.vx += ax * dt; t.vz += az * dt;
     t.vy -= G * dt * (t.fx.special > 0 && t.specialKind === 'skydive' && t.vy < 0 ? 2.2 : 1);
     if (t.grounded) {
-      const k = 0.32 + st.tipFriction * 0.3 + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
+      const k = (this.cfg.mode === 'pinball' ? 0.06 : 0.32 + st.tipFriction * 0.3) + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
       const f = Math.max(0, 1 - k * dt);
       t.vx *= f; t.vz *= f;
     }
     const hs = Math.hypot(t.vx, t.vz);
     const race = this.cfg.mode === 'race';
-    const cap = (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) * (t.od ? 1.22 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const cap = this.cfg.mode === 'pinball' ? 36 : (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) * (t.od ? 1.22 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
@@ -481,7 +497,7 @@ export class Sim {
         const vn = t.vx * nx + t.vy * ny + t.vz * nz;
         if (vn < 0) {
           const impact = -vn;
-          const e = impact > 5 ? 0.25 : 0;
+          const e = this.cfg.mode === 'pinball' && ny < 0.6 ? 0.42 : impact > 5 ? 0.25 : 0;
           t.vx -= (1 + e) * vn * nx; t.vy -= (1 + e) * vn * ny; t.vz -= (1 + e) * vn * nz;
           if (!wasGrounded && t.air > 0.18 && impact > 3) {
             this.ev({ k: 'land', x: t.x, y: t.y, z: t.z, s: impact, id: t.id });
@@ -635,13 +651,14 @@ export class Sim {
           top.vx -= (1 + bounce) * rvn * nx; top.vz -= (1 + bounce) * rvn * nz;
         }
         // on race ribbons obstacles slow you and cost spin, but shouldn't fling you into the void every time
-        const kb = this.cfg.mode === 'race' ? 0.55 : 1;
+        const kb = this.cfg.mode === 'race' ? 0.55 : this.cfg.mode === 'pinball' ? 1.35 : 1;
         if (hp.kind === 'bumper') { top.vx += nx * 9 * kb; top.vz += nz * 9 * kb; }
         if (hp.kind === 'arm' || hp.kind === 'saw') { top.vx += (hvx * 0.6 + nx * 4) * kb; top.vz += (hvz * 0.6 + nz * 4) * kb; top.vy += 2.5 * kb; }
         if (!this.hazardHitCd.has(key)) {
           this.hazardHitCd.set(key, 0.4);
           const dmg = hp.kind === 'saw' ? 0.09 : hp.kind === 'arm' ? 0.05 : hp.kind === 'bumper' ? 0.01 : 0.004;
-          if (top.fx.shield <= 0) top.spin -= dmg;
+          if (top.fx.shield <= 0 && this.cfg.mode !== 'pinball') top.spin -= dmg;
+          if (this.s.pin && hp.kind === 'bumper') { this.addScore(top, 100); top.spin = Math.min(1, top.spin + 0.015); this.ev({ k: 'pin', what: 'bumper', x: hp.ax, y: top.y, z: hp.az, pts: 100 }); }
           this.ev({ k: 'hazard', x: px + nx * hp.r, y: top.y + 0.3, z: pz + nz * hp.r, id: top.id });
           if (top.flag >= 0 && hp.kind !== 'pillar') this.dropFlag(top);
         }
@@ -684,8 +701,17 @@ export class Sim {
         const k = this.s.tops.find((x) => x.team === team);
         this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name} is out! +${POINTS[type]} ${this.teamLabel(team)}`, color: k?.color });
       } else this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name} self-destructed!` });
-    } else if (!t.drone) {
+    } else if (!t.drone && this.cfg.mode !== 'pinball') {
       this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name}${RESPAWN_MODES.has(this.cfg.mode) ? ' respawning…' : ''}` });
+    }
+    if (this.cfg.mode === 'pinball' && !t.drone) {
+      // multiball balls just go; the main ball only costs a life when it's the last ball on the table
+      if (t.extra) return;
+      const others = this.s.tops.some((o) => o !== t && o.extra && o.alive);
+      if (!others) t.lives--;
+      if (t.lives > 0) t.respawnT = 1.4;
+      this.ev({ k: 'announce', text: others ? 'BALL SAVED' : t.lives > 0 ? 'BALL LOST' : 'GAME OVER', sub: others ? 'multiball keeps you in' : t.lives > 0 ? `${t.lives} ball${t.lives === 1 ? '' : 's'} left` : `final score ${this.s.teamScores[t.team] | 0}` });
+      return;
     }
     if (RESPAWN_MODES.has(this.cfg.mode) && !t.drone) {
       if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') {
@@ -703,6 +729,12 @@ export class Sim {
   respawn(t: TopState, i: number) {
     t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1; t.off = 0;
     t.graceT = 1.6;
+    if (this.cfg.mode === 'pinball') {
+      const sp = this.spawnFor(t, i);
+      this.placeTop(t, sp.x, sp.z, 0.5); t.vx = t.vy = t.vz = 0;
+      if (this.s.pin) { this.s.pin.tilted = false; this.s.pin.tilt = 0; this.s.pin.warned = false; this.s.pin.charge = 0; }
+      return;
+    }
     const TS = this.terrain.track;
     if (TS) {
       // back on the ribbon where we fell off, facing forward: the first solid ground at/after it that's clear of
@@ -748,6 +780,193 @@ export class Sim {
         if (this.terrain.isSafe(x, z, 1.2) && this.clearOfHazards(x, z, 1.2)) return { x, z };
       }
     return p;
+  }
+
+  // ---------------- pinball ----------------
+  railSegs: RailSeg[] = [];
+
+  /**
+   * Rails are vertical walls: push a blade out of any it overlaps and bounce it off sideways (never upward — as
+   * floor bumps, fast balls launched off them). Slingshot rails also fire the ball off. Jump high enough and you
+   * clear a rail.
+   */
+  collideRails() {
+    const pinball = this.cfg.mode === 'pinball';
+    for (const t of this.s.tops) {
+      if (!t.alive) continue;
+      const r = this.radius(t);
+      for (let si = 0; si < this.railSegs.length; si++) {
+        const sg = this.railSegs[si];
+        // cheap reject on the bounding box
+        if (t.x < Math.min(sg.ax, sg.bx) - r - sg.half || t.x > Math.max(sg.ax, sg.bx) + r + sg.half || t.z < Math.min(sg.az, sg.bz) - r - sg.half || t.z > Math.max(sg.az, sg.bz) + r + sg.half) continue;
+        const { d, cx, cz } = segDist(sg, t.x, t.z);
+        const R = r + sg.half;
+        if (d >= R || d < 1e-5) continue;
+        if (t.y > this.ground(cx, cz) + sg.h) continue; // over the top
+        const nx = (t.x - cx) / d, nz = (t.z - cz) / d;
+        t.x = cx + nx * R; t.z = cz + nz * R;
+        const vn = t.vx * nx + t.vz * nz;
+        if (vn < 0) { const e = pinball ? 0.42 : 0.25; t.vx -= (1 + e) * vn * nx; t.vz -= (1 + e) * vn * nz; }
+        if (sg.kick > 0) {
+          const key = `k${si}:${t.id}`;
+          if (!this.hazardHitCd.has(key)) {
+            t.vx += nx * sg.kick; t.vz += nz * sg.kick;
+            this.hazardHitCd.set(key, 0.25);
+            if (pinball) this.addScore(t, 10);
+            this.ev({ k: 'pin', what: 'sling', x: cx, y: t.y, z: cz, pts: 10 });
+          }
+        }
+      }
+    }
+  }
+
+  addScore(t: TopState, n: number) {
+    this.s.teamScores[t.team] = (this.s.teamScores[t.team] ?? 0) + n;
+    const owner = t.extra ? this.s.tops.find((o) => o.team === t.team && !o.extra && !o.drone) ?? t : t;
+    owner.score += n;
+  }
+
+  /** is this ball sitting in the plunger lane? */
+  inPlunger(t: TopState) {
+    const pl = this.markers.find((m) => m.kind === 'plunger');
+    return !!pl && Math.abs(t.x - pl.x) < (pl.r ?? 1.1) + 0.3 && Math.abs(t.z - pl.z) < 2.6 && Math.hypot(t.vx, t.vz) < 4;
+  }
+
+  /** fire the ball up the plunger lane (k = how far the plunger was pulled, 0..1) */
+  plunge(t: TopState, k: number) {
+    const pl = this.markers.find((m) => m.kind === 'plunger');
+    if (!pl) return;
+    const v = (15 + 25 * k) * (pl.len ?? 1);
+    t.x = pl.x; t.vx = 0; t.vz = -v;
+    if (this.s.pin) this.s.pin.charge = 0;
+    this.ev({ k: 'pin', what: 'plunge', x: t.x, y: t.y, z: t.z });
+  }
+
+  /** dash aim on a table: the nearest drone / rival, else the nearest unlit target ahead of you */
+  pinAim(t: TopState): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null, bd = 16;
+    for (const o of this.s.tops) if (o !== t && o.alive && (o.drone || o.team !== t.team)) { const d = Math.hypot(o.x - t.x, o.z - t.z); if (d < bd) { bd = d; best = o; } }
+    if (best) return best;
+    this.markers.forEach((m, mi) => {
+      if (m.kind !== 'target' || this.s.pin?.lit[mi]) return;
+      const d = Math.hypot(m.x - t.x, m.z - t.z);
+      if (d < bd && m.z < t.z + 2) { bd = d; best = m; }
+    });
+    return best;
+  }
+
+  /** multiball: another ball, fired straight up the plunger lane */
+  spawnExtraBall() {
+    const p0 = this.s.tops.find((o) => !o.drone && !o.extra);
+    if (!p0) return;
+    const n = this.s.tops.filter((o) => o.extra).length + 2;
+    const t = this.addTop(`Ball ${n}`, p0.team, this.cfg.players[0].blade, 0, 0);
+    t.extra = true; t.spin = 1; t.lives = 0;
+    t.color = p0.color;
+    this.plunge(t, 0.85 + this.rnd() * 0.15);
+  }
+
+  pinballUpdate(dt: number) {
+    const s = this.s, pin = s.pin!, ms = this.markers;
+    const table = this.cfg.mode === 'pinball';
+    const owner = s.tops.findIndex((o) => !o.drone && !o.extra);
+    const c0 = this.controls[owner] ?? NO_CONTROL;
+    // tilt meter: steering is a nudge — a little is fine, too much and the machine TILTs (flippers die until
+    // the ball drains)
+    if (table && s.phase === 'battle' && !pin.tilted) {
+      const main = s.tops[owner];
+      const steer = main && main.alive && !this.inPlunger(main) ? Math.min(1, Math.hypot(c0.mx, c0.mz)) : 0; // (pulling the plunger isn't a nudge)
+      pin.tilt = Math.max(0, pin.tilt + (steer > 0.15 ? steer * 0.45 : -0.3) * dt);
+      if (pin.tilt > 0.7 && !pin.warned) { pin.warned = true; this.ev({ k: 'announce', text: 'DANGER', sub: 'easy on the nudging — any more and it TILTs' }); this.ev({ k: 'pin', what: 'danger', x: 0, y: 0, z: 0 }); }
+      if (pin.tilt < 0.45) pin.warned = false;
+      if (pin.tilt >= 1) { pin.tilted = true; this.ev({ k: 'announce', text: 'TILT', sub: 'flippers are dead until this ball drains' }); this.ev({ k: 'pin', what: 'tilt', x: 0, y: 0, z: 0 }); }
+    }
+    // flippers
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'flipper') return;
+      let up: boolean;
+      if (table) up = !pin.tilted && s.phase === 'battle' && (flipperSide(m) === 'L' ? !!c0.flipL : !!c0.flipR);
+      else {
+        // on a regular course a flipper is a trap: it fires by itself when a blade rolls onto it
+        const P0 = flipperPose(m, m.rot ?? 0);
+        up = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.6);
+      }
+      const rest = m.rot ?? 0, target = up ? rest + (m.r ?? -1) : rest, cur = pin.flip[mi];
+      const step = (up ? FLIP_UP_SPEED : FLIP_DOWN_SPEED) * dt;
+      const nxt = cur + Math.max(-step, Math.min(step, target - cur));
+      const w = (nxt - cur) / dt;
+      if (up && Math.abs(cur - rest) < 0.02 && Math.abs(nxt - rest) >= 0.02) this.ev({ k: 'pin', what: 'flip', x: m.x, y: 0, z: m.z });
+      pin.flip[mi] = nxt;
+      const P = flipperPose(m, nxt), g = this.ground(m.x, m.z);
+      for (const t of s.tops) {
+        if (!t.alive || t.y > g + 1.6) continue;
+        const dx = P.bx - P.ax, dz = P.bz - P.az, L2 = dx * dx + dz * dz || 1;
+        const u = Math.max(0, Math.min(1, ((t.x - P.ax) * dx + (t.z - P.az) * dz) / L2));
+        const cx = P.ax + dx * u, cz = P.az + dz * u;
+        const ex = t.x - cx, ez = t.z - cz, d = Math.hypot(ex, ez), R = this.radius(t) + flipperHalf(u);
+        if (d >= R || d < 1e-4) continue;
+        const nx = ex / d, nz = ez / d;
+        t.x = cx + nx * R; t.z = cz + nz * R;
+        // the flipper's own speed where it touches you: a swing fires the ball
+        const fvx = -w * (cz - P.az), fvz = w * (cx - P.ax);
+        const rvn = (t.vx - fvx) * nx + (t.vz - fvz) * nz;
+        if (rvn < 0) { t.vx -= 1.35 * rvn * nx; t.vz -= 1.35 * rvn * nz; }
+      }
+    });
+    // plunger: hold down to pull it back, let go to fire (dash = a full shot)
+    const pl = ms.find((m) => m.kind === 'plunger');
+    if (pl) for (const t of s.tops) {
+      if (!t.alive || !this.inPlunger(t)) continue;
+      if (t.extra) { this.plunge(t, 0.9); continue; }
+      if (s.phase !== 'battle') continue;
+      const c = this.controls[t.id] ?? NO_CONTROL;
+      if (c.mz > 0.35) { pin.charge = Math.min(1, pin.charge + dt / 1.1); t.vx = 0; t.vz = Math.max(0, t.vz); t.x = pl.x; }
+      else if (pin.charge > 0.05) this.plunge(t, pin.charge);
+    }
+    // targets: little posts that light up (light them all for MULTIBALL)
+    if (pin.litT > 0) { pin.litT -= dt; if (pin.litT <= 0) pin.lit = pin.lit.map(() => false); }
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'target') return;
+      for (const t of s.tops) {
+        if (!t.alive || Math.abs(t.y - this.ground(m.x, m.z)) > 1.8) continue;
+        const ex = t.x - m.x, ez = t.z - m.z, d = Math.hypot(ex, ez), R = (m.r ?? 0.8) * 0.7 + this.radius(t);
+        if (d >= R || d < 1e-4) continue;
+        const nx = ex / d, nz = ez / d;
+        t.x = m.x + nx * R; t.z = m.z + nz * R;
+        const vn = t.vx * nx + t.vz * nz;
+        if (vn < 0) { t.vx -= 1.5 * vn * nx; t.vz -= 1.5 * vn * nz; }
+        if (!pin.lit[mi] && pin.litT <= 0) {
+          pin.lit[mi] = true;
+          this.addScore(t, 500);
+          t.spin = Math.min(1, t.spin + 0.08);
+          this.ev({ k: 'pin', what: 'target', x: m.x, y: t.y, z: m.z, pts: 500 });
+          const all = ms.every((q, qi) => q.kind !== 'target' || pin.lit[qi]);
+          if (all && table) {
+            pin.mult++; pin.litT = 4;
+            this.addScore(t, 5000);
+            this.ev({ k: 'announce', text: 'MULTIBALL!', sub: '+5000 · every target lit' });
+            this.ev({ k: 'pin', what: 'multiball', x: m.x, y: t.y, z: m.z, pts: 5000 });
+            this.spawnExtraBall();
+          }
+        }
+      }
+    });
+    // portals: in one, out of its partner (same team number), keeping your speed
+    for (const t of s.tops) {
+      if (!t.alive) continue;
+      if (t.portalT) { t.portalT = Math.max(0, t.portalT - dt); continue; }
+      const a = ms.find((m) => m.kind === 'portal' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1));
+      if (!a) continue;
+      const b = ms.find((m) => m.kind === 'portal' && m !== a && (m.team ?? 0) === (a.team ?? 0));
+      if (!b) continue;
+      const sp = Math.max(8, Math.hypot(t.vx, t.vz));
+      const dir = b.rot !== undefined ? { x: Math.cos(b.rot), z: Math.sin(b.rot) } : { x: t.vx / (sp || 1), z: t.vz / (sp || 1) };
+      t.x = b.x + dir.x * ((b.r ?? 1) + 0.4); t.z = b.z + dir.z * ((b.r ?? 1) + 0.4); t.y = this.ground(t.x, t.z) + 0.3;
+      t.vx = dir.x * sp; t.vz = dir.z * sp;
+      t.portalT = 0.8;
+      this.addScore(t, 250);
+      this.ev({ k: 'pin', what: 'portal', x: b.x, y: t.y, z: b.z, pts: 250 });
+    }
   }
 
   // ---------------- items & specials ----------------
@@ -1046,6 +1265,8 @@ export class Sim {
         for (const t of s.tops) if (t.team === z.owner && t.alive) t.special = Math.min(1, t.special + dt * 0.05);
       }
       if (z.t > 25) this.moveZone();
+    } else if (mode === 'pinball') {
+      if (!s.tops.some((t) => !t.drone && (t.alive || t.respawnT > 0))) return this.endMatch(0, `FINAL SCORE ${s.teamScores[0] | 0}`);
     } else if (mode === 'race') {
       return this.raceUpdate();
     } else if (mode === 'quest') {
@@ -1261,6 +1482,7 @@ export class Sim {
     this.s.phase = 'matchEnd';
     this.s.phaseT = 0;
     this.s.lastFinish = msg;
+    if (this.cfg.mode === 'pinball') { this.ev({ k: 'announce', text: 'GAME OVER', sub: msg }); return; }
     this.ev({ k: 'announce', text: winner === -2 ? (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest' ? 'FAILED' : 'DRAW') : winner >= 0 && this.cfg.mode === 'gauntlet' ? 'GAUNTLET CLEAR!' : winner >= 0 && this.cfg.mode === 'quest' ? 'QUEST CLEAR!' : 'MATCH OVER', sub: msg });
   }
 }

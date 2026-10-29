@@ -553,3 +553,8 @@ body.hints-on .music-chip { bottom: 56px; }
 .music-chip .mm-ic svg { width: 20px; height: 20px; }
 .music-chip .mm-play b svg { width: 14px; height: 14px; margin-left: 2px; }
 .music-chip .mm-tiny { width: 10px; height: 10px; vertical-align: -1px; }
+
+/* pinball: the player card sits in the bottom-left corner, clear of the flippers */
+.hud.hud-pin .hud-cards { left: 14px; right: auto; bottom: 14px; top: auto; justify-content: flex-start; max-width: 300px; }
+.hud.hud-pin .hud-timer { min-width: 150px; }
+@media (max-width: 700px) { .hud.hud-pin .hud-cards { top: auto; bottom: 10px; left: 10px; max-width: 46vw; } }

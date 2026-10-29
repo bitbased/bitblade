@@ -1,5 +1,6 @@
 import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
+import { pinballTables, tiltLift, type Rail } from './pinball';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -29,7 +30,7 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
-export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive';
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal';
 export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
@@ -50,6 +51,12 @@ export interface ArenaDef {
   custom?: boolean;
   /** Music Studio song id for this arena / course / track (else a fitting preset) */
   song?: string;
+  /** smooth curved walls on top of the floor (any arena; pinball tables are built from them) */
+  rails?: Rail[];
+  /** playfield tilt: the floor rises this much per metre toward the top (-z); gravity pulls balls to the bottom */
+  tilt?: number;
+  /** a pinball table (Pinball mode) */
+  pinball?: boolean;
 }
 
 export const VOID = -1000;
@@ -86,7 +93,7 @@ export class Terrain {
       const c = def.course!;
       extentX = (c.w * c.tile) / 2 + 1;
       extentZ = (c.h * c.tile) / 2 + 1;
-      this.cell = 0.22;
+      this.cell = def.pinball ? 0.15 : 0.22; // (pinball: thin rails need a finer grid)
       this.minX = -extentX; this.minZ = -extentZ;
     }
     this.nx = Math.ceil((extentX * 2) / this.cell) + 1;
@@ -109,6 +116,14 @@ export class Terrain {
         const x = this.minX + i * this.cell, z = this.minZ + j * this.cell;
         this.h[j * this.nx + i] = def.stadium ? stadiumHeight(def.stadium, x, z) : courseHeight(def.course!, x, z);
       }
+    // a tilted playfield (pinball): the floor rises toward the top. (Rails are real vertical walls handled by the sim
+    // and drawn by the renderer — as bumps in the floor, fast balls bounced up off them and hopped over.)
+    if (def.tilt) {
+      for (let j = 0; j < this.nz; j++) {
+        const z = this.minZ + j * this.cell, lift = tiltLift(def, z);
+        for (let i = 0; i < this.nx; i++) { const k = j * this.nx + i; if (this.h[k] > VOID) this.h[k] += lift; }
+      }
+    }
   }
 
   raw(i: number, j: number) {
@@ -1099,3 +1114,6 @@ export function allArenas(): ArenaDef[] {
 export function findArena(id: string) {
   return allArenas().find((a) => a.id === id) ?? BUILTIN_ARENAS[0];
 }
+
+// pinball tables (Pinball mode)
+BUILTIN_ARENAS.push(...pinballTables());

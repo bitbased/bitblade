@@ -11,6 +11,7 @@ import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
 import type { TrackSamples } from './track';
+import { railPolyline, flipperHalf } from './pinball';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -484,6 +485,53 @@ export class GameView {
   rings: { mesh: THREE.Mesh; t: number; dur: number; r: number }[] = [];
   debris: Debris[] = [];
   hazardMeshes: { m: THREE.Object3D; mi: number }[] = [];
+  flippers: { g: THREE.Group; mi: number }[] = [];
+  targets: { mat: THREE.MeshStandardMaterial; mi: number }[] = [];
+  portals: THREE.Mesh[] = [];
+  plungerRod: { g: THREE.Group; z0: number } | null = null;
+
+  /** rails: smooth neon walls along their curves — dark at the foot, glowing along the top (slingshots in pink) */
+  buildRails() {
+    const rails = this.cfg.arena.rails;
+    if (!rails?.length) return;
+    const theme = this.cfg.arena.theme;
+    const pos: number[] = [], col: number[] = [], idx: number[] = [];
+    const foot = new THREE.Color(theme.wall).multiplyScalar(0.7);
+    for (const r of rails) {
+      const pl = railPolyline(r);
+      if (pl.length < 2) continue;
+      const half = (r.t ?? 0.45) / 2, H = r.h ?? 1.3;
+      const top = new THREE.Color(r.kick ? '#ff5cf4' : theme.glow);
+      const base = pos.length / 3;
+      for (let i = 0; i < pl.length; i++) {
+        const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
+        let tx = b[0] - a[0], tz = b[1] - a[1];
+        const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+        const nx = -tz, nz = tx;
+        const [x, z] = pl[i];
+        const g = this.groundY(x, z);
+        // left foot, left top, right top, right foot
+        for (const [sx, yy, c] of [[1, g - 0.3, foot], [1, g + H, top], [-1, g + H, top], [-1, g - 0.3, foot]] as const) {
+          pos.push(x + nx * half * sx, yy, z + nz * half * sx);
+          col.push(c.r, c.g, c.b);
+        }
+        if (i > 0) {
+          const p0 = base + (i - 1) * 4, p1 = base + i * 4;
+          // left face, top, right face
+          idx.push(p0, p1, p0 + 1, p0 + 1, p1, p1 + 1);
+          idx.push(p0 + 1, p1 + 1, p0 + 2, p0 + 2, p1 + 1, p1 + 2);
+          idx.push(p0 + 2, p1 + 2, p0 + 3, p0 + 3, p1 + 2, p1 + 3);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false }));
+    this.scene.add(mesh);
+  }
   boxMeshes: THREE.Mesh[] = [];
   crystalMeshes = new Map<number, THREE.Mesh>();
   gemMeshes = new Map<number, THREE.Mesh>();
@@ -566,6 +614,7 @@ export class GameView {
     this.composer.setSize(innerWidth, innerHeight);
 
     this.buildMarkers();
+    this.buildRails();
     if (import.meta.env.DEV) (window as any).__r = this; // for the headless visual checks
     const T = this.terrain.track;
     if (T) {
@@ -725,6 +774,69 @@ export class GameView {
           g.add(c, top);
           g.position.set(m.x, y, m.z);
           obj = g;
+          break;
+        }
+        case 'flipper': {
+          // a tapered paddle: fat round end at the pivot, slim round tip; it swings round the pivot (see update)
+          const L = m.len ?? 3.4, r0 = flipperHalf(0), r1 = flipperHalf(1);
+          const sh = new THREE.Shape();
+          sh.absarc(0, 0, r0, Math.PI / 2, Math.PI * 1.5, false);
+          sh.lineTo(L, -r1);
+          sh.absarc(L, 0, r1, -Math.PI / 2, Math.PI / 2, false);
+          sh.lineTo(0, r0);
+          const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.75, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 2, curveSegments: 12 });
+          geo.rotateX(Math.PI / 2); // shape in x/z, extruded downward → flip so it stands up from the floor
+          geo.translate(0, 0.8, 0);
+          const g = new THREE.Group();
+          const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#c9d2e6', emissive: glow, emissiveIntensity: 0.12, metalness: 0.35, roughness: 0.4 }));
+          body.castShadow = true;
+          const rim = new THREE.Mesh(new THREE.CylinderGeometry(r0 * 0.45, r0 * 0.45, 0.86, 16), new THREE.MeshStandardMaterial({ color: '#1a1f30', emissive: glow, emissiveIntensity: 0.5 }));
+          rim.position.y = 0.45;
+          g.add(body, rim);
+          g.position.set(m.x, y, m.z);
+          g.rotation.y = -(m.rot ?? 0);
+          this.scene.add(g);
+          this.flippers.push({ g, mi });
+          break;
+        }
+        case 'target': {
+          // a stand-up target: a glowing slab facing the playfield (lights gold when hit)
+          const w = (m.r ?? 0.8) * 1.6;
+          const mat = new THREE.MeshStandardMaterial({ color: '#202436', emissive: '#38ffb0', emissiveIntensity: 0.9, metalness: 0.3, roughness: 0.4 });
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(w, 1.1, 0.3), mat);
+          slab.position.set(m.x, y + 0.55, m.z);
+          slab.rotation.y = -(m.rot ?? 0);
+          slab.castShadow = true;
+          this.scene.add(slab);
+          this.targets.push({ mat, mi });
+          break;
+        }
+        case 'plunger': {
+          // the plunger rod below the ball in its lane (pulls back as you charge it)
+          const rod = new THREE.Group();
+          const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.4, 12), new THREE.MeshStandardMaterial({ color: '#c9ced9', metalness: 0.9, roughness: 0.25 }));
+          shaft.rotation.x = Math.PI / 2;
+          const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.35, 20), new THREE.MeshStandardMaterial({ color: '#ff3b4a', emissive: '#ff3b4a', emissiveIntensity: 0.5 }));
+          knob.rotation.x = Math.PI / 2;
+          knob.position.z = -1.2;
+          rod.add(shaft, knob);
+          rod.position.set(m.x, y + 0.5, m.z + 2.1);
+          this.scene.add(rod);
+          this.plungerRod = { g: rod, z0: m.z + 2.1 };
+          break;
+        }
+        case 'portal': {
+          const colors = ['#b46bff', '#3cf2ff', '#ffd23a', '#38ffb0'];
+          const col = colors[(m.team ?? 0) % colors.length];
+          const r = m.r ?? 1;
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.12, 8, 40), new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
+          ring.rotation.x = Math.PI / 2;
+          ring.position.set(m.x, y + 0.15, m.z);
+          const disc = new THREE.Mesh(new THREE.CircleGeometry(r * 0.92, 40), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+          disc.rotation.x = -Math.PI / 2;
+          disc.position.set(m.x, y + 0.08, m.z);
+          this.scene.add(ring, disc);
+          this.portals.push(ring);
           break;
         }
         case 'pillar': {
@@ -1165,6 +1277,16 @@ export class GameView {
       if (p.kind === 'arm') h.m.rotation.y = -p.angle;
       else if (p.kind === 'saw') { h.m.position.set(p.ax, this.groundY(p.ax, p.az), p.az); h.m.rotation.y = p.angle; if (Math.random() < 0.3) this.particles.emit(p.ax, h.m.position.y + 0.35, p.az, (Math.random() - 0.5) * 6, 2, (Math.random() - 0.5) * 6, new THREE.Color('#ffc46b'), 0.07, 0.25); }
     }
+    if (s.pin) {
+      for (const f of this.flippers) f.g.rotation.y = -(s.pin.flip[f.mi] ?? 0);
+      for (const tg of this.targets) {
+        const lit = s.pin.lit[tg.mi];
+        tg.mat.emissive.set(lit ? '#ffd23a' : '#38ffb0');
+        tg.mat.emissiveIntensity = lit ? 1.6 : 0.6 + 0.3 * Math.sin(this.time * 4 + tg.mi);
+      }
+      if (this.plungerRod) this.plungerRod.g.position.z = this.plungerRod.z0 + s.pin.charge * 1.3;
+    }
+    for (const p of this.portals) p.rotation.z += dt * 2.5;
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
     // spin pads: swirl turns; flares up while someone is re-spinning on it
     // quest: checkpoints you've reached turn gold; the goal ring turns slowly
@@ -1348,6 +1470,32 @@ export class GameView {
   }
 
   updateCamera(s: GameState, dt: number) {
+    const A = this.cfg.arena;
+    if (A.pinball && A.course && !this.attract) {
+      const W = A.course.w * A.course.tile, Hl = A.course.h * A.course.tile;
+      const balls = s.tops.filter((t) => t.alive && !t.drone);
+      const bz = balls.length ? balls.reduce((a, t) => a + t.z, 0) / balls.length : 0;
+      // look a little toward the ball, but keep the flippers in view
+      const tz = Math.max(-Hl * 0.2, Math.min(Hl * 0.12, Hl * 0.06 + bz * 0.3));
+      const ty = this.groundY(0, tz);
+      // far enough back that the table's width fits (portrait phones need more)
+      const vfov = (this.camera.fov * Math.PI) / 180, aspect = innerWidth / innerHeight;
+      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
+      const D = Math.max(Hl * 0.95, (W * 0.6) / Math.tan(hfov / 2));
+      const want = new THREE.Vector3(0, ty + D * 0.9, tz + D * 0.5);
+      const k = Math.min(1, dt * 3);
+      this.camPos.lerp(want, k);
+      this.camTarget.lerp(new THREE.Vector3(0, ty, tz - Hl * 0.06), k);
+      this.camera.position.copy(this.camPos);
+      if (this.shake > 0) { this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.4; this.shake = Math.max(0, this.shake - dt * 3); }
+      this.camera.lookAt(this.camTarget);
+      // keep the flippers above the player card (same HUD-free band the arenas use)
+      if (this.safe.top || this.safe.bottom) this.camera.setViewOffset(innerWidth, innerHeight, 0, ((this.safe.bottom - this.safe.top) / 2) * innerHeight, innerWidth, innerHeight);
+      else if (this.camera.view) this.camera.clearViewOffset();
+      const fx = this.camTarget.x - this.camPos.x, fz = this.camTarget.z - this.camPos.z, fl = Math.hypot(fx, fz) || 1;
+      this.camFwd.x = fx / fl; this.camFwd.z = fz / fl;
+      return;
+    }
     const T0 = this.terrain.track;
     if (T0 && this.splits.length > 1) {
       for (const v of this.splits) {
