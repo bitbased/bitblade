@@ -504,7 +504,8 @@ export class LobbyScreen implements Screen {
       this.pushSummary();
       this.app.toast(`${o.name || 'Room'} ${t.code} open${hostRoom.info.public ? ' · listed in Public Rooms' : ''} — share the code!`);
     } catch (e) {
-      this.app.toast(String((e as Error).message || e));
+      const msg = String((e as Error).message || e);
+      this.app.toast(msg === 'room already hosted' ? `${o.code ?? 'This room'} is already open (another tab or device?) — join it from ONLINE instead` : msg);
     }
     this.renderOnline();
   }

@@ -135,7 +135,7 @@ export class OnlineScreen implements Screen {
     } catch (e) {
       this.listErr = String((e as Error).message || e);
     }
-    if (this.el?.isConnected) this.renderList();
+    if (this.el?.isConnected) { this.renderList(); this.renderMyRooms(); }
     if (manual) this.app.sfx.play('tick');
   }
 
@@ -150,12 +150,13 @@ export class OnlineScreen implements Screen {
       el.append(h('div.hint', null, this.rooms.length ? 'No public rooms for this mode right now.' : 'No public rooms right now — host one and tick PUBLIC, or hit QUICK MATCH.'));
       return;
     }
+    const mine = new Set(loadMyRooms().map((x) => x.code));
     for (const r of list) {
       const full = r.players >= r.max;
       el.append(h('div.room-row.nav', { onclick: () => this.join(publicJoinInput(r.code)), title: `Join ${r.name}` },
         h('div.rr-icon', null, icon(MODE_ICON[r.mode as ModeId] ?? 'users')),
         h('div.rr-main', null,
-          h('b', null, r.name || `${r.host}'s room`, r.persistent ? h('span.rr-tag', null, 'SAVED') : null),
+          h('b', null, r.name || `${r.host}'s room`, mine.has(r.code) ? h('span.rr-tag.yours', null, 'YOURS') : r.persistent ? h('span.rr-tag', null, 'SAVED') : null),
           h('span', null, `${r.modeName || r.mode} · ${r.arena} · host ${r.host}`)),
         h('div.rr-side', null,
           h('b', { style: { color: full ? 'var(--red)' : 'var(--accent)' } }, `${r.players}/${r.max}`),
@@ -182,11 +183,15 @@ export class OnlineScreen implements Screen {
     if (!mine.length) { el.append(h('div.hint', null, 'Tick KEEP ROOM when hosting to save a room with a fixed code and link.')); return; }
     for (const r of mine) {
       const mode = MODES.find((m) => m.id === r.mode);
+      // already open (e.g. in another tab): join it instead of trying to host it twice
+      const live = this.rooms.find((x) => x.code === r.code);
       el.append(h('div.room-row', null,
         h('div.rr-icon', null, icon(MODE_ICON[r.mode as ModeId] ?? 'users')),
-        h('div.rr-main', null, h('b', null, r.name, r.public ? h('span.rr-tag', null, 'PUBLIC') : null), h('span', null, `CODE ${r.code} · ${mode?.name ?? r.mode}`)),
+        h('div.rr-main', null, h('b', null, r.name, live ? h('span.rr-tag.live', null, 'LIVE') : r.public ? h('span.rr-tag', null, 'PUBLIC') : null), h('span', null, live ? `CODE ${r.code} · open now · ${live.players}/${live.max} players` : `CODE ${r.code} · ${mode?.name ?? r.mode}`)),
         h('div.rr-side.row', null,
-          h('button.btn.small.primary.nav', { onclick: () => this.openSaved(r) }, 'OPEN'),
+          live
+            ? h('button.btn.small.primary.nav', { title: 'This room is already open — join it', onclick: () => this.join(publicJoinInput(r.code)) }, 'JOIN')
+            : h('button.btn.small.primary.nav', { onclick: () => this.openSaved(r) }, 'OPEN'),
           h('button.btn.small.nav', { title: 'Copy invite link', onclick: () => { navigator.clipboard?.writeText(publicJoinInput(r.code)); this.app.toast('Invite link copied'); } }, icon('link')),
           h('button.btn.small.nav', { title: 'Forget this room', onclick: () => { if (!confirmTwice(this.app, 'del-room-' + r.code, `Press again to forget ${r.name} (its code is released only on this device)`)) return; deleteMyRoom(r.code); this.renderMyRooms(); } }, icon('close')))));
     }
