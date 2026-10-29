@@ -1,5 +1,5 @@
 import { fillTrackHeights, sampleTrack, trackBounds, type TrackDef, type TrackSamples } from './track';
-import { compileCourse, type SegCourse } from './segments';
+import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -1031,12 +1031,18 @@ export function loadCustomArenas(): ArenaDef[] {
 export function saveCustomArenas(list: ArenaDef[]) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
 }
-const TS_KEY = 'bitblade.trackstudio.v1';
-/** Track Studio courses (segment chains), stored as authored */
-export function loadTrackCourses(): SegCourse[] {
-  try { return JSON.parse(localStorage.getItem(TS_KEY) || '[]'); } catch { return []; }
+const TS_KEY_V1 = 'bitblade.trackstudio.v1';
+const TS_KEY = 'bitblade.trackstudio.v2';
+/** Track Studio courses (point-based); v1 segment-chain courses are converted the first time */
+export function loadTrackCourses(): NodeCourse[] {
+  try {
+    const v2 = localStorage.getItem(TS_KEY);
+    if (v2) return JSON.parse(v2);
+    const v1 = JSON.parse(localStorage.getItem(TS_KEY_V1) || '[]') as SegCourse[];
+    return v1.map(segToNodes);
+  } catch { return []; }
 }
-export function saveTrackCourses(list: SegCourse[]) {
+export function saveTrackCourses(list: NodeCourse[]) {
   try { localStorage.setItem(TS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
   compiledCache.clear();
 }
@@ -1045,7 +1051,7 @@ function trackStudioArenas(): ArenaDef[] {
   return loadTrackCourses().map((c) => {
     const key = JSON.stringify(c);
     let a = compiledCache.get(key);
-    if (!a) { a = { ...compileCourse(c).arena, custom: true }; compiledCache.set(key, a); }
+    if (!a) { a = { ...compileNodeCourse(c).arena, custom: true }; compiledCache.set(key, a); }
     return a;
   });
 }

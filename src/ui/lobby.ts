@@ -191,23 +191,24 @@ export class LobbyScreen implements Screen {
 
   build() {
     // keys: [prev key, next key, prev pad button, next pad button, PlayStation names] shown on the matching arrow
-    const selector = (label: string, step: (d: number) => void, keys?: [string, string, string, string, string, string]): Sel => {
+    const selector = (label: string, step: (d: number) => void, keys?: [string, string, string, string, string, string], dice?: { tip: string; roll: () => void }): Sel => {
       const val = h('b'), sub = h('span');
       const g = (i: number) => (keys ? { 'data-k': keys[i], 'data-p': keys[i + 2], 'data-ps': keys[i + 4] } : {});
       const el = h('div.selector.panel.nav', { 'data-navx': '1' },
         h('span.lbl', null, label),
+        dice ? h('button.sel-dice', { title: dice.tip, onclick: (e: Event) => { e.stopPropagation(); dice.roll(); this.app.sfx.play('select'); } }, icon('dice')) : null,
         h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(-1); }, 'aria-label': 'previous', ...g(0) }, '◀'),
         h('div.val', null, val, sub),
         h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(1); }, 'aria-label': 'next', ...g(1) }, '▶'));
       el.addEventListener('navx', (e) => step((e as CustomEvent).detail));
       return { el, set: (t, s2) => { if (val.textContent !== t) val.textContent = t; if (sub.textContent !== s2) sub.textContent = s2; } };
     };
-    const mode = selector('MODE', (d) => this.stepMode(d), ['Z', 'C', 'LT', 'RT', 'L2', 'R2']);
+    const mode = selector('MODE', (d) => this.stepMode(d), ['Z', 'C', 'LT', 'RT', 'L2', 'R2'], { tip: 'Random mode and course', roll: () => this.randomize(true) });
     mode.el.dataset.trigger = 'mode';
     mode.el.classList.add('sel-mode');
     const size = selector('SIZE', (d) => this.stepSize(d));
     size.el.classList.add('sel-size');
-    const arena = selector('ARENA', (d) => this.stepArena(d), ['Q', 'E', 'LB', 'RB', 'L1', 'R1']);
+    const arena = selector('ARENA', (d) => this.stepArena(d), ['Q', 'E', 'LB', 'RB', 'L1', 'R1'], { tip: 'Random course for this mode', roll: () => this.randomize(false) });
     arena.el.dataset.shoulder = 'arena';
     arena.el.classList.add('sel-arena');
 
@@ -393,6 +394,20 @@ export class LobbyScreen implements Screen {
     const first = allArenas().find((a) => this.fits(a) && (L.sizeFilter === 'ALL' || arenaSize(a) === L.sizeFilter));
     if (first && L.sizeFilter !== 'ALL' && arenaSize(findArena(L.arenaId)) !== L.sizeFilter) L.arenaId = (m.arenas.map(findArena).find((a) => arenaSize(a) === L.sizeFilter) ?? first).id;
     this.rebuild();
+  }
+
+  /** dice: a random mode (and a course that suits it), or just a random course for the current mode */
+  randomize(mode: boolean) {
+    if (mode) {
+      const pick = MODES.filter((m) => m.id !== L.mode)[Math.floor(Math.random() * (MODES.length - 1))];
+      this.setMode(pick.id);
+      this.fillCpus();
+    }
+    L.sizeFilter = 'ALL';
+    const order = this.arenaOrder().filter((a) => a.id !== L.arenaId);
+    if (order.length) L.arenaId = order[Math.floor(Math.random() * order.length)].id;
+    this.refresh();
+    this.app.toast(`${this.mode.name} · ${findArena(L.arenaId).name}`);
   }
 
   toggleItems() { L.items = !L.items; this.rebuild(); }

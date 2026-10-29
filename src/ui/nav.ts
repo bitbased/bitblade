@@ -2,7 +2,7 @@
 //  - spatial: arrows / d-pad / stick move to the nearest `.nav` element in that direction (grids, rows, panels)
 //  - hold to repeat (keys, d-pad and stick), stick speed scales with tilt
 //  - focus follows the element, so it survives screens re-rendering their DOM
-//  - A / Enter / Space activates; B / Esc / Backspace goes back
+//  - A / Enter / Space activates; B / Esc goes back (never Backspace: that deletes things)
 //  - text fields are navigable: Enter types with the keyboard, A on a pad opens an on-screen keyboard
 //  - LB / RB (or Q / E) flip tabs or step the screen's [data-shoulder] selector; START hits the primary button
 //  - right stick scrolls long panels; mouse hover moves the focus too
@@ -370,7 +370,7 @@ export class MenuNav {
 
     const cur = this.cur;
     const confirm = inp.pressed.has('Enter') || inp.pressed.has('Space') || this.padEdge(0);
-    const back = inp.pressed.has('Escape') || inp.pressed.has('Backspace') || this.padEdge(1);
+    const back = inp.pressed.has('Escape') || this.padEdge(1);
     if (confirm && cur) {
       if (isText(cur)) this.editText(cur as HTMLInputElement);
       else cur.click();

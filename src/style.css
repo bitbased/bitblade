@@ -509,3 +509,7 @@ body.hints-on .menu-foot { bottom: 56px; }
   .hud-obj { top: 56px; font-size: 9px; letter-spacing: 0.12em; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
   .hud-cards { top: 76px; }
 }
+/* lobby dice */
+.selector .sel-dice { position: absolute; top: 3px; right: 22px; background: none; border: none; color: var(--gold); cursor: pointer; padding: 2px; opacity: 0.75; }
+.selector .sel-dice:hover { opacity: 1; filter: drop-shadow(0 0 6px var(--gold)); transform: rotate(-15deg); }
+.selector .sel-dice .ico { width: 15px; height: 15px; }

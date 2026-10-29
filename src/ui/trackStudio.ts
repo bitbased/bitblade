@@ -1,80 +1,77 @@
-// Track Studio: build race tracks and track adventures from segments. Left: your courses. Right: the segment chain
-// (palette, per-segment sliders, attachments). Centre: live 3D preview with the selected segment highlighted.
-// Bottom: checks (overlaps, steepness, loop closure, jump speeds). Draw mode turns a sketched path into segments.
+// Track Studio: draw and shape tracks on a top-down MAP. The track is a smooth curve through points:
+//   • drag a point to move it (only the curve next to it changes)   • click the road to select that stretch
+//   • double-click the road to add a point   • Delete removes the selected point   • drag empty space to pan
+// The HEIGHT strip along the bottom shows the track's elevation; drag a point's handle up/down.
+// The panel on the right edits exactly what's selected (a point, or a stretch between two points), plus whole-track
+// tools (loop, scale, rotate, reverse). Obstacles live on stretches, so they move with the road when you reshape it.
+// The 3D VIEW tab builds the full arena (only then — editing never waits on 3D).
 import * as THREE from 'three';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { buildArenaMesh, getRenderer } from '../game/render';
-import { COASTER, THEMES, Terrain, VOID, loadTrackCourses, saveTrackCourses } from '../game/terrain';
-import { compileCourse, jumpSpeed, type Seg, type SegAttach, type SegAttachKind, type SegCourse } from '../game/segments';
-import { sampleTrack } from '../game/track';
+import { COASTER, THEMES, Terrain, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
+import { sampleTrack, type TrackSamples } from '../game/track';
 import { icon } from './icons';
 import './trackStudio.css';
 
-const PALETTE: { label: string; seg: Seg }[] = [
-  { label: 'Straight', seg: { kind: 'straight', len: 30 } },
-  { label: 'Curve ◀', seg: { kind: 'curve', len: 40, turn: 60 } },
-  { label: 'Curve ▶', seg: { kind: 'curve', len: 40, turn: -60 } },
-  { label: 'Hairpin ◀', seg: { kind: 'hairpin', len: 50, turn: 160, rails: true } },
-  { label: 'Hairpin ▶', seg: { kind: 'hairpin', len: 50, turn: -160, rails: true } },
-  { label: 'Climb', seg: { kind: 'climb', len: 30, climb: 6 } },
-  { label: 'Drop', seg: { kind: 'drop', len: 30, climb: -8 } },
-  { label: 'Jump', seg: { kind: 'jump', len: 28, lip: 1.6, gap: 9, boost: true } },
-  { label: 'Banked ◀', seg: { kind: 'banked', len: 44, turn: 80, bank: 0.35, rails: true } },
-  { label: 'Banked ▶', seg: { kind: 'banked', len: 44, turn: -80, bank: -0.35, rails: true } },
-  { label: 'Kicker', seg: { kind: 'kicker', len: 24, lip: 1.2 } },
-  { label: 'Chicane', seg: { kind: 'chicane', len: 36, turn: 0, att: [{ at: 0.3, kind: 'pillar', lat: -0.4 }, { at: 0.7, kind: 'pillar', lat: 0.4 }] } },
+const ATTACH: { kind: SegAttachKind; label: string; adventure?: boolean; color: string; letter: string }[] = [
+  { kind: 'arm', label: 'Sweeper', color: '#ffb000', letter: 'S' }, { kind: 'saw', label: 'Saw', color: '#ff2a2a', letter: '✱' },
+  { kind: 'bumper', label: 'Bumper', color: '#ff3db4', letter: 'B' }, { kind: 'pillar', label: 'Pillar', color: '#a0a0c0', letter: 'P' },
+  { kind: 'gem', label: 'Gem', color: '#ff5cf4', letter: '◆' }, { kind: 'item', label: 'Item box', color: '#b46bff', letter: '?' },
+  { kind: 'spinpad', label: 'Spin pad', color: '#38ffb0', letter: '@' }, { kind: 'boost', label: 'Boost pad', color: '#ffe23a', letter: '»' },
+  { kind: 'checkpoint', label: 'Checkpoint', adventure: true, color: '#38ffb0', letter: '|' }, { kind: 'hive', label: 'Drone hive', adventure: true, color: '#ff2244', letter: 'H' },
 ];
-
-const ATTACH: { kind: SegAttachKind; label: string; adventure?: boolean }[] = [
-  { kind: 'arm', label: 'Sweeper' }, { kind: 'saw', label: 'Saw' }, { kind: 'bumper', label: 'Bumper' }, { kind: 'pillar', label: 'Pillar' },
-  { kind: 'gem', label: 'Gem' }, { kind: 'item', label: 'Item Box' }, { kind: 'spinpad', label: 'Spin Pad' }, { kind: 'boost', label: 'Boost Pad' },
-  { kind: 'checkpoint', label: 'Checkpoint', adventure: true }, { kind: 'hive', label: 'Drone Hive', adventure: true },
-];
-const ATT_COLOR: Record<SegAttachKind, string> = { arm: '#ffb000', saw: '#ff2a2a', bumper: '#ff3db4', pillar: '#8a8aa8', gem: '#ff5cf4', item: '#b46bff', spinpad: '#38ffb0', boost: '#ffe23a', checkpoint: '#38ffb0', hive: '#ff2244' };
-
-const segLabel = (s: Seg) => {
-  const bits = [s.kind ? s.kind[0].toUpperCase() + s.kind.slice(1) : 'Segment', `${Math.round(s.len)}m`];
-  if (s.turn) bits.push(`${s.turn > 0 ? '◀' : '▶'}${Math.abs(Math.round(s.turn))}°`);
-  if (s.climb) bits.push(`${s.climb > 0 ? '↑' : '↓'}${Math.abs(s.climb)}m`);
-  if (s.gap) bits.push(`gap ${s.gap}m`);
-  return bits.join(' · ');
-};
+const A = Object.fromEntries(ATTACH.map((a) => [a.kind, a])) as Record<SegAttachKind, (typeof ATTACH)[number]>;
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const newId = () => 'ts-' + Math.random().toString(36).slice(2, 9);
 
-function starter(open: boolean): SegCourse {
-  if (open) return { id: newId(), name: 'My Adventure', desc: 'A custom track adventure.', theme: THEMES.neon, width: 11, open: true, segs: [
-    { kind: 'straight', len: 30, rails: true }, { kind: 'climb', len: 30, climb: 6, boost: true }, { kind: 'jump', len: 28, lip: 1.6, gap: 9, boost: true },
-    { kind: 'curve', len: 40, turn: 70, bank: 0.3, rails: true, att: [{ at: 0.3, kind: 'checkpoint' }, { at: 0.7, kind: 'gem' }] }, { kind: 'straight', len: 30 },
-  ] };
-  // a closed oval-ish loop: four 90° banked turns joined by straights
-  return { id: newId(), name: 'My Track', desc: 'A custom race track.', theme: THEMES.neon, width: 11, open: false, segs: [
-    { kind: 'straight', len: 60, boost: true }, { kind: 'banked', len: 50, turn: 90, bank: 0.3, rails: true }, { kind: 'straight', len: 40, items: true },
-    { kind: 'banked', len: 50, turn: 90, bank: 0.3, rails: true }, { kind: 'straight', len: 60 }, { kind: 'banked', len: 50, turn: 90, bank: 0.3, rails: true },
-    { kind: 'straight', len: 40 }, { kind: 'banked', len: 50, turn: 90, bank: 0.3, rails: true },
-  ] };
+function starter(closed: boolean): NodeCourse {
+  if (closed) {
+    // a rounded rectangle loop
+    const pts: [number, number][] = [[0, 0], [60, 0], [100, -20], [110, -60], [90, -100], [40, -110], [-10, -95], [-30, -55], [-25, -20]];
+    return { id: newId(), name: 'My Race Track', desc: 'A custom race track.', theme: THEMES.neon, width: 11, closed: true, nodes: pts.map(([x, z]) => ({ x, z, y: 4 })), spans: pts.map((_, i) => (i === 0 ? { boost: true } : i === 4 ? { items: true } : {})) };
+  }
+  const pts: [number, number, number][] = [[0, 0, 4], [40, 0, 4], [80, -10, 8], [115, -30, 10], [140, -60, 7], [150, -100, 7], [175, -130, 9]];
+  return { id: newId(), name: 'My Adventure', desc: 'A custom track adventure.', theme: THEMES.neon, width: 11, closed: false,
+    nodes: pts.map(([x, z, y]) => ({ x, z, y })),
+    spans: [{ rails: true }, { boost: true }, { gap: 8, lip: 1.6, boost: true }, { rails: true, att: [{ at: 0.4, kind: 'checkpoint' }] }, { att: [{ at: 0.5, kind: 'gem' }] }, {}] };
 }
+
+type Sel = { kind: 'none' } | { kind: 'node'; i: number } | { kind: 'span'; i: number };
 
 class TrackStudio {
   app: App;
   root!: HTMLElement;
   nav!: MenuNav;
+  el: Record<string, HTMLElement> = {};
+  map!: HTMLCanvasElement;
+  prof!: HTMLCanvasElement;
+  courses: NodeCourse[] = [];
+  cur!: NodeCourse;
+  sel: Sel = { kind: 'none' };
+  undoStack: string[] = [];
+  view: 'map' | '3d' = 'map';
+  // map camera
+  cx = 0; cz = 0; scale = 2.5;
+  // derived (cheap, recomputed on every edit)
+  S!: TrackSamples;
+  ranges: ReturnType<typeof spanRanges> = [];
+  issues: string[] = [];
+  compiled: ReturnType<typeof compileNodeCourse> | null = null;
+  // pointer state
+  drag: { mode: 'node' | 'pan' | 'height' | 'draw'; i?: number; x: number; y: number; moved: boolean } | null = null;
+  drawPts: [number, number][] = [];
+  drawing = false;
+  hover = -1;
+  saveT = 0;
+  // 3D view
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(50, 1, 0.5, 3000);
+  camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
   renderer: THREE.WebGLRenderer;
   arenaMesh: THREE.Group | null = null;
-  overlay = new THREE.Group();
-  courses: SegCourse[] = [];
-  cur!: SegCourse;
-  sel = 0;
-  dirty = 0;
-  saveT = 0;
-  yaw = 0.6; pitch = 0.9; dist = 200; target = new THREE.Vector3();
-  drag: { x: number; y: number } | null = null;
-  el: Record<string, HTMLElement> = {};
-  compiled: ReturnType<typeof compileCourse> | null = null;
-  drawing: { pts: [number, number][] } | null = null;
-  time = 0;
+  view3dKey = '';
+  yaw = 0.7; pitch = 0.75; dist = 220; target = new THREE.Vector3();
+  orbit: { x: number; y: number; pan: boolean } | null = null;
 
   constructor(app: App) {
     this.app = app;
@@ -85,204 +82,496 @@ class TrackStudio {
     this.scene.add(new THREE.HemisphereLight('#bcd4ff', '#20140a', 0.9));
     const sun = new THREE.DirectionalLight('#ffffff', 2.0);
     sun.position.set(80, 160, 60);
-    this.scene.add(sun, this.overlay);
+    this.scene.add(sun);
     this.courses = loadTrackCourses();
-    this.cur = this.courses[0] ? clone(this.courses[0]) : { ...clone(COASTER), theme: COASTER.theme, id: newId(), name: 'Rollercoaster Copy' };
+    this.cur = this.courses[0] ? clone(this.courses[0]) : this.fromCoaster();
     this.root = this.build();
     app.root.append(this.root);
-    this.nav = new MenuNav(app, this.root, () => this.back());
-    this.refreshAll(true);
-    this.frame();
+    this.nav = new MenuNav(app, this.el.panel, () => this.escape());
+    addEventListener('keydown', this.onKey);
+    (this.el.name as HTMLInputElement).value = this.cur.name;
+    this.recompute();
+    this.fit();
+    this.renderPanel();
+    this.renderList();
     this.resize();
   }
 
-  // ------------------------------------------------------------------ DOM
-  build() {
-    const stage = h('div.ts-stage');
-    stage.addEventListener('pointerdown', (e) => {
-      if (this.drawing) { this.drawing.pts = [[e.clientX, e.clientY]]; stage.setPointerCapture(e.pointerId); return; }
-      this.drag = { x: e.clientX, y: e.clientY };
-      stage.setPointerCapture(e.pointerId);
-    });
-    stage.addEventListener('pointermove', (e) => {
-      if (this.drawing && e.buttons & 1) { const last = this.drawing.pts[this.drawing.pts.length - 1]; if (!last || Math.hypot(e.clientX - last[0], e.clientY - last[1]) > 6) this.drawing.pts.push([e.clientX, e.clientY]); this.drawSketch(); return; }
-      if (!this.drag) return;
-      this.yaw -= (e.clientX - this.drag.x) * 0.006;
-      this.pitch = Math.max(0.2, Math.min(1.45, this.pitch + (e.clientY - this.drag.y) * 0.005));
-      this.drag = { x: e.clientX, y: e.clientY };
-    });
-    stage.addEventListener('pointerup', () => { if (this.drawing && this.drawing.pts.length > 4) this.finishDraw(); this.drag = null; });
-    stage.addEventListener('wheel', (e) => { e.preventDefault(); this.dist = Math.max(30, Math.min(900, this.dist * Math.pow(1.12, Math.sign(e.deltaY)))); }, { passive: false });
-    const sketch = h<HTMLCanvasElement>('canvas.ts-sketch');
-    this.el.sketch = sketch;
-    stage.append(sketch, h('div.ts-hint', null, 'Drag to orbit · wheel to zoom'));
+  fromCoaster(): NodeCourse { const n = segToNodes(COASTER); n.id = newId(); n.name = 'Rollercoaster (copy)'; return n; }
 
-    const name = h<HTMLInputElement>('input.ts-name', { type: 'text', maxLength: 32 });
-    name.addEventListener('change', () => { this.cur.name = name.value.trim() || 'Untitled'; this.changed(false); });
+  // ------------------------------------------------------------------ layout
+  build() {
+    const name = h<HTMLInputElement>('input.ts-name', { type: 'text', maxLength: 32, title: 'Track name' });
+    name.addEventListener('change', () => { this.cur.name = name.value.trim() || 'Untitled'; this.changed(false); this.renderList(); });
     this.el.name = name;
-    const modeBtn = h('button.btn.small.nav', { onclick: () => { this.cur.open = !this.cur.open; this.changed(); }, title: 'Adventure = start → goal (Blade Quest) · Race = closed loop (Grand Prix)' });
-    this.el.mode = modeBtn;
-    const width = h<HTMLInputElement>('input', { type: 'number', min: '7', max: '18', step: '0.5' });
-    width.addEventListener('change', () => { this.cur.width = +width.value; this.changed(); });
-    this.el.width = width;
-    const theme = h<HTMLSelectElement>('select', null, ...Object.keys(THEMES).map((k) => h('option', { value: k }, k)));
-    theme.addEventListener('change', () => { this.cur.theme = THEMES[theme.value]; this.changed(); });
-    this.el.theme = theme;
-    const stats = h('div.ts-stats');
-    this.el.stats = stats;
+    const tab = (v: 'map' | '3d', label: string) => h('button.ts-tab.nav', { onclick: () => this.setView(v), 'data-v': v }, label);
+    this.el.tabs = h('div.ts-tabs', null, tab('map', 'MAP · EDIT'), tab('3d', '3D VIEW'));
+    this.el.stats = h('div.ts-stats');
     const top = h('div.ts-top', null,
       h('button.btn.small.nav', { onclick: () => this.back(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back'),
-      h('div.ts-title', null, 'TRACK STUDIO'),
-      name, modeBtn,
-      h('label.ts-lbl', null, 'WIDTH'), width,
-      h('label.ts-lbl', null, 'THEME'), theme,
-      stats, h('div.spacer'),
-      h('button.btn.small.nav', { onclick: () => this.toggleDraw(), title: 'Sketch a path from above; it becomes a segment chain you can then tune' }, icon('ramp'), ' Draw Path'),
-      h('button.btn.small.nav', { onclick: () => this.frame() }, 'Frame'),
+      h('div.ts-title', null, 'TRACK STUDIO'), name, this.el.tabs, this.el.stats, h('div.spacer'),
+      h('button.btn.small.nav.ts-drawbtn', { onclick: () => this.toggleDraw(), title: 'Sketch a new path; it becomes points you can then shape' }, icon('ramp'), ' Draw new path'),
       h('button.btn.primary.nav', { onclick: () => this.testRide(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ TEST RIDE'));
 
     this.el.list = h('div.ts-list');
     const left = h('div.ts-panel.ts-left', null,
       h('h3', null, 'MY TRACKS'), this.el.list,
       h('div.ts-btns', null,
-        h('button.btn.small.nav', { onclick: () => this.newCourse(true) }, '+ Adventure'),
-        h('button.btn.small.nav', { onclick: () => this.newCourse(false) }, '+ Race Track'),
-        h('button.btn.small.nav', { onclick: () => { this.cur = { ...clone(COASTER), theme: COASTER.theme, id: newId(), name: 'Rollercoaster Copy' }; this.sel = 0; this.changed(); } }, 'Copy Rollercoaster'),
-        h('button.btn.small.nav', { onclick: () => { this.cur = { ...clone(this.cur), id: newId(), name: this.cur.name + ' copy' }; this.changed(); } }, 'Duplicate'),
+        h('button.btn.small.nav', { onclick: () => this.open(starter(true)) }, '+ New race track'),
+        h('button.btn.small.nav', { onclick: () => this.open(starter(false)) }, '+ New adventure'),
+        h('button.btn.small.nav', { onclick: () => this.open(this.fromCoaster()) }, 'Copy Rollercoaster Run'),
+        h('button.btn.small.nav', { onclick: () => this.open({ ...clone(this.cur), id: newId(), name: this.cur.name + ' copy' }) }, 'Duplicate'),
         h('button.btn.small.nav', { onclick: () => this.exportJson() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importJson() }, 'Import'),
         h('button.btn.small.nav.ts-danger', { onclick: () => this.deleteCourse() }, 'Delete')));
 
-    this.el.chain = h('div.ts-chain');
-    this.el.palette = h('div.ts-palette', null, ...PALETTE.map((p) => h('button.ts-pal.nav', { onclick: () => this.insert(clone(p.seg)), title: `Add after the selected segment` }, p.label)));
-    this.el.segEdit = h('div.ts-segedit');
-    const right = h('div.ts-panel.ts-right', null,
-      h('h3', null, 'SEGMENTS'), this.el.chain,
-      h('div.ts-sub', null, 'ADD AFTER SELECTED'), this.el.palette,
-      this.el.segEdit);
+    // centre: the map (2D canvas) + height strip; the 3D view renders on the main canvas behind
+    this.map = h<HTMLCanvasElement>('canvas.ts-map');
+    this.prof = h<HTMLCanvasElement>('canvas.ts-prof');
+    this.el.help = h('div.ts-help');
+    const stage = h('div.ts-stage', null, this.map, this.el.help);
+    this.el.stage = stage;
+    this.bindMap();
+    this.bindProfile();
+    this.bind3d(stage);
+    const profWrap = h('div.ts-profwrap', null, h('div.ts-proflbl', null, 'HEIGHT — drag a point up or down'), this.prof);
+    this.el.profWrap = profWrap;
 
-    this.el.checks = h('div.ts-checks');
-    return h('div.ts-root', null, top, left, stage, right, this.el.checks);
+    this.el.panel = h('div.ts-panel.ts-right');
+    return h('div.ts-root', null, top, left, stage, profWrap, this.el.panel);
   }
 
-  // ------------------------------------------------------------------ state changes
-  changed(rebuild = true) {
-    this.saveT = 0.6;
-    if (rebuild) this.dirty = 0.25;
-    this.refreshAll(false);
+  // ------------------------------------------------------------------ derived data
+  /** cheap derived data for drawing; `light` skips the overlap/steepness checks (used while dragging) */
+  recompute(light = false) {
+    const def = nodeTrackDef(this.cur);
+    this.S = sampleTrack(def);
+    this.ranges = spanRanges(this.cur, this.S);
+    this.compiled = compileNodeCourse(this.cur, !light);
+    if (!light) this.issues = this.compiled.issues;
+    this.el.stats.textContent = `${Math.round(this.S.total)}m · ${this.rise()}m of height · ${this.cur.nodes.length} points · ${this.cur.closed ? 'race loop' : 'adventure (start → goal)'}`;
+    this.drawMap();
+    this.drawProfile();
   }
 
-  refreshAll(rebuildNow: boolean) {
+  rise() { let lo = Infinity, hi = -Infinity; for (let i = 0; i < this.S.n; i++) { lo = Math.min(lo, this.S.y[i]); hi = Math.max(hi, this.S.y[i]); } return Math.round(hi - lo); }
+
+  changed(geometry = true, snapshot = false) {
+    if (snapshot) this.snapshot();
+    if (geometry) this.recompute();
+    this.saveT = 0.5;
+  }
+
+  snapshot() { this.undoStack.push(JSON.stringify(this.cur)); if (this.undoStack.length > 60) this.undoStack.shift(); }
+  undo() { const s = this.undoStack.pop(); if (!s) return; this.cur = JSON.parse(s); this.sel = { kind: 'none' }; this.recompute(); this.renderPanel(); this.saveT = 0.5; }
+
+  // ------------------------------------------------------------------ map view
+  w2s(x: number, z: number): [number, number] { const r = this.map; return [r.width / 2 + (x - this.cx) * this.scale, r.height / 2 + (z - this.cz) * this.scale]; }
+  s2w(px: number, py: number): [number, number] { const r = this.map; return [(px - r.width / 2) / this.scale + this.cx, (py - r.height / 2) / this.scale + this.cz]; }
+
+  fit() {
+    const S = this.S;
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (let i = 0; i < S.n; i += 2) { x0 = Math.min(x0, S.x[i]); x1 = Math.max(x1, S.x[i]); z0 = Math.min(z0, S.z[i]); z1 = Math.max(z1, S.z[i]); }
+    this.cx = (x0 + x1) / 2; this.cz = (z0 + z1) / 2;
+    const r = this.map.getBoundingClientRect();
+    this.scale = Math.max(0.4, Math.min(8, Math.min((r.width || 800) / (x1 - x0 + 60), (r.height || 500) / (z1 - z0 + 60))));
+    this.drawMap();
+  }
+
+  spanAtSample(i: number) { for (let k = 0; k < this.ranges.length; k++) if (i >= this.ranges[k].i0 && (i <= this.ranges[k].i1 || k === this.ranges.length - 1)) return k; return 0; }
+
+  /** nearest sample to a screen point, and its distance in pixels */
+  pickRoad(px: number, py: number) {
+    const [wx, wz] = this.s2w(px, py);
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < this.S.n; i++) { const d = (this.S.x[i] - wx) ** 2 + (this.S.z[i] - wz) ** 2; if (d < bd) { bd = d; best = i; } }
+    return { i: best, px: Math.sqrt(bd) * this.scale, onRoad: Math.sqrt(bd) <= this.S.w[best] / 2 + 6 / this.scale };
+  }
+
+  pickNode(px: number, py: number) {
+    let best = -1, bd = 14;
+    this.cur.nodes.forEach((n, i) => { const [sx, sy] = this.w2s(n.x, n.z); const d = Math.hypot(sx - px, sy - py); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+
+  bindMap() {
+    const c = this.map;
+    const local = (e: PointerEvent | MouseEvent) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * (c.width / r.width), (e.clientY - r.top) * (c.height / r.height)] as [number, number]; };
+    c.addEventListener('pointerdown', (e) => {
+      if (this.view !== 'map') return;
+      const [px, py] = local(e);
+      c.setPointerCapture(e.pointerId);
+      if (this.drawing) { this.drawPts = [this.s2w(px, py)]; this.drag = { mode: 'draw', x: px, y: py, moved: false }; return; }
+      if (e.button === 0) {
+        const n = this.pickNode(px, py);
+        if (n >= 0) { this.select({ kind: 'node', i: n }); this.snapshot(); this.drag = { mode: 'node', i: n, x: px, y: py, moved: false }; return; }
+        const r = this.pickRoad(px, py);
+        if (r.onRoad) { this.select({ kind: 'span', i: this.spanAtSample(r.i) }); this.drag = { mode: 'pan', x: px, y: py, moved: false }; return; }
+        this.select({ kind: 'none' });
+      }
+      this.drag = { mode: 'pan', x: px, y: py, moved: false };
+    });
+    c.addEventListener('pointermove', (e) => {
+      const [px, py] = local(e);
+      if (!this.drag) { const n = this.pickNode(px, py); if (n !== this.hover) { this.hover = n; c.style.cursor = n >= 0 ? 'grab' : this.drawing ? 'crosshair' : 'default'; this.drawMap(); } return; }
+      const d = this.drag;
+      if (Math.hypot(px - d.x, py - d.y) > 3) d.moved = true;
+      if (d.mode === 'draw') { const w = this.s2w(px, py); const last = this.drawPts[this.drawPts.length - 1]; if (Math.hypot(w[0] - last[0], w[1] - last[1]) > 2) { this.drawPts.push(w); this.drawMap(); } return; }
+      if (d.mode === 'node' && d.i !== undefined) {
+        const [wx, wz] = this.s2w(px, py);
+        this.cur.nodes[d.i].x = Math.round(wx * 2) / 2; this.cur.nodes[d.i].z = Math.round(wz * 2) / 2;
+        this.recompute(true);
+        return;
+      }
+      if (d.mode === 'pan' && d.moved) { this.cx -= (px - d.x) / this.scale; this.cz -= (py - d.y) / this.scale; d.x = px; d.y = py; this.drawMap(); }
+    });
+    c.addEventListener('pointerup', () => {
+      const d = this.drag;
+      this.drag = null;
+      if (!d) return;
+      if (d.mode === 'draw') { this.finishDraw(); return; }
+      if (d.mode === 'node') { if (d.moved) this.changed(true); else this.undoStack.pop(); this.renderPanel(); }
+    });
+    c.addEventListener('dblclick', (e) => {
+      if (this.view !== 'map' || this.drawing) return;
+      const [px, py] = local(e);
+      const r = this.pickRoad(px, py);
+      if (r.onRoad && this.pickNode(px, py) < 0) this.insertAt(r.i);
+    });
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const [px, py] = local(e);
+      const before = this.s2w(px, py);
+      this.scale = Math.max(0.3, Math.min(12, this.scale * Math.pow(1.15, -Math.sign(e.deltaY))));
+      const after = this.s2w(px, py);
+      this.cx += before[0] - after[0]; this.cz += before[1] - after[1];
+      this.drawMap();
+    }, { passive: false });
+  }
+
+  drawMap() {
+    const c = this.map;
+    if (!c || this.view !== 'map') return;
+    const r = c.getBoundingClientRect();
+    if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) { c.width = Math.max(1, Math.round(r.width)); c.height = Math.max(1, Math.round(r.height)); }
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#05070f';
+    g.fillRect(0, 0, c.width, c.height);
+    // grid: 10m fine, 50m bold
+    const step = this.scale > 2 ? 10 : 50;
+    const [wx0, wz0] = this.s2w(0, 0), [wx1, wz1] = this.s2w(c.width, c.height);
+    g.lineWidth = 1;
+    for (let x = Math.floor(wx0 / step) * step; x <= wx1; x += step) { const [sx] = this.w2s(x, 0); g.strokeStyle = x % 50 === 0 ? 'rgba(60,242,255,0.13)' : 'rgba(60,242,255,0.05)'; g.beginPath(); g.moveTo(sx, 0); g.lineTo(sx, c.height); g.stroke(); }
+    for (let z = Math.floor(wz0 / step) * step; z <= wz1; z += step) { const [, sy] = this.w2s(0, z); g.strokeStyle = z % 50 === 0 ? 'rgba(60,242,255,0.13)' : 'rgba(60,242,255,0.05)'; g.beginPath(); g.moveTo(0, sy); g.lineTo(c.width, sy); g.stroke(); }
+    const S = this.S, def = (this.compiled ?? compileNodeCourse(this.cur, false)).arena;
+    const track = def.track!;
+    const inR = (f: number, rs: [number, number][]) => rs.some(([a, b]) => f >= a && f <= b);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < S.n; i++) { lo = Math.min(lo, S.y[i]); hi = Math.max(hi, S.y[i]); }
+    const theme = this.cur.theme;
+    const cLo = new THREE.Color(theme.floor).lerp(new THREE.Color('#ffffff'), 0.15), cHi = new THREE.Color(theme.glow);
+    const selSpan = this.sel.kind === 'span' ? this.ranges[this.sel.i] : null;
+    // road: quads between consecutive samples, coloured by height; gaps as dark holes
+    const last = this.cur.closed ? S.n : S.n - 1;
+    for (let i = 0; i < last; i++) {
+      const j = (i + 1) % S.n;
+      const f = S.cum[i] / S.total;
+      const hw0 = S.w[i] / 2, hw1 = S.w[j] / 2;
+      const p = [this.w2s(S.x[i] - S.tz[i] * hw0, S.z[i] + S.tx[i] * hw0), this.w2s(S.x[j] - S.tz[j] * hw1, S.z[j] + S.tx[j] * hw1), this.w2s(S.x[j] + S.tz[j] * hw1, S.z[j] - S.tx[j] * hw1), this.w2s(S.x[i] + S.tz[i] * hw0, S.z[i] - S.tx[i] * hw0)];
+      const gap = inR(f, track.gaps);
+      const col = cLo.clone().lerp(cHi, hi > lo ? (S.y[i] - lo) / (hi - lo) : 0);
+      g.fillStyle = gap ? 'rgba(0,0,0,0.9)' : `#${col.getHexString()}`;
+      g.beginPath(); g.moveTo(p[0][0], p[0][1]); for (const q of p.slice(1)) g.lineTo(q[0], q[1]); g.closePath(); g.fill();
+      if (gap) { g.strokeStyle = 'rgba(255,60,80,0.6)'; g.lineWidth = 1; g.stroke(); }
+      // rails as bright edges
+      if (inR(f, track.rails) && !gap) { g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.moveTo(p[0][0], p[0][1]); g.lineTo(p[1][0], p[1][1]); g.moveTo(p[2][0], p[2][1]); g.lineTo(p[3][0], p[3][1]); g.stroke(); }
+    }
+    // selected stretch outline
+    if (selSpan) {
+      g.strokeStyle = '#ffd23a'; g.lineWidth = 4; g.setLineDash([10, 5]); g.shadowColor = '#ffd23a'; g.shadowBlur = 10;
+      for (const side of [1, -1]) {
+        g.beginPath();
+        for (let i = selSpan.i0; i <= Math.min(S.n - 1, selSpan.i1 || S.n - 1); i++) { const hw = (S.w[i] / 2 + 1.2) * side; const [sx, sy] = this.w2s(S.x[i] - S.tz[i] * hw, S.z[i] + S.tx[i] * hw); if (i === selSpan.i0) g.moveTo(sx, sy); else g.lineTo(sx, sy); }
+        g.stroke();
+      }
+      g.setLineDash([]); g.shadowBlur = 0;
+    }
+    // direction arrows along the centre line
+    g.fillStyle = 'rgba(0,0,0,0.45)';
+    for (let i = 20; i < S.n; i += 60) { const [sx, sy] = this.w2s(S.x[i], S.z[i]); const a = Math.atan2(S.tz[i], S.tx[i]); g.save(); g.translate(sx, sy); g.rotate(a); g.beginPath(); g.moveTo(8, 0); g.lineTo(-5, -6); g.lineTo(-2, 0); g.lineTo(-5, 6); g.closePath(); g.fill(); g.restore(); }
+    // things on the track
+    g.font = '700 11px Rajdhani, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const m of def.markers) {
+      const a = A[m.kind as SegAttachKind];
+      if (!a || m.kind === 'item') continue;
+      const [sx, sy] = this.w2s(m.x, m.z);
+      if (m.kind === 'checkpoint') { const yaw = m.rot ?? 0, hw = (m.r ?? 2.2) * this.scale; g.strokeStyle = a.color; g.lineWidth = 3; g.beginPath(); g.moveTo(sx - Math.cos(yaw) * hw, sy + Math.sin(yaw) * hw); g.lineTo(sx + Math.cos(yaw) * hw, sy - Math.sin(yaw) * hw); g.stroke(); continue; }
+      g.fillStyle = a.color; g.beginPath(); g.arc(sx, sy, 6, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#05060a'; g.fillText(a.letter, sx, sy + 0.5);
+    }
+    // start / goal
+    const flag = (i: number, col: string, txt: string) => { const [sx, sy] = this.w2s(S.x[i], S.z[i]); g.fillStyle = col; g.fillRect(sx - 15, sy - 22, 30, 13); g.fillStyle = '#05060a'; g.fillText(txt, sx, sy - 15); };
+    flag(Math.min(S.n - 1, 6), '#38ff7a', 'START');
+    if (!this.cur.closed) flag(Math.max(0, S.n - 10), '#ffd23a', 'GOAL');
+    // points
+    this.cur.nodes.forEach((n, i) => {
+      const [sx, sy] = this.w2s(n.x, n.z);
+      const sel = this.sel.kind === 'node' && this.sel.i === i, hov = this.hover === i;
+      g.beginPath(); g.arc(sx, sy, sel ? 10 : hov ? 9 : 7, 0, Math.PI * 2);
+      g.fillStyle = sel ? '#ffd23a' : '#0b1020'; g.fill();
+      g.lineWidth = 2; g.strokeStyle = sel ? '#ffffff' : '#3cf2ff'; g.stroke();
+      g.fillStyle = sel ? '#05060a' : '#e8f0ff'; g.fillText(String(i + 1), sx, sy + 0.5);
+    });
+    // the open end in race mode: show where the loop will join
+    if (this.drawing && this.drawPts.length > 1) {
+      g.strokeStyle = '#3cf2ff'; g.lineWidth = 6; g.lineCap = 'round'; g.lineJoin = 'round';
+      g.beginPath(); this.drawPts.forEach(([x, z], i) => { const [sx, sy] = this.w2s(x, z); if (i) g.lineTo(sx, sy); else g.moveTo(sx, sy); }); g.stroke();
+    }
+    if (this.drawing) { g.fillStyle = 'rgba(255,210,58,0.9)'; g.textAlign = 'left'; g.font = '700 14px Orbitron, sans-serif'; g.fillText(this.drawPts.length > 1 ? 'Release to turn this into points' : 'DRAW: drag a path (finish near the start for a loop) · Esc to cancel', 14, 20); }
+  }
+
+  // ------------------------------------------------------------------ height strip
+  bindProfile() {
+    const c = this.prof;
+    const local = (e: PointerEvent) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * (c.width / r.width), (e.clientY - r.top) * (c.height / r.height)] as [number, number]; };
+    c.addEventListener('pointerdown', (e) => {
+      const [px] = local(e);
+      // nearest point handle by x
+      let best = -1, bd = 18;
+      this.nodeProfileX().forEach((x, i) => { const d = Math.abs(x - px); if (d < bd) { bd = d; best = i; } });
+      if (best < 0) return;
+      c.setPointerCapture(e.pointerId);
+      this.snapshot();
+      this.select({ kind: 'node', i: best });
+      this.drag = { mode: 'height', i: best, x: px, y: 0, moved: false };
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (this.drag?.mode !== 'height' || this.drag.i === undefined) return;
+      const [, py] = local(e);
+      const { lo, hi } = this.profRange();
+      const y = hi - (py - 10) / (c.height - 20) * (hi - lo);
+      this.cur.nodes[this.drag.i].y = Math.max(-10, Math.min(60, Math.round(y * 2) / 2));
+      this.drag.moved = true;
+      this.recompute(true);
+    });
+    c.addEventListener('pointerup', () => { if (this.drag?.mode === 'height') { if (!this.drag.moved) this.undoStack.pop(); this.drag = null; this.changed(true); this.renderPanel(); } });
+  }
+
+  profRange() { let lo = Infinity, hi = -Infinity; for (const n of this.cur.nodes) { lo = Math.min(lo, n.y); hi = Math.max(hi, n.y); } return { lo: Math.min(lo, 0) - 2, hi: Math.max(hi, lo + 8) + 4 }; }
+  nodeProfileX() { const c = this.prof, ni = this.ranges.map((r) => r.i0); if (!this.cur.closed) ni.push(this.S.n - 1); return this.cur.nodes.map((_, i) => 10 + ((this.S.cum[ni[i] ?? 0] ?? 0) / this.S.total) * (c.width - 20)); }
+
+  drawProfile() {
+    const c = this.prof;
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) { c.width = Math.max(1, Math.round(r.width)); c.height = Math.max(1, Math.round(r.height)); }
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#05070f'; g.fillRect(0, 0, c.width, c.height);
+    const S = this.S, { lo, hi } = this.profRange();
+    const X = (i: number) => 10 + (S.cum[i] / S.total) * (c.width - 20), Y = (y: number) => 10 + (hi - y) / (hi - lo) * (c.height - 20);
+    // 2m grid lines
+    g.strokeStyle = 'rgba(60,242,255,0.07)'; g.lineWidth = 1;
+    for (let y = Math.ceil(lo / 2) * 2; y <= hi; y += 2) { g.beginPath(); g.moveTo(0, Y(y)); g.lineTo(c.width, Y(y)); g.stroke(); }
+    // selected stretch band
+    if (this.sel.kind === 'span') { const rg = this.ranges[this.sel.i]; g.fillStyle = 'rgba(255,210,58,0.12)'; g.fillRect(X(rg.i0), 0, X(Math.min(S.n - 1, rg.i1 || S.n - 1)) - X(rg.i0), c.height); }
+    const gaps = (this.compiled ?? compileNodeCourse(this.cur, false)).arena.track!.gaps;
+    g.beginPath(); g.moveTo(X(0), c.height);
+    for (let i = 0; i < S.n; i += 2) g.lineTo(X(i), Y(S.y[i]));
+    g.lineTo(X(S.n - 1), c.height); g.closePath();
+    g.fillStyle = 'rgba(60,242,255,0.18)'; g.fill();
+    g.strokeStyle = '#3cf2ff'; g.lineWidth = 2; g.beginPath();
+    for (let i = 0; i < S.n; i += 2) { const p = [X(i), Y(S.y[i])]; if (i) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]); }
+    g.stroke();
+    for (const [a, b] of gaps) { g.fillStyle = 'rgba(255,40,60,0.35)'; g.fillRect(10 + a * (c.width - 20), 0, (b - a) * (c.width - 20), c.height); }
+    const xs = this.nodeProfileX();
+    g.font = '700 10px Rajdhani, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    this.cur.nodes.forEach((n, i) => {
+      const sel = this.sel.kind === 'node' && this.sel.i === i;
+      g.beginPath(); g.arc(xs[i], Y(n.y), sel ? 8 : 6, 0, Math.PI * 2);
+      g.fillStyle = sel ? '#ffd23a' : '#0b1020'; g.fill(); g.strokeStyle = sel ? '#fff' : '#3cf2ff'; g.lineWidth = 2; g.stroke();
+      g.fillStyle = sel ? '#05060a' : '#e8f0ff'; g.fillText(String(i + 1), xs[i], Y(n.y) + 0.5);
+    });
+  }
+
+  // ------------------------------------------------------------------ editing ops
+  select(s: Sel) { this.sel = s; this.drawMap(); this.drawProfile(); this.renderPanel(); }
+
+  insertAt(sample: number) {
+    this.snapshot();
+    const k = this.spanAtSample(sample);
+    const S = this.S, rg = this.ranges[k];
+    const frac = Math.max(0.05, Math.min(0.95, (S.cum[sample] - rg.start) / (rg.end - rg.start)));
+    const node = { x: Math.round(S.x[sample] * 2) / 2, z: Math.round(S.z[sample] * 2) / 2, y: Math.round(S.y[sample] * 2) / 2, bank: +S.bank[sample].toFixed(2), w: +(S.w[sample]).toFixed(1) };
+    if (Math.abs(node.w - this.cur.width) < 0.05) delete (node as { w?: number }).w;
+    this.cur.nodes.splice(k + 1, 0, node);
+    // split the stretch: rails/items carry over, the jump stays at the end, things keep their place on the road
+    const old = this.cur.spans[k] ?? {};
+    const a: Span = { rails: old.rails, boost: old.boost, items: old.items, att: [] }, b: Span = { rails: old.rails, gap: old.gap, lip: old.lip, att: [] };
+    for (const t of old.att ?? []) { if (t.at < frac) a.att!.push({ ...t, at: t.at / frac }); else b.att!.push({ ...t, at: (t.at - frac) / (1 - frac) }); }
+    this.cur.spans.splice(k, 1, a, b);
+    this.recompute();
+    this.select({ kind: 'node', i: k + 1 });
+    this.saveT = 0.5;
+    this.app.sfx.play('tick');
+  }
+
+  deleteNode(i: number) {
+    const min = this.cur.closed ? 3 : 2;
+    if (this.cur.nodes.length <= min) { this.app.toast(`A ${this.cur.closed ? 'loop' : 'track'} needs at least ${min} points`); return; }
+    this.snapshot();
+    this.cur.nodes.splice(i, 1);
+    // merge the two stretches around the point (keep the later one's jump)
+    const before = this.cur.spans[i - 1], after = this.cur.spans[i];
+    if (before && after) { this.cur.spans.splice(i - 1, 2, { ...before, gap: after.gap, lip: after.lip, att: [...(before.att ?? []).map((t) => ({ ...t, at: t.at * 0.5 })), ...(after.att ?? []).map((t) => ({ ...t, at: 0.5 + t.at * 0.5 }))] }); }
+    else this.cur.spans.splice(Math.max(0, i - 1), 1);
+    this.fixSpans();
+    this.sel = { kind: 'none' };
+    this.changed(true);
+    this.renderPanel();
+  }
+
+  fixSpans() { const n = this.cur.closed ? this.cur.nodes.length : this.cur.nodes.length - 1; while (this.cur.spans.length < n) this.cur.spans.push({}); this.cur.spans.length = n; }
+
+  transform(fn: (x: number, z: number) => [number, number]) {
+    this.snapshot();
+    let mx = 0, mz = 0; for (const n of this.cur.nodes) { mx += n.x; mz += n.z; } mx /= this.cur.nodes.length; mz /= this.cur.nodes.length;
+    for (const n of this.cur.nodes) { const [x, z] = fn(n.x - mx, n.z - mz); n.x = Math.round((x + mx) * 2) / 2; n.z = Math.round((z + mz) * 2) / 2; }
+    this.changed(true);
+  }
+
+  setClosed(closed: boolean) {
+    if (closed === this.cur.closed) return;
+    this.snapshot();
+    this.cur.closed = closed;
+    if (closed) {
+      // strip adventure-only things (checkpoints/hives) and make sure the loop isn't absurd
+      for (const s of this.cur.spans) s.att = (s.att ?? []).filter((a) => !A[a.kind].adventure);
+      const a = this.cur.nodes[0], b = this.cur.nodes[this.cur.nodes.length - 1];
+      if (Math.hypot(a.x - b.x, a.z - b.z) < 12) this.cur.nodes.pop(); // last point sits on the start: let the loop join there
+    }
+    this.fixSpans();
+    this.changed(true);
+    this.renderPanel();
+    this.app.toast(closed ? 'Loop closed: the last point now joins back to the start (race track)' : 'Loop opened: start → goal (adventure)');
+  }
+
+  reverse() {
+    this.snapshot();
+    this.cur.nodes.reverse();
+    const sp = this.cur.spans.slice(0, this.cur.closed ? this.cur.nodes.length : this.cur.nodes.length - 1);
+    if (this.cur.closed) { const last = sp.pop()!; sp.reverse(); sp.unshift(last); } else sp.reverse();
+    this.cur.spans = sp.map((s) => ({ ...s, att: (s.att ?? []).map((t) => ({ ...t, at: 1 - t.at, lat: -(t.lat ?? 0) })) }));
+    this.changed(true);
+    this.renderPanel();
+  }
+
+  // ------------------------------------------------------------------ the inspector
+  renderPanel() {
+    const el = this.el.panel;
+    const keepScroll = el.scrollTop;
+    el.innerHTML = '';
     const c = this.cur;
-    (this.el.name as HTMLInputElement).value = c.name;
-    this.el.mode.textContent = c.open ? 'ADVENTURE (start → goal)' : 'RACE (loop)';
-    (this.el.width as HTMLInputElement).value = String(c.width);
-    const tk = Object.entries(THEMES).find(([, v]) => v === c.theme || JSON.stringify(v) === JSON.stringify(c.theme))?.[0] ?? 'neon';
-    (this.el.theme as HTMLSelectElement).value = tk;
-    this.renderList();
-    this.renderChain();
-    this.renderSegEdit();
-    if (rebuildNow) this.rebuild();
+    const num = (label: string, val: number, min: number, max: number, step: number, set: (v: number) => void, tip = '') => {
+      const inp = h<HTMLInputElement>('input', { type: 'number', min: String(min), max: String(max), step: String(step), value: String(+val.toFixed(2)) });
+      inp.addEventListener('change', () => { this.snapshot(); set(+inp.value); this.changed(true); this.drawProfile(); });
+      return h('div.ts-field', { title: tip }, h('label', null, label), inp);
+    };
+    const tog = (label: string, on: boolean, set: (v: boolean) => void, tip = '') => {
+      const t = h('div.toggle.panel.nav', { title: tip, onclick: () => { this.snapshot(); set(!on); this.changed(true); this.renderPanel(); } }, h('span.dot'), label);
+      t.classList.toggle('on', on);
+      return t;
+    };
+    const s = this.sel;
+    // ---- the selection
+    if (s.kind === 'none') {
+      el.append(h('div.ts-sec', null, h('h3', null, 'NOTHING SELECTED'),
+        h('ul.ts-howto', null,
+          h('li', null, h('b', null, 'Click a point'), ' to move it, or set its height, tilt and width'),
+          h('li', null, h('b', null, 'Click the road'), ' to choose what is on that stretch (jumps, rails, obstacles…)'),
+          h('li', null, h('b', null, 'Double-click the road'), ' to add a point there'),
+          h('li', null, h('b', null, 'Drag empty space'), ' to pan · wheel to zoom · ', h('b', null, 'Ctrl+Z'), ' undo'))));
+    } else if (s.kind === 'node') {
+      const n = c.nodes[s.i];
+      el.append(h('div.ts-sec.ts-selsec', null,
+        h('h3', null, `POINT ${s.i + 1}`), h('div.ts-dim', null, 'Drag it on the map to move it. Only the road next to it changes.'),
+        h('div.ts-grid', null,
+          num('HEIGHT m', n.y, -10, 60, 0.5, (v) => { n.y = v; }, 'Also draggable on the height strip below'),
+          num('TILT', n.bank ?? 0, -0.5, 0.5, 0.05, (v) => { n.bank = v; }, 'Leans the road: + raises the left edge, - the right'),
+          num('WIDTH m', n.w ?? c.width, 4, 24, 0.5, (v) => { n.w = v; }, 'Road width at this point: narrow it for a squeeze')),
+        h('div.ts-row', null,
+          h('button.btn.small.nav', { onclick: () => { const k = s.i < c.nodes.length - 1 || c.closed ? s.i : s.i - 1; const rg = this.ranges[k]; if (rg) this.insertAt(Math.round((rg.i0 + (rg.i1 || this.S.n - 1)) / 2)); } }, '+ Add point after'),
+          h('button.btn.small.nav.ts-danger', { onclick: () => this.deleteNode(s.i) }, 'Delete point'))));
+    } else if (s.kind === 'span') {
+      const sp = (c.spans[s.i] ??= {});
+      const rg = this.ranges[s.i];
+      const to = s.i + 1 < c.nodes.length ? s.i + 2 : 1;
+      const need = sp.gap ? jumpSpeed({ len: rg.end - rg.start, gap: sp.gap, lip: sp.lip } as never) : 0;
+      const boosted = !!(sp.boost || c.spans[s.i - 1]?.boost);
+      const jumpNote = sp.gap ? (need && need <= (boosted ? 16 : 12) ? `✓ needs about ${need.toFixed(1)} m/s${boosted ? ' (boosted)' : ''}` : `⚠ needs about ${need ? need.toFixed(1) : '30+'} m/s — ${boosted ? 'shorten the gap or raise the ramp' : 'turn on a boost pad here or on the stretch before'}`) : 'No jump on this stretch';
+      el.append(h('div.ts-sec.ts-selsec', null,
+        h('h3', null, `STRETCH ${s.i + 1} → ${to}`), h('div.ts-dim', null, `${Math.round(rg.end - rg.start)}m of road, highlighted on the map`),
+        h('div.ts-sub', null, 'JUMP AT THE END OF THIS STRETCH'),
+        h('div.ts-grid', null,
+          num('GAP LENGTH m', sp.gap ?? 0, 0, 18, 0.5, (v) => { sp.gap = v || undefined; }, '0 = no gap'),
+          num('RAMP HEIGHT m', sp.lip ?? 0, 0, 3, 0.1, (v) => { sp.lip = v || undefined; }, 'Launch ramp right before the gap (or a kicker with no gap)')),
+        h('div' + (sp.gap ? (jumpNote.startsWith('✓') ? '.ts-ok' : '.ts-bad') : '.ts-dim'), null, jumpNote),
+        h('div.ts-sub', null, 'ON THIS STRETCH'),
+        h('div.ts-row', null,
+          tog('GUARD RAILS', !!sp.rails, (v) => { sp.rails = v || undefined; }, 'Low walls along both edges'),
+          tog('BOOST PAD', !!sp.boost, (v) => { sp.boost = v || undefined; }, 'Speed strip at the start of the stretch'),
+          tog('ITEM BOXES', !!sp.items, (v) => { sp.items = v || undefined; }, 'A row of item boxes in the middle'))));
+      const list = h('div.ts-attlist');
+      (sp.att ?? []).forEach((a, ai) => {
+        const along = h<HTMLInputElement>('input', { type: 'range', min: '0', max: '1', step: '0.02', value: String(a.at) });
+        along.addEventListener('input', () => { a.at = +along.value; this.drawMap(); });
+        along.addEventListener('change', () => this.changed(true));
+        const across = h<HTMLInputElement>('input', { type: 'range', min: '-1', max: '1', step: '0.05', value: String(a.lat ?? 0) });
+        across.addEventListener('input', () => { a.lat = +across.value; this.drawMap(); });
+        across.addEventListener('change', () => this.changed(true));
+        list.append(h('div.ts-attrow', null,
+          h('span.ts-attname', { style: { color: A[a.kind].color } }, A[a.kind].label),
+          h('label', null, 'along', along), h('label', null, 'across', across),
+          h('button.ts-x.nav', { title: 'Remove', onclick: () => { this.snapshot(); sp.att!.splice(ai, 1); this.changed(true); this.renderPanel(); } }, icon('close'))));
+      });
+      el.append(list, h('div.ts-addatt', null, ...ATTACH.filter((k) => !k.adventure || !c.closed).map((k) => h('button.ts-chip.nav', {
+        style: { borderColor: k.color },
+        onclick: () => { this.snapshot(); (sp.att ??= []).push({ at: 0.5, kind: k.kind, lat: k.kind === 'arm' ? 1 : 0 } as SegAttach); this.changed(true); this.renderPanel(); },
+      }, '+ ' + k.label))));
+    }
+    // ---- the whole track
+    const theme = h<HTMLSelectElement>('select', null, ...Object.keys(THEMES).map((k) => h('option', { value: k }, k)));
+    theme.value = Object.entries(THEMES).find(([, v]) => JSON.stringify(v) === JSON.stringify(c.theme))?.[0] ?? 'neon';
+    theme.addEventListener('change', () => { c.theme = THEMES[theme.value]; this.changed(true); });
+    el.append(h('div.ts-sec', null,
+      h('h3', null, 'WHOLE TRACK'),
+      h('div.ts-seg2', null,
+        h('button.ts-segbtn.nav' + (c.closed ? '.on' : ''), { onclick: () => this.setClosed(true), title: 'Closed loop: Grand Prix laps' }, 'RACE LOOP'),
+        h('button.ts-segbtn.nav' + (!c.closed ? '.on' : ''), { onclick: () => this.setClosed(false), title: 'Open: start → goal with checkpoints (Blade Quest)' }, 'ADVENTURE')),
+      h('div.ts-grid', null, num('ROAD WIDTH m', c.width, 6, 20, 0.5, (v) => { c.width = v; }, 'Default width (points can override it)'), h('div.ts-field', null, h('label', null, 'THEME'), theme)),
+      h('div.ts-row', null,
+        h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 0.9, z * 0.9]), title: 'Shrink the whole track 10%' }, 'Scale −'),
+        h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 1.1, z * 1.1]), title: 'Grow the whole track 10%' }, 'Scale +'),
+        h('button.btn.small.nav', { onclick: () => this.transform((x, z) => { const a = Math.PI / 12; return [x * Math.cos(a) - z * Math.sin(a), x * Math.sin(a) + z * Math.cos(a)]; }), title: 'Rotate 15°' }, 'Rotate ⟳'),
+        h('button.btn.small.nav', { onclick: () => this.reverse(), title: 'Drive it the other way' }, 'Reverse'),
+        h('button.btn.small.nav', { onclick: () => this.fit(), title: 'Fit the track in view' }, 'Fit view')),
+      h('div.ts-sub', null, 'CHECKS'),
+      ...(this.issues.length ? this.issues.map((i) => h('div.ts-bad', null, '⚠ ' + i)) : [h('div.ts-ok', null, '✓ No overlaps · slopes and bends OK')]),
+    ));
+    el.scrollTop = keepScroll;
+    this.nav?.focus(this.nav.idx);
   }
 
+  // ------------------------------------------------------------------ courses
   renderList() {
     const el = this.el.list;
     el.innerHTML = '';
     const all = [...this.courses];
     if (!all.some((x) => x.id === this.cur.id)) all.unshift(this.cur);
-    for (const c of all) {
-      el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : ''), { onclick: () => { if (c.id === this.cur.id) return; this.cur = clone(c); this.cur.theme = c.theme; this.sel = 0; this.changed(); this.frame(); } },
-        h('b', null, c.name), h('span', null, c.open ? 'Adventure' : 'Race')));
-    }
+    for (const c of all) el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : ''), { onclick: () => { if (c.id !== this.cur.id) { this.persist(); this.open(clone(c)); } } }, h('b', null, c.name), h('span', null, c.closed ? 'Race loop' : 'Adventure')));
   }
 
-  renderChain() {
-    const el = this.el.chain;
-    el.innerHTML = '';
-    this.cur.segs.forEach((s, i) => {
-      const row = h('div.ts-seg.nav' + (i === this.sel ? '.on' : ''), { onclick: () => { this.sel = i; this.renderChain(); this.renderSegEdit(); this.highlight(); } },
-        h('span.ts-n', null, String(i + 1)), h('span', null, segLabel(s)), (s.att?.length ? h('span.ts-att', null, `+${s.att.length}`) : null));
-      el.append(row);
-    });
-    (el.children[this.sel] as HTMLElement | undefined)?.scrollIntoView?.({ block: 'nearest' });
-  }
-
-  renderSegEdit() {
-    const el = this.el.segEdit;
-    el.innerHTML = '';
-    const s = this.cur.segs[this.sel];
-    if (!s) return;
-    const num = (label: string, key: keyof Seg, min: number, max: number, step: number, tip = '') => {
-      const inp = h<HTMLInputElement>('input', { type: 'number', min: String(min), max: String(max), step: String(step), value: String((s[key] as number | undefined) ?? 0) });
-      inp.addEventListener('change', () => { (s as unknown as Record<string, number>)[key] = +inp.value; this.changed(); this.renderChain(); });
-      return h('div.ts-field', { title: tip }, h('label', null, label), inp);
-    };
-    const tog = (label: string, key: 'rails' | 'boost' | 'items') => {
-      const t = h('div.toggle.panel.nav', { onclick: () => { s[key] = !s[key]; t.classList.toggle('on', !!s[key]); this.changed(); } }, h('span.dot'), label);
-      t.classList.toggle('on', !!s[key]);
-      return t;
-    };
-    el.append(
-      h('div.ts-sub', null, `SEGMENT ${this.sel + 1}`),
-      h('div.ts-grid', null,
-        num('LENGTH m', 'len', 6, 160, 2),
-        num('TURN °', 'turn', -180, 180, 5, '+ turns left, - turns right'),
-        num('CLIMB m', 'climb', -20, 20, 0.5, '+ up, - down'),
-        num('TILT', 'bank', -0.5, 0.5, 0.05, 'Sideways tilt reached by the end: + raises the left edge'),
-        num('GAP m', 'gap', 0, 18, 0.5, 'No floor at the end: a jump'),
-        num('LIP m', 'lip', 0, 3, 0.1, 'Ramp height at the end — launches you (over the gap)')),
-      h('div.ts-row', null, tog('RAILS', 'rails'), tog('BOOST', 'boost'), tog('ITEMS', 'items')),
-      h('div.ts-row', null,
-        h('button.btn.small.nav', { onclick: () => this.move(-1), title: 'Move earlier' }, '▲'),
-        h('button.btn.small.nav', { onclick: () => this.move(1), title: 'Move later' }, '▼'),
-        h('button.btn.small.nav', { onclick: () => { this.cur.segs.splice(this.sel + 1, 0, clone(s)); this.sel++; this.changed(); } }, 'Duplicate'),
-        h('button.btn.small.nav.ts-danger', { onclick: () => { if (this.cur.segs.length <= 1) return; this.cur.segs.splice(this.sel, 1); this.sel = Math.max(0, this.sel - 1); this.changed(); } }, 'Delete')),
-      h('div.ts-sub', null, 'ATTACHED'),
-    );
-    (s.att ?? []).forEach((a, ai) => {
-      const kind = h<HTMLSelectElement>('select', null, ...ATTACH.map((k) => h('option', { value: k.kind }, k.label)));
-      kind.value = a.kind;
-      kind.addEventListener('change', () => { a.kind = kind.value as SegAttachKind; this.changed(); });
-      const at = h<HTMLInputElement>('input', { type: 'number', min: '0', max: '1', step: '0.05', value: String(a.at) });
-      at.addEventListener('change', () => { a.at = +at.value; this.changed(); });
-      const lat = h<HTMLInputElement>('input', { type: 'number', min: '-1', max: '1', step: '0.1', value: String(a.lat ?? 0) });
-      lat.addEventListener('change', () => { a.lat = +lat.value; this.changed(); });
-      el.append(h('div.ts-attrow', null, kind,
-        h('div.ts-field', { title: 'Where along the segment (0 = start, 1 = end)' }, h('label', null, 'ALONG'), at),
-        h('div.ts-field', { title: 'Across the road (-1 left edge … 1 right edge)' }, h('label', null, 'ACROSS'), lat),
-        h('button.btn.small.nav.ts-danger', { onclick: () => { s.att!.splice(ai, 1); this.changed(); this.renderSegEdit(); this.renderChain(); } }, icon('close'))));
-    });
-    el.append(h('div.ts-addatt', null, ...ATTACH.filter((k) => !k.adventure || this.cur.open).map((k) => h('button.ts-chip.nav', {
-      onclick: () => { (s.att ??= []).push({ at: 0.5, kind: k.kind, lat: k.kind === 'arm' ? 1 : 0 } as SegAttach); this.changed(); this.renderSegEdit(); this.renderChain(); },
-    }, '+ ' + k.label))));
-  }
-
-  insert(seg: Seg) {
-    this.cur.segs.splice(this.sel + 1, 0, seg);
-    this.sel = Math.min(this.cur.segs.length - 1, this.sel + 1);
-    this.app.sfx.play('tick');
-    this.changed();
-  }
-
-  move(d: number) {
-    const j = this.sel + d;
-    if (j < 0 || j >= this.cur.segs.length) return;
-    const [s] = this.cur.segs.splice(this.sel, 1);
-    this.cur.segs.splice(j, 0, s);
-    this.sel = j;
-    this.changed();
-  }
-
-  newCourse(open: boolean) { this.persist(); this.cur = starter(open); this.sel = 0; this.changed(); this.frame(); }
-
-  deleteCourse() {
-    if (!confirmTwice(this.app, 'ts-del-' + this.cur.id, `Press again to delete ${this.cur.name}`)) return;
-    this.courses = this.courses.filter((c) => c.id !== this.cur.id);
-    saveTrackCourses(this.courses);
-    this.cur = this.courses[0] ? clone(this.courses[0]) : starter(true);
-    this.sel = 0;
-    this.refreshAll(true);
-  }
+  open(c: NodeCourse) { this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.view3dKey = ''; this.recompute(); this.fit(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
 
   persist() {
     const i = this.courses.findIndex((c) => c.id === this.cur.id);
@@ -291,211 +580,163 @@ class TrackStudio {
     saveTrackCourses(this.courses);
   }
 
-  exportJson() {
-    const txt = JSON.stringify(this.cur);
-    navigator.clipboard?.writeText(txt);
-    this.app.toast('Course copied to clipboard as JSON');
+  deleteCourse() {
+    if (!confirmTwice(this.app, 'ts-del-' + this.cur.id, `Press again to delete ${this.cur.name}`)) return;
+    this.courses = this.courses.filter((c) => c.id !== this.cur.id);
+    saveTrackCourses(this.courses);
+    this.open(this.courses[0] ? clone(this.courses[0]) : starter(true));
   }
 
+  exportJson() { navigator.clipboard?.writeText(JSON.stringify(this.cur)); this.app.toast('Track copied to the clipboard'); }
+
   importJson() {
-    const txt = prompt('Paste a Track Studio course (JSON)');
+    const txt = prompt('Paste a Track Studio track');
     if (!txt) return;
-    try {
-      const c = JSON.parse(txt) as SegCourse;
-      if (!Array.isArray(c.segs) || !c.segs.length) throw new Error('no segments');
-      c.id = newId();
-      c.theme ??= THEMES.neon;
-      this.cur = c; this.sel = 0; this.changed(); this.frame();
-    } catch (e) { this.app.toast(`Couldn't import: ${(e as Error).message}`); }
+    try { const c = JSON.parse(txt) as NodeCourse; if (!Array.isArray(c.nodes) || c.nodes.length < 2) throw new Error('no points'); c.id = newId(); c.theme ??= THEMES.neon; c.spans ??= []; this.open(c); this.fixSpans(); }
+    catch (e) { this.app.toast(`Couldn't import: ${(e as Error).message}`); }
   }
 
   testRide() {
     this.persist();
-    const c = this.compiled ?? compileCourse(this.cur);
-    if (c.issues.some((x) => x.includes('passes over itself'))) { this.app.toast('Fix the overlap first — the track can’t pass over itself'); return; }
-    this.app.go('lobby', { mode: this.cur.open ? 'quest' : 'race', arenaId: this.cur.id });
+    if (this.issues.some((x) => x.includes('passes over itself'))) { this.app.toast('Fix the overlap first: a track can’t pass over itself'); return; }
+    this.app.go('lobby', { mode: this.cur.closed ? 'race' : 'quest', arenaId: this.cur.id });
   }
 
   back() { this.persist(); this.app.back(); }
 
-  // ------------------------------------------------------------------ draw a path
+  /** Esc / B: cancel drawing, then clear the selection, and only then leave the studio */
+  escape() {
+    if (this.drawing) { this.toggleDraw(); return; }
+    if (this.sel.kind !== 'none') { this.select({ kind: 'none' }); return; }
+    this.back();
+  }
+
+  // ------------------------------------------------------------------ draw a new path
   toggleDraw() {
-    this.drawing = this.drawing ? null : { pts: [] };
-    this.root.classList.toggle('ts-drawing', !!this.drawing);
-    this.drawSketch();
-    if (this.drawing) this.app.toast('Draw mode: drag a path on the pad (1px ≈ 1m). Release to turn it into segments.');
+    this.drawing = !this.drawing;
+    this.drawPts = [];
+    if (this.drawing) this.setView('map');
+    this.root.classList.toggle('ts-drawing', this.drawing);
+    this.map.style.cursor = this.drawing ? 'crosshair' : 'default';
+    this.drawMap();
   }
 
-  drawSketch() {
-    const cv = this.el.sketch as HTMLCanvasElement;
-    const r = cv.getBoundingClientRect();
-    cv.width = r.width; cv.height = r.height;
-    const g = cv.getContext('2d')!;
-    g.clearRect(0, 0, cv.width, cv.height);
-    if (!this.drawing) return;
-    g.fillStyle = 'rgba(3,6,14,0.82)'; g.fillRect(0, 0, cv.width, cv.height);
-    g.strokeStyle = 'rgba(60,242,255,0.12)';
-    for (let x = 0; x < cv.width; x += 40) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, cv.height); g.stroke(); }
-    for (let y = 0; y < cv.height; y += 40) { g.beginPath(); g.moveTo(0, y); g.lineTo(cv.width, y); g.stroke(); }
-    const pts = this.drawing.pts;
-    if (pts.length > 1) {
-      g.strokeStyle = '#3cf2ff'; g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round';
-      g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x - r.left, y - r.top) : g.moveTo(x - r.left, y - r.top))); g.stroke();
-    }
-    g.fillStyle = '#ffd23a'; g.font = '700 14px Orbitron, sans-serif';
-    g.fillText(pts.length > 1 ? 'Release to build segments' : 'Drag to draw the path', 16, 26);
-  }
-
-  /** sketch → segments: resample every 10m, turn into a chain, merge near-straight runs */
+  /** sketch → a few clean points (Ramer–Douglas–Peucker), auto-closing into a loop if it ends near the start */
   finishDraw() {
-    const raw = this.drawing!.pts;
-    const pts: [number, number][] = [raw[0]];
-    let acc = 0;
-    for (let i = 1; i < raw.length; i++) {
-      const [ax, ay] = raw[i - 1], [bx, by] = raw[i];
-      let d = Math.hypot(bx - ax, by - ay), t0 = 0;
-      while (acc + d - t0 >= 10) { t0 += 10 - acc; acc = 0; const f = t0 / d; pts.push([ax + (bx - ax) * f, ay + (by - ay) * f]); }
-      acc += d - t0;
-      void d; d = 0;
-    }
-    if (pts.length < 3) { this.app.toast('Draw a longer path'); return; }
-    const segs: Seg[] = [];
-    let prev = Math.atan2(-(pts[1][1] - pts[0][1]), pts[1][0] - pts[0][0]);
-    for (let i = 1; i < pts.length; i++) {
-      const hd = Math.atan2(-(pts[i][1] - pts[i - 1][1]), pts[i][0] - pts[i - 1][0]);
-      let dt = ((hd - prev) * 180) / Math.PI;
-      while (dt > 180) dt -= 360; while (dt < -180) dt += 360;
-      prev = hd;
-      const last = segs[segs.length - 1];
-      const straight = Math.abs(dt) < 6;
-      if (last && ((straight && last.kind === 'straight') || (!straight && last.kind === 'curve' && Math.sign(dt) === Math.sign(last.turn ?? 0)))) { last.len += 10; if (!straight) last.turn = Math.round((last.turn ?? 0) + dt); }
-      else segs.push(straight ? { kind: 'straight', len: 10 } : { kind: 'curve', len: 10, turn: Math.round(dt) });
-    }
-    this.cur.segs = segs;
-    this.sel = 0;
-    this.drawing = null;
+    const raw = this.drawPts;
+    if (raw.length < 6) { this.app.toast('Draw a longer path'); return; }
+    const rdp = (pts: [number, number][], eps: number): [number, number][] => {
+      if (pts.length < 3) return pts;
+      const [a, b] = [pts[0], pts[pts.length - 1]];
+      let idx = 0, dmax = 0;
+      for (let i = 1; i < pts.length - 1; i++) {
+        const [px, pz] = pts[i];
+        const d = Math.abs((b[1] - a[1]) * px - (b[0] - a[0]) * pz + b[0] * a[1] - b[1] * a[0]) / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
+        if (d > dmax) { dmax = d; idx = i; }
+      }
+      if (dmax <= eps) return [a, b];
+      return [...rdp(pts.slice(0, idx + 1), eps).slice(0, -1), ...rdp(pts.slice(idx), eps)];
+    };
+    let pts = rdp(raw, Math.max(2, 6 / this.scale + 2));
+    // keep points at least ~14m apart
+    pts = pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 14 || i === pts.length - 1);
+    const closed = pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 30;
+    if (closed) pts.pop();
+    this.snapshot();
+    this.cur.closed = closed;
+    this.cur.nodes = pts.map(([x, z]) => ({ x: Math.round(x * 2) / 2, z: Math.round(z * 2) / 2, y: 4 }));
+    this.cur.spans = [];
+    this.fixSpans();
+    this.drawing = false;
     this.root.classList.remove('ts-drawing');
-    this.drawSketch();
-    this.changed();
-    this.frame();
-    this.app.toast(`Built ${segs.length} segments from your path — now add climbs, jumps and obstacles`);
+    this.sel = { kind: 'none' };
+    this.changed(true);
+    this.renderPanel();
+    this.app.toast(`${this.cur.nodes.length} points · ${closed ? 'race loop (you finished near the start)' : 'adventure (start → goal)'} — now set heights and add jumps`);
   }
 
-  // ------------------------------------------------------------------ preview
-  rebuild() {
-    this.dirty = 0;
-    this.compiled = compileCourse(this.cur);
-    const ter = new Terrain(this.compiled.arena);
-    if (this.arenaMesh) { this.scene.remove(this.arenaMesh); this.arenaMesh.traverse((o) => { const m = o as THREE.Mesh; m.geometry?.dispose?.(); }); }
+  onKey = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.undo(); return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel.kind === 'node') { e.preventDefault(); this.deleteNode(this.sel.i); }
+
+  };
+
+  // ------------------------------------------------------------------ 3D view
+  setView(v: 'map' | '3d') {
+    this.view = v;
+    this.root.classList.toggle('ts-3d', v === '3d');
+    this.el.tabs.querySelectorAll('.ts-tab').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === v));
+    this.el.help.textContent = v === '3d' ? 'Drag to orbit · right-drag to pan · wheel to zoom' : '';
+    if (v === '3d') this.build3d(); else this.drawMap();
+  }
+
+  build3d() {
+    const key = JSON.stringify(this.cur);
+    if (key === this.view3dKey && this.arenaMesh) return;
+    this.view3dKey = key;
+    const arena = compileNodeCourse(this.cur).arena;
+    const ter = new Terrain(arena);
+    if (this.arenaMesh) { this.scene.remove(this.arenaMesh); this.arenaMesh.traverse((o) => (o as THREE.Mesh).geometry?.dispose?.()); }
     this.arenaMesh = buildArenaMesh(ter, this.cur.theme);
     this.scene.add(this.arenaMesh);
-    this.terrain = ter;
-    this.renderChecks();
-    this.highlight();
-  }
-  terrain: Terrain | null = null;
-
-  /** selected segment as a glowing line; attachments as coloured posts */
-  highlight() {
-    for (const o of [...this.overlay.children]) { this.overlay.remove(o); (o as THREE.Mesh).geometry?.dispose?.(); }
-    const comp = this.compiled;
-    if (!comp || !this.terrain) return;
-    const S = this.terrain.track!;
-    let start = 0;
-    for (let i = 0; i < this.sel; i++) start += this.cur.segs[i].len;
-    const total = this.cur.segs.reduce((a, s) => a + s.len, 0);
-    const i0 = Math.floor((start / total) * S.n), i1 = Math.min(S.n - 1, Math.floor(((start + this.cur.segs[this.sel].len) / total) * S.n));
-    const gy = (i: number) => { const y = this.terrain!.height(S.x[i], S.z[i]); return (y <= VOID ? S.y[i] : y) + 0.6; };
-    const linePts: THREE.Vector3[] = [];
-    for (let i = i0; i <= i1; i += 2) linePts.push(new THREE.Vector3(S.x[i], gy(i), S.z[i]));
-    if (linePts.length > 1) {
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(linePts), Math.max(4, linePts.length), 0.45, 6), new THREE.MeshBasicMaterial({ color: '#ffd23a', toneMapped: false, depthTest: false, transparent: true, opacity: 0.85 }));
-      tube.renderOrder = 10;
-      this.overlay.add(tube);
-    }
-    // start (and goal) flags
-    const flag = (i: number, col: string) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 6, 8), new THREE.MeshBasicMaterial({ color: col, toneMapped: false })); m.position.set(S.x[i], gy(i) + 3, S.z[i]); this.overlay.add(m); };
-    flag(Math.min(S.n - 1, 4), '#38ff7a');
-    if (this.cur.open) flag(S.n - 10, '#ffd23a');
-    for (const m of comp.arena.markers) {
-      const col = ATT_COLOR[m.kind as SegAttachKind];
-      if (!col || m.kind === 'boost') continue;
-      const post = new THREE.Mesh(new THREE.ConeGeometry(0.7, 2.2, 8), new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
-      const y = this.terrain.height(m.x, m.z);
-      post.position.set(m.x, (y <= VOID ? 0 : y) + 1.4, m.z);
-      post.rotation.x = Math.PI;
-      this.overlay.add(post);
-    }
-  }
-
-  renderChecks() {
-    const c = this.compiled!;
-    const el = this.el.checks;
-    el.innerHTML = '';
-    const lines: HTMLElement[] = [];
-    for (const i of c.issues) lines.push(h('div.ts-bad', null, '⚠ ', i));
-    // jump check: what speed each gap needs
-    this.cur.segs.forEach((s, i) => {
-      if (!s.gap) return;
-      const need = jumpSpeed(s, Math.max(0, -(this.cur.segs[i + 1]?.climb ?? 0)) * 0.3);
-      // a blade cruises up to ~12 m/s on its own; a boost on (or just before) the jump carries it to ~16
-      const boosted = !!(s.boost || this.cur.segs[i - 1]?.boost);
-      const ok = need > 0 && need <= (boosted ? 16 : 12);
-      lines.push(h(ok ? 'div.ts-ok' : 'div.ts-bad', null, `${ok ? '✓' : '⚠'} Jump at segment ${i + 1}: ${s.gap}m gap needs ≈${need ? need.toFixed(1) : '30+'} m/s${!boosted && need > 12 ? ' — add a BOOST on or before it' : boosted && need > 16 ? ' — too long even with a boost: shorten the gap or raise the lip' : ''}${!s.lip ? ' — add a LIP to launch' : ''}`));
-    });
-    if (!c.issues.length) lines.unshift(h('div.ts-ok', null, '✓ No overlaps · slopes OK' + (this.cur.open ? '' : ' · loop closes')));
-    const sum = this.cur.segs.reduce((a, s) => a + (s.turn ?? 0), 0);
-    if (!this.cur.open) lines.push(h('div.ts-dim', null, `Total turning ${Math.round(sum)}° (a loop needs ±360°)`));
-    el.append(...lines);
-    this.el.stats.textContent = `${c.length}m · ${c.rise}m of elevation · ${this.cur.segs.length} segments`;
-  }
-
-  frame() {
-    const S = this.compiled ? new Terrain(this.compiled.arena).track : sampleTrack(compileCourse(this.cur).arena.track!);
-    if (!S) return;
+    const T = ter.track!;
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, y = 0;
-    for (let i = 0; i < S.n; i += 4) { x0 = Math.min(x0, S.x[i]); x1 = Math.max(x1, S.x[i]); z0 = Math.min(z0, S.z[i]); z1 = Math.max(z1, S.z[i]); y += S.y[i]; }
-    this.target.set((x0 + x1) / 2, y / Math.ceil(S.n / 4), (z0 + z1) / 2);
-    this.dist = Math.max(60, Math.hypot(x1 - x0, z1 - z0) * 0.85);
+    for (let i = 0; i < T.n; i += 4) { x0 = Math.min(x0, T.x[i]); x1 = Math.max(x1, T.x[i]); z0 = Math.min(z0, T.z[i]); z1 = Math.max(z1, T.z[i]); y += T.y[i]; }
+    this.target.set((x0 + x1) / 2, y / Math.ceil(T.n / 4), (z0 + z1) / 2);
+    this.dist = Math.max(60, Math.hypot(x1 - x0, z1 - z0) * 0.8);
+  }
+
+  bind3d(stage: HTMLElement) {
+    stage.addEventListener('pointerdown', (e) => {
+      if (this.view !== '3d') return;
+      stage.setPointerCapture(e.pointerId);
+      this.orbit = { x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey };
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!this.orbit) return;
+      const dx = e.clientX - this.orbit.x, dy = e.clientY - this.orbit.y;
+      this.orbit.x = e.clientX; this.orbit.y = e.clientY;
+      if (this.orbit.pan) {
+        const k = this.dist * 0.0015, s = Math.sin(this.yaw), c = Math.cos(this.yaw);
+        this.target.x -= (dx * c - dy * s) * k; this.target.z -= (-dx * s - dy * c) * k;
+      } else { this.yaw -= dx * 0.006; this.pitch = Math.max(0.12, Math.min(1.5, this.pitch + dy * 0.005)); }
+    });
+    stage.addEventListener('pointerup', () => { this.orbit = null; });
+    stage.addEventListener('contextmenu', (e) => e.preventDefault());
+    stage.addEventListener('wheel', (e) => { if (this.view !== '3d') return; e.preventDefault(); this.dist = Math.max(25, Math.min(1500, this.dist * Math.pow(1.12, Math.sign(e.deltaY)))); }, { passive: false });
   }
 
   resize() {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
-    if (this.drawing) this.drawSketch();
+    this.drawMap(); this.drawProfile();
   }
 
   update(dt: number) {
-    this.time += dt;
     this.nav.update(dt);
-    if (this.dirty > 0) { this.dirty -= dt; if (this.dirty <= 0) this.rebuild(); }
     if (this.saveT > 0) { this.saveT -= dt; if (this.saveT <= 0) { this.persist(); this.renderList(); } }
-    // right stick orbits, triggers zoom (controller)
-    const inp = this.app.input;
-    for (let p = 0; p < inp.padAxes.length; p++) {
-      const a = inp.padAxes[p] ?? [];
-      if (Math.abs(a[2] ?? 0) > 0.15) this.yaw -= (a[2] ?? 0) * 1.8 * dt;
-      if (Math.abs(a[3] ?? 0) > 0.15) this.pitch = Math.max(0.2, Math.min(1.45, this.pitch - (a[3] ?? 0) * 1.4 * dt));
+    if (this.view === '3d') {
+      const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+      this.camera.position.set(this.target.x + Math.sin(this.yaw) * cp * this.dist, this.target.y + sp * this.dist, this.target.z + Math.cos(this.yaw) * cp * this.dist);
+      this.camera.lookAt(this.target);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
     }
-    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
-    this.camera.position.set(this.target.x + Math.sin(this.yaw) * cp * this.dist, this.target.y + sp * this.dist, this.target.z + Math.cos(this.yaw) * cp * this.dist);
-    this.camera.lookAt(this.target);
-    this.overlay.children.forEach((o, i) => { if (i === 0) ((o as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.6 + 0.3 * Math.sin(this.time * 5); });
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
     this.persist();
+    removeEventListener('keydown', this.onKey);
     this.root.remove();
-    this.scene.traverse((o) => { const m = o as THREE.Mesh; m.geometry?.dispose?.(); });
+    this.scene.traverse((o) => (o as THREE.Mesh).geometry?.dispose?.());
   }
 }
 
 let studio: TrackStudio | null = null;
 export const trackStudioScreen: Screen = {
-  mount(app: App) { studio = new TrackStudio(app); },
+  mount(app: App) { studio = new TrackStudio(app); (window as unknown as { __ts?: TrackStudio }).__ts = studio; },
   unmount() { studio?.dispose(); studio = null; },
   update(dt: number) { studio?.update(dt); },
   resize() { studio?.resize(); },

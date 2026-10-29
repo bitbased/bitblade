@@ -17,6 +17,8 @@ export interface TrackDef {
   open?: boolean;
   /** extra sideways tilt per control point (slope; + raises the left edge) */
   banks?: number[];
+  /** road width per control point (narrowing / widening sections); defaults to `width` */
+  widths?: number[];
   /** jump ramps on the road: rise `h` metres over the `len` metres before fraction `f` (the lip) */
   ramps?: { f: number; len: number; h: number }[];
   /** false: no automatic 1.5m kicker before gaps (use explicit ramps instead) */
@@ -33,6 +35,8 @@ export interface TrackSamples {
   width: number;
   /** per-sample extra tilt (slope) from TrackDef.banks */
   bank: Float32Array;
+  /** per-sample road width (TrackDef.widths), `width` is the widest */
+  w: Float32Array;
   open: boolean;
 }
 
@@ -48,21 +52,24 @@ export function sampleTrack(def: TrackDef): TrackSamples {
   const P = def.pts;
   const open = !!def.open;
   const B = def.banks ?? [];
+  const Wd = def.widths ?? [];
+  const wAt = (i: number) => Wd[i] ?? def.width;
   const N = P.length;
   const idx = (i: number) => (open ? Math.max(0, Math.min(N - 1, i)) : (i + N) % N);
-  const dense: [number, number, number, number][] = [];
+  const dense: [number, number, number, number, number][] = [];
   const segs = open ? N - 1 : N;
   for (let i = 0; i < segs; i++) {
     const a = P[idx(i - 1)], b = P[i], c = P[idx(i + 1)], d = P[idx(i + 2)];
-    const ba = B[i] ?? 0, bc = B[idx(i + 1)] ?? 0;
+    const ba = B[i] ?? 0, bc = B[idx(i + 1)] ?? 0, wa = wAt(i), wc = wAt(idx(i + 1));
     for (let k = 0; k < 40; k++) {
       const t = k / 40;
-      dense.push([cr(a[0], b[0], c[0], d[0], t), cr(a[1], b[1], c[1], d[1], t), cr(a[2], b[2], c[2], d[2], t), ba + (bc - ba) * (t * t * (3 - 2 * t))]);
+      const sm = t * t * (3 - 2 * t);
+      dense.push([cr(a[0], b[0], c[0], d[0], t), cr(a[1], b[1], c[1], d[1], t), cr(a[2], b[2], c[2], d[2], t), ba + (bc - ba) * sm, wa + (wc - wa) * sm]);
     }
   }
-  if (open) dense.push([P[N - 1][0], P[N - 1][1], P[N - 1][2], B[N - 1] ?? 0]);
+  if (open) dense.push([P[N - 1][0], P[N - 1][1], P[N - 1][2], B[N - 1] ?? 0, wAt(N - 1)]);
   // resample at uniform spacing
-  const out: [number, number, number, number][] = [dense[0]];
+  const out: [number, number, number, number, number][] = [dense[0]];
   let acc = 0;
   const last = open ? dense.length - 1 : dense.length;
   for (let i = 1; i <= last; i++) {
@@ -73,7 +80,7 @@ export function sampleTrack(def: TrackDef): TrackSamples {
       const need = STEP - acc;
       s0 += need;
       const f = s0 / seg;
-      out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f, p[3] + (q[3] - p[3]) * f]);
+      out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f, p[3] + (q[3] - p[3]) * f, p[4] + (q[4] - p[4]) * f]);
       acc = 0;
     }
     acc += seg - s0;
@@ -83,10 +90,10 @@ export function sampleTrack(def: TrackDef): TrackSamples {
   const n = out.length;
   const S: TrackSamples = {
     n, x: new Float32Array(n), z: new Float32Array(n), y: new Float32Array(n), tx: new Float32Array(n), tz: new Float32Array(n),
-    curv: new Float32Array(n), cum: new Float32Array(n), total: n * STEP, width: def.width, bank: new Float32Array(n), open,
+    curv: new Float32Array(n), cum: new Float32Array(n), total: n * STEP, width: Math.max(def.width, ...Wd), bank: new Float32Array(n), w: new Float32Array(n), open,
   };
   const w = (i: number) => (open ? Math.max(0, Math.min(n - 1, i)) : (i + n) % n);
-  for (let i = 0; i < n; i++) { S.x[i] = out[i][0]; S.z[i] = out[i][1]; S.y[i] = out[i][2]; S.bank[i] = out[i][3]; S.cum[i] = i * STEP; }
+  for (let i = 0; i < n; i++) { S.x[i] = out[i][0]; S.z[i] = out[i][1]; S.y[i] = out[i][2]; S.bank[i] = out[i][3]; S.w[i] = out[i][4]; S.cum[i] = i * STEP; }
   for (let i = 0; i < n; i++) {
     const a = w(i - 1), b = w(i + 1);
     let dx = S.x[b] - S.x[a], dz = S.z[b] - S.z[a];
@@ -118,8 +125,7 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
     const bi = Math.floor((S.x[i] - bx0) / B), bj = Math.floor((S.z[i] - bz0) / B);
     if (bi >= 0 && bj >= 0 && bi < bnx && bj < bnz) buckets[bj * bnx + bi].push(i);
   }
-  const half = def.width / 2;
-  const reach = Math.ceil((half + 1.5) / B);
+  const reach = Math.ceil((S.width / 2 + 1.5) / B);
   // gap kickers: the 7m before every gap ramps up (unless the course uses explicit ramps)
   const gapStarts = def.autoKick === false ? [] : def.gaps.map(([a]) => a * S.total);
   const ramps = (def.ramps ?? []).map((r) => ({ end: r.f * S.total, len: r.len, h: r.h }));
@@ -140,6 +146,7 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
       let h = VOID;
       if (best >= 0) {
         const d = Math.sqrt(bd);
+        const half = S.w[best] / 2; // this stretch's width (narrowing sections)
         // signed lateral offset (left of tangent positive)
         const side = (x - S.x[best]) * -S.tz[best] + (z - S.z[best]) * S.tx[best];
         const f = S.cum[best] / S.total;

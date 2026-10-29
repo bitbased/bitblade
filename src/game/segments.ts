@@ -1,7 +1,7 @@
 // Segment courses: a course is a chain of track pieces (straight, curve, climb, drop, jump, tilt…) with things
 // attached along them. The chain compiles to an ordinary TrackDef + markers, so physics, rendering, the chase
 // camera and the AI all just work. Closed chains are race tracks; open chains (start → goal) are track adventures.
-import { sampleTrack, type TrackDef } from './track';
+import { sampleTrack, type TrackDef, type TrackSamples } from './track';
 import type { ArenaDef, Marker, MarkerKind, Theme } from './terrain';
 
 export type SegAttachKind = 'arm' | 'saw' | 'bumper' | 'pillar' | 'spinpad' | 'gem' | 'checkpoint' | 'hive' | 'item' | 'boost';
@@ -181,3 +181,144 @@ export function jumpReach(speed: number, lip: number, drop = 0, rampLen = 10) {
 }
 
 export const SEG_MARKER_KINDS: MarkerKind[] = ['arm', 'saw', 'bumper', 'pillar', 'spinpad', 'gem', 'checkpoint', 'hive', 'item', 'boost'];
+
+// ================================================================== node courses (Track Studio)
+/**
+ * Node courses: the track is a smooth curve through points you place (x, z, height, tilt). Moving a point only
+ * bends the curve next to it. Each stretch (point k to k+1) carries its own stuff: a jump at its end, rails,
+ * boost, items and obstacles. Closed = race loop (last point joins the first); open = adventure (start to goal).
+ */
+export interface TrackNode { x: number; z: number; y: number; bank?: number; /** road width here (narrowing / widening); defaults to the course width */ w?: number }
+export interface Span { gap?: number; lip?: number; rails?: boolean; boost?: boolean; items?: boolean; att?: SegAttach[] }
+export interface NodeCourse {
+  id: string; name: string; desc: string; theme: Theme; width: number;
+  closed: boolean;
+  nodes: TrackNode[];
+  /** spans[k] runs from node k to node k+1 (and, when closed, the last runs back to node 0) */
+  spans: Span[];
+}
+
+/** where each node sits along the sampled track (sample index), walking forward so loops stay in order */
+export function nodeSampleIndex(S: TrackSamples, nodes: TrackNode[]) {
+  const out: number[] = [];
+  let from = 0;
+  for (let k = 0; k < nodes.length; k++) {
+    let best = from, bd = Infinity;
+    const to = k === 0 ? Math.min(S.n - 1, 40) : S.n - 1;
+    for (let i = from; i <= to; i++) {
+      const d = (S.x[i] - nodes[k].x) ** 2 + (S.z[i] - nodes[k].z) ** 2;
+      if (d < bd) { bd = d; best = i; }
+      if (bd < 0.3 && d > bd + 400) break;
+    }
+    out.push(best);
+    from = best;
+  }
+  return out;
+}
+
+export function nodeTrackDef(c: NodeCourse): TrackDef {
+  return { pts: c.nodes.map((n) => [n.x, n.z, n.y] as [number, number, number]), banks: c.nodes.map((n) => n.bank ?? 0), widths: c.nodes.map((n) => n.w ?? c.width), width: c.width, rails: [], gaps: [], boosts: [], items: [], ramps: [], open: !c.closed, autoKick: false };
+}
+
+/** the stretches of a node course as distances along the sampled track */
+export function spanRanges(c: NodeCourse, S: TrackSamples) {
+  const ni = nodeSampleIndex(S, c.nodes);
+  const count = c.closed ? c.nodes.length : c.nodes.length - 1;
+  const out: { start: number; end: number; i0: number; i1: number }[] = [];
+  for (let k = 0; k < count; k++) {
+    const i0 = ni[k], i1 = k + 1 < c.nodes.length ? ni[k + 1] : S.n - 1;
+    out.push({ start: S.cum[i0], end: Math.max(S.cum[i0] + 1, k + 1 < c.nodes.length ? S.cum[i1] : S.total), i0, i1 });
+  }
+  return out;
+}
+
+/** node course to arena (same output as segment courses, so physics / camera / AI / rendering are shared) */
+export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse {
+  const track = nodeTrackDef(c);
+  const S0 = sampleTrack(track);
+  const total = S0.total;
+  const ranges = spanRanges(c, S0);
+  const F = (d: number) => Math.max(0, Math.min(1, d / total));
+  ranges.forEach(({ start, end }, k) => {
+    const sp = c.spans[k] ?? {};
+    const len = end - start;
+    if (sp.rails) track.rails.push([F(start), F(end)]);
+    if (sp.boost) track.boosts.push(F(start + Math.min(4, len * 0.2)));
+    if (sp.items) track.items.push(F((start + end) / 2));
+    const gap = Math.min(sp.gap ?? 0, len * 0.8);
+    if (gap > 0) track.gaps.push([F(end - gap), F(end)]);
+    if ((sp.lip ?? 0) > 0) track.ramps!.push({ f: F(end - gap), len: Math.min(12, Math.max(5, (len - gap) * 0.6)), h: sp.lip! });
+  });
+  const S = sampleTrack(track);
+  const half = c.width / 2;
+  const at = (d: number) => Math.max(0, Math.min(S.n - 1, Math.round(F(d) * S.n)));
+  // positions across the road use the local width, so obstacles stay on narrow sections
+  const pos = (i: number, lat = 0) => ({ x: S.x[i] - S.tz[i] * lat * (S.w[i] / 2), z: S.z[i] + S.tx[i] * lat * (S.w[i] / 2) });
+  const markers: Marker[] = [];
+  for (const f of track.boosts) { const i = at(f * total); markers.push({ kind: 'boost', ...pos(i), rot: Math.atan2(S.tx[i], S.tz[i]), r: S.w[i] * 0.36 }); }
+  for (const f of track.items) { const i = at(f * total); for (const o of [-0.6, 0, 0.6]) markers.push({ kind: 'item', ...pos(i, o) }); }
+  ranges.forEach(({ start, end }, k) => {
+    for (const a of c.spans[k]?.att ?? []) {
+      const i = at(start + a.at * (end - start));
+      const p = pos(i, a.lat ?? 0), yaw = Math.atan2(S.tx[i], S.tz[i]);
+      switch (a.kind) {
+        case 'arm': { const side = (a.lat ?? 1) >= 0 ? 1 : -1; markers.push({ kind: 'arm', ...pos(i, side * 0.85), len: a.size ?? c.width * 0.8, speed: a.speed ?? 1.2, rot: Math.atan2(-S.tx[i] * side, S.tz[i] * side) }); break; }
+        case 'saw': markers.push({ kind: 'saw', ...p, r: a.size ?? c.width * 0.28, speed: a.speed ?? 1.1 }); break;
+        case 'bumper': markers.push({ kind: 'bumper', ...p, r: a.size ?? 0.85 }); break;
+        case 'pillar': markers.push({ kind: 'pillar', ...p, r: a.size ?? 0.7 }); break;
+        case 'spinpad': markers.push({ kind: 'spinpad', ...p, r: a.size ?? 1.4 }); break;
+        case 'gem': markers.push({ kind: 'gem', ...p }); break;
+        case 'item': markers.push({ kind: 'item', ...p }); break;
+        case 'boost': markers.push({ kind: 'boost', ...p, rot: yaw, r: a.size ?? c.width * 0.3 }); break;
+        case 'checkpoint': markers.push({ kind: 'checkpoint', ...pos(i), rot: yaw, r: Math.max(2.2, half - 0.3) }); break;
+        case 'hive': markers.push({ kind: 'hive', ...p, r: a.size ?? Math.max(8, c.width), len: 2 }); break;
+      }
+    }
+  });
+  for (let k = 0; k < 8; k++) {
+    const i = !c.closed ? Math.min(S.n - 1, 8 + Math.floor(k / 2) * 6) : (S.n - 6 - Math.floor(k / 2) * 6 + S.n) % S.n;
+    markers.push({ kind: 'spawn', ...pos(i, k % 2 ? 0.45 : -0.45) });
+  }
+  if (!c.closed) { const g = Math.max(0, S.n - 10); markers.push({ kind: 'goal', ...pos(g), r: Math.max(2.6, half * 0.8), rot: Math.atan2(S.tx[g], S.tz[g]) }); }
+  const issues: string[] = [];
+  if (checks) outer: for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
+    if (c.closed && S.n - (j - i) < 40) continue;
+    if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < c.width + 1.5 && Math.abs(S.y[i] - S.y[j]) > 0.4) {
+      issues.push(`passes over itself at ${Math.round(S.cum[i])}m and ${Math.round(S.cum[j])}m: crossings must be at the same height`);
+      break outer;
+    }
+  }
+  for (let i = 4; i < S.n; i += 4) { const slope = Math.abs(S.y[i] - S.y[i - 4]) / 2; if (slope > 0.75) { issues.push(`too steep near ${Math.round(S.cum[i])}m (${Math.round(Math.atan(slope) * 57)}°): spread the height change over more distance`); break; } }
+  for (let i = 0; i < S.n; i++) if (Math.abs(S.curv[i]) > 0.12) { issues.push(`very tight bend near ${Math.round(S.cum[i])}m: move those points further apart`); break; }
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < S.n; i++) { lo = Math.min(lo, S.y[i]); hi = Math.max(hi, S.y[i]); }
+  const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers };
+  return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1) };
+}
+
+/** convert a segment course (e.g. Rollercoaster Run) into editable points: one at each segment end, more on big curves */
+export function segToNodes(c: SegCourse): NodeCourse {
+  const nodes: TrackNode[] = [{ x: 0, z: 0, y: 4, bank: 0 }];
+  const spans: Span[] = [];
+  let x = 0, z = 0, y = 4, h = 0;
+  for (const s of c.segs) {
+    const parts = Math.max(1, Math.ceil(Math.abs(s.turn ?? 0) / 50), Math.ceil(s.len / 60));
+    for (let p = 0; p < parts; p++) {
+      const steps = 8;
+      for (let k = 0; k < steps; k++) {
+        const dl = s.len / parts / steps;
+        h += (((s.turn ?? 0) * Math.PI) / 180) / parts / steps;
+        x += Math.cos(h) * dl; z -= Math.sin(h) * dl;
+      }
+      y += (s.climb ?? 0) / parts;
+      nodes.push({ x: +x.toFixed(2), z: +z.toFixed(2), y: +y.toFixed(2), bank: s.bank ?? 0 });
+      const last = p === parts - 1;
+      spans.push({
+        rails: s.rails, boost: p === 0 ? s.boost : undefined, items: p === Math.floor(parts / 2) ? s.items : undefined,
+        gap: last ? s.gap : undefined, lip: last ? s.lip : undefined,
+        att: (s.att ?? []).filter((a) => Math.min(parts - 1, Math.floor(a.at * parts)) === p).map((a) => ({ ...a, at: a.at * parts - p })),
+      });
+    }
+  }
+  return { id: c.id, name: c.name, desc: c.desc, theme: c.theme, width: c.width, closed: !c.open, nodes, spans };
+}
