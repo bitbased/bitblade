@@ -53,8 +53,11 @@ export class RelayClient {
     });
   }
 
-  static host(wsBase: string, name = "host"): Promise<RelayClient> {
-    const c = new RelayClient(wsBase, `/room/new?role=host&name=${encodeURIComponent(name)}`, "host");
+  /** host a room: a fresh random code, or a fixed (persistent) code claimed with an owner key */
+  static host(wsBase: string, name = "host", opts: { code?: string; key?: string } = {}): Promise<RelayClient> {
+    const code = opts.code ? encodeURIComponent(opts.code.toUpperCase()) : "new";
+    const key = opts.key ? `&key=${encodeURIComponent(opts.key)}` : "";
+    const c = new RelayClient(wsBase, `/room/${code}?role=host&name=${encodeURIComponent(name)}${key}`, "host");
     return c.ready();
   }
 
@@ -96,12 +99,17 @@ export class RelayClient {
     this.raw({ t: "kick", id });
   }
 
+  /** host → relay: room listing for the public directory ({public:false} unlists) */
+  meta(m: unknown) {
+    this.raw({ t: "meta", m });
+  }
+
   close() {
     try { this.ws.close(); } catch {}
   }
 }
 
-const CODE_RE = /^[A-Za-z0-9]{5}$/;
+const CODE_RE = /^[A-Za-z0-9]{4,10}$/;
 
 function defaultWsBase(): string {
   const env = (import.meta as any).env?.VITE_CLOUD_RELAY as string | undefined;

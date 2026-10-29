@@ -81,7 +81,14 @@ export class MatchScreen implements Screen {
       this.net = new NetClient(cfg, this.arg.client.mine);
       this.state = this.net.latest;
       clientRoom.handler = (m) => this.onHostMsg(m);
-      clientRoom.closeHandler = (r) => { if (!this.ended) { this.ended = true; app.toast(`Disconnected: ${r}`); app.go('menu'); } };
+      clientRoom.closeHandler = (r) => {
+        if (this.ended) return;
+        this.ended = true;
+        app.toast(`Disconnected: ${r}`);
+        // the host dropped: wait in the online hub and rejoin automatically if the room comes back
+        if (r === 'Host left' && clientRoom.lastJoin) app.go('online', { rejoin: clientRoom.lastJoin });
+        else app.go('menu');
+      };
     } else {
       this.sim = new Sim(cfg);
       this.state = this.sim.s;

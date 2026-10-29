@@ -273,3 +273,21 @@ input[type=color]::-webkit-color-swatch { border: none; }
 .hud.split .announce .a-sub { font-size: 12px; }
 .hud.split .launch-hint { bottom: auto; top: calc(50% + 26px); z-index: 2; }
 .hud.split ~ .online-badge { left: auto; right: 14px; }
+
+/* online hub: public rooms / my rooms */
+.online-grid { display: flex; gap: 18px; flex-wrap: wrap; overflow-y: auto; align-items: flex-start; padding-bottom: 20px; }
+.row-head { display: flex; align-items: center; gap: 8px; }
+.row-head select { max-width: 160px; }
+.room-list { display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow-y: auto; }
+.room-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); border-left: 3px solid var(--accent); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.room-row:hover, .room-row.focus, .room-row:focus-visible { border-color: var(--accent); background: rgba(60, 242, 255, 0.08); }
+.room-row .rr-icon .ico { width: 26px; height: 26px; color: var(--accent); }
+.room-row .rr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.room-row .rr-main b { font-family: var(--font-h); font-size: 14px; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-row .rr-main span, .room-row .rr-side span { font-size: 12px; color: var(--muted); }
+.room-row .rr-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.room-row .rr-side.row { flex-direction: row; gap: 6px; }
+.room-row .rr-side b { font-family: var(--font-h); font-size: 16px; }
+.rr-tag { margin-left: 8px; font-size: 9px; letter-spacing: 0.2em; padding: 1px 6px; border: 1px solid var(--gold); color: var(--gold); vertical-align: 2px; }
+.online-box .room-name { background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); color: var(--text); padding: 6px 10px; font-family: var(--font-h); font-size: 14px; letter-spacing: 0.06em; outline: none; }
+.online-box .room-name:focus { border-color: var(--accent); }

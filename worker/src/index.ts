@@ -1,12 +1,18 @@
-// BitBlade Cloudflare Worker: serves the web build (assets) and relays rooms via a Durable Object.
-// Same protocol as server/relay-bun.ts and electron/relay-node.cjs.
+// BitBlade Cloudflare Worker: serves the web build (assets), relays rooms via a Durable Object, and keeps a
+// public room directory. Same protocol as server/relay-bun.ts and electron/relay-node.cjs.
+//   ws  /room/<CODE|new>?role=host|client&name=<name>[&key=<owner key>]
+//   GET /api/rooms -> public room list (JSON)
 
 export interface Env {
   ASSETS: Fetcher;
   ROOMS: DurableObjectNamespace;
+  DIR: DurableObjectNamespace;
 }
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CODE_RE = /^[A-Z0-9]{4,10}$/;
+const LISTING_TTL = 75_000; // hosts heartbeat every ~25s
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET", "Cache-Control": "no-store" };
 
 function genCode(): string {
   let c = "";
@@ -15,10 +21,22 @@ function genCode(): string {
   return c;
 }
 
+async function sha(s: string) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const dir = (env: Env) => env.DIR.get(env.DIR.idFromName("global"));
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname === "/api/rooms") {
+      if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+      const r = await dir(env).fetch(new Request("https://dir/list"));
+      return new Response(await r.text(), { headers: { "Content-Type": "application/json", ...CORS } });
+    }
     const m = url.pathname.match(/^\/room\/([A-Za-z0-9]+)$/);
     if (m) {
       if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
@@ -27,7 +45,7 @@ export default {
       if (code === "NEW") {
         if (role !== "host") return new Response("bad request", { status: 400 });
         code = genCode();
-      }
+      } else if (!CODE_RE.test(code)) return new Response("bad room code", { status: 400 });
       const fwd = new Request(req.url, req);
       fwd.headers.set("X-Room-Code", code);
       return env.ROOMS.get(env.ROOMS.idFromName(code)).fetch(fwd);
@@ -39,6 +57,7 @@ export default {
 type Peer = { id: number; role: "host" | "client"; name: string; code: string };
 
 export class Room {
+  private lastMeta = 0;
   constructor(private state: DurableObjectState, private env: Env) {}
 
   private host(): WebSocket | undefined {
@@ -53,6 +72,13 @@ export class Room {
     try { ws.send(JSON.stringify(m)); } catch {}
   }
 
+  private reject(ws: WebSocket, clientSide: WebSocket, msg: string) {
+    ws.accept();
+    this.send(ws, { t: "error", msg });
+    ws.close(1000, msg);
+    return new Response(null, { status: 101, webSocket: clientSide });
+  }
+
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const role = url.searchParams.get("role") === "host" ? "host" : "client";
@@ -62,24 +88,19 @@ export class Room {
     const [clientSide, ws] = [pair[0], pair[1]];
 
     if (role === "host") {
-      if (this.host()) {
-        ws.accept();
-        this.send(ws, { t: "error", msg: "room already hosted" });
-        ws.close(1000, "room already hosted");
-        return new Response(null, { status: 101, webSocket: clientSide });
-      }
+      if (this.host()) return this.reject(ws, clientSide, "room already hosted");
+      // persistent rooms: the first host to present a key owns the code from then on
+      const key = url.searchParams.get("key") ?? "";
+      const owner = await this.state.storage.get<string>("owner");
+      if (owner && (!key || (await sha(key)) !== owner)) return this.reject(ws, clientSide, "that room code belongs to someone else");
+      if (!owner && key) await this.state.storage.put("owner", await sha(key));
       const peer: Peer = { id: 0, role, name, code };
       this.state.acceptWebSocket(ws, ["host"]);
       ws.serializeAttachment(peer);
       this.send(ws, { t: "welcome", id: 0, role, code });
     } else {
       const host = this.host();
-      if (!host) {
-        ws.accept();
-        this.send(ws, { t: "error", msg: "no host" });
-        ws.close(1000, "no host");
-        return new Response(null, { status: 101, webSocket: clientSide });
-      }
+      if (!host) return this.reject(ws, clientSide, "no host");
       const id = ((await this.state.storage.get<number>("nextId")) ?? 1);
       await this.state.storage.put("nextId", id + 1);
       const peer: Peer = { id, role, name, code };
@@ -107,6 +128,13 @@ export class Room {
     } else if (msg?.t === "kick") {
       const c = this.client(Number(msg.id));
       if (c) { this.send(c, { t: "error", msg: "kicked" }); c.close(1000, "kicked"); }
+    } else if (msg?.t === "meta") {
+      // room listing for the public directory (rate-limited; private rooms are removed)
+      const now = Date.now();
+      if (now - this.lastMeta < 1000) return;
+      this.lastMeta = now;
+      const body = JSON.stringify({ ...msg.m, code: peer.code, clients: this.state.getWebSockets("client").length });
+      await dir(this.env).fetch(new Request(msg.m?.public ? "https://dir/upsert" : "https://dir/remove", { method: "POST", body }));
     }
   }
 
@@ -126,11 +154,47 @@ export class Room {
         this.send(c, { t: "host-left" });
         try { c.close(1000, "host left"); } catch {}
       }
-      await this.state.storage.deleteAll();
+      await this.state.storage.delete("nextId"); // keep "owner" so persistent codes stay claimed
+      await dir(this.env).fetch(new Request("https://dir/remove", { method: "POST", body: JSON.stringify({ code: peer.code }) }));
     } else {
       const host = this.host();
       if (host) this.send(host, { t: "peer-leave", id: peer.id });
     }
     try { ws.close(1000, "bye"); } catch {}
+  }
+}
+
+const clip = (v: unknown, n: number) => String(v ?? "").slice(0, n);
+const num = (v: unknown, max: number) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+
+/** The public room directory (one global instance). Entries expire unless the host keeps heartbeating. */
+export class Directory {
+  constructor(private state: DurableObjectState, private env: Env) {}
+
+  async fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    if (url.pathname === "/list") {
+      const now = Date.now();
+      const all = await this.state.storage.list<any>({ prefix: "r:" });
+      const rooms: any[] = [];
+      for (const [k, v] of all) {
+        if (now - v.updated > LISTING_TTL) await this.state.storage.delete(k);
+        else rooms.push(v);
+      }
+      rooms.sort((a, b) => Number(a.inMatch) - Number(b.inMatch) || b.players - a.players || b.updated - a.updated);
+      return new Response(JSON.stringify({ rooms: rooms.slice(0, 100), now }));
+    }
+    const b = (await req.json().catch(() => null)) as any;
+    const code = clip(b?.code, 10).toUpperCase();
+    if (!CODE_RE.test(code)) return new Response("bad", { status: 400 });
+    if (url.pathname === "/remove") { await this.state.storage.delete("r:" + code); return new Response("ok"); }
+    if (url.pathname === "/upsert") {
+      await this.state.storage.put("r:" + code, {
+        code, name: clip(b.name, 32), host: clip(b.host, 16), mode: clip(b.mode, 12), modeName: clip(b.modeName, 24), arena: clip(b.arena, 32),
+        players: num(b.players, 16), max: num(b.max, 16), clients: num(b.clients, 64), inMatch: !!b.inMatch, persistent: !!b.persistent, updated: Date.now(),
+      });
+      return new Response("ok");
+    }
+    return new Response("not found", { status: 404 });
   }
 }

@@ -28,6 +28,8 @@ interface DurableObjectNamespace {
 interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  list<T = unknown>(opts?: { prefix?: string }): Promise<Map<string, T>>;
   deleteAll(): Promise<void>;
 }
 

@@ -13,6 +13,8 @@ import { settings } from '../core/settings';
 import { icon, drawIcon } from './icons';
 import type { MatchArg } from './match';
 import { hostRoom } from '../net/room';
+import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
+import type { RoomOpts } from './online';
 
 interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
 
@@ -90,6 +92,8 @@ export class LobbyScreen implements Screen {
   dirty = true;
   iconT = 0;
   unsub: (() => void) | null = null;
+  /** how to open the room when hosting (name / public / persistent code) — set by the online hub */
+  roomOpts: RoomOpts = { name: '', public: false, persistent: false };
 
   get mode() { return MODES.find((m) => m.id === L.mode)!; }
 
@@ -98,11 +102,12 @@ export class LobbyScreen implements Screen {
     setBackdropVisible(true, app.canvas);
     // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
     // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)
-    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean; next?: boolean; autostart?: boolean };
+    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean; next?: boolean; autostart?: boolean; room?: RoomOpts };
+    if (a.room) this.roomOpts = a.room;
     L.active = true;
     if (a.mode && !a.keep && a.mode !== L.mode) this.setMode(a.mode);
     else if (a.mode && !a.keep) this.setMode(a.mode, true);
-    if (a.arenaId) L.arenaId = a.arenaId;
+    if (a.arenaId && allArenas().some((x) => x.id === a.arenaId && this.fits(x))) L.arenaId = a.arenaId;
     if (!L.slots.some((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote')) {
       L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb1' }, bladeId: PRESETS[0].id, team: 0 });
     }
@@ -451,11 +456,26 @@ export class LobbyScreen implements Screen {
       const t = hostRoom.t;
       const ctl = h('div.toggle.panel.nav', { onclick: () => { hostRoom.openControl = !hostRoom.openControl; this.dirty = true; this.renderOnline(); }, title: 'Let everyone in the room change mode / arena and start matches' }, h('span.dot'), 'OPEN CONTROL');
       ctl.classList.toggle('on', hostRoom.openControl);
+      ctl.addEventListener('click', () => this.pushSummary());
+      const info = hostRoom.info;
+      const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'Host'}'s room` });
+      rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; });
+      const pub = h('div.toggle.panel.nav', { title: t.listable ? 'List this room in Public Rooms' : 'Desktop LAN / tunnel rooms can\'t be listed — host a Cloud room to go public', onclick: () => { if (!t.listable) { this.app.toast('Host a Cloud room to list it publicly'); return; } hostRoom.setInfo({ public: !info.public }); this.app.toast(hostRoom.info.public ? 'Room is now PUBLIC — listed for everyone' : 'Room is now private (invite only)'); this.pushSummary(); this.renderOnline(); } }, h('span.dot'), 'PUBLIC');
+      pub.classList.toggle('on', info.public);
+      const keep = info.persistent
+        ? h('div.hint', { style: { color: 'var(--gold)' } }, icon('lock'), ' SAVED ROOM — same code every time')
+        : h('button.btn.small.nav', { title: 'Save to My Rooms: reopen later with this same code and invite link', onclick: () => {
+            saveMyRoom({ code: t.code, key: newOwnerKey(), name: info.name || `${L.slots[0]?.name ?? 'My'}'s room`, public: info.public, openControl: hostRoom.openControl, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
+            hostRoom.setInfo({ persistent: true });
+            this.app.toast(`Saved to My Rooms — ${t.code} is yours next time you open it`);
+            this.renderOnline();
+          } }, 'KEEP ROOM');
       el.append(
-        h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'PUBLIC ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
+        h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'TUNNEL ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
+        rname,
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
-        h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, ctl,
+        h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
           h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
       return;
@@ -473,22 +493,38 @@ export class LobbyScreen implements Screen {
   async openRoom(kind: 'lan' | 'tunnel' | 'cloud') {
     const el = this.onlineEl;
     const name = L.slots[0]?.name ?? 'host';
+    const o = this.roomOpts;
+    const hostOpts = o.code && o.key ? { code: o.code, key: o.key } : {};
     el.innerHTML = '';
-    el.append(h('div.hint', null, `Opening ${kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room'}…`));
+    el.append(h('div.hint', null, `Opening ${o.name || (kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room')}…`));
     try {
-      const t = await (kind === 'cloud' ? hostCloud(name) : hostLocal(name, kind === 'tunnel'));
-      hostRoom.open(t);
-      this.app.toast(`Room ${t.code} open — share the code!`);
+      const t = await (kind === 'cloud' ? hostCloud(name, hostOpts) : hostLocal(name, kind === 'tunnel', hostOpts));
+      hostRoom.open(t, { name: o.name, public: o.public && t.listable, persistent: o.persistent });
+      hostRoom.openControl = !!o.openControl;
+      this.pushSummary();
+      this.app.toast(`${o.name || 'Room'} ${t.code} open${hostRoom.info.public ? ' · listed in Public Rooms' : ''} — share the code!`);
     } catch (e) {
       this.app.toast(String((e as Error).message || e));
     }
     this.renderOnline();
   }
 
+  /** keep the public listing / saved room in step with the lobby */
+  pushSummary() {
+    if (!hostRoom.t) return;
+    const m = this.mode;
+    const players = L.slots.filter((s) => s.ctrl.type !== 'cpu').length;
+    hostRoom.setSummary({ host: L.slots[0]?.name ?? 'Host', mode: L.mode, modeName: m.name, arena: findArena(L.arenaId).name, players, max: m.maxPlayers });
+    if (hostRoom.info.persistent) {
+      const saved = findMyRoom(hostRoom.t.code);
+      if (saved) saveMyRoom({ ...saved, name: hostRoom.info.name || saved.name, public: hostRoom.info.public, openControl: hostRoom.openControl, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
+    }
+  }
+
   lobbySnapshot() {
     const arena = findArena(L.arenaId);
     return {
-      t: 'lobby', mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
+      t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
       items: L.items, target: L.target, time: L.time, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host',
       slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i) })),
     };
@@ -542,6 +578,7 @@ export class LobbyScreen implements Screen {
       this.broadcastT -= dt;
       if (this.dirty && this.broadcastT <= 0) {
         hostRoom.send('all', this.lobbySnapshot());
+        this.pushSummary();
         this.dirty = false;
         this.broadcastT = 0.25;
       }
