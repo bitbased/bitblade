@@ -313,6 +313,17 @@ export class MenuNav {
     return v;
   }
 
+  /** a direction key / d-pad button pressed since the last frame (edge, not hold) */
+  private tapDir(): { dx: number; dy: number } | null {
+    const p = this.app.input.pressed;
+    const k = (...c: string[]) => c.some((x) => p.has(x));
+    if (k('ArrowDown', 'KeyS') || this.padEdge(13)) return { dx: 0, dy: 1 };
+    if (k('ArrowUp', 'KeyW') || this.padEdge(12)) return { dx: 0, dy: -1 };
+    if (k('ArrowRight', 'KeyD') || this.padEdge(15)) return { dx: 1, dy: 0 };
+    if (k('ArrowLeft', 'KeyA') || this.padEdge(14)) return { dx: -1, dy: 0 };
+    return null;
+  }
+
   /** held direction from any device, with how hard (stick tilt speeds up repeats) */
   private heldDir(): { dx: number; dy: number; mag: number } {
     const inp = this.app.input;
@@ -344,11 +355,15 @@ export class MenuNav {
     if (!it.length) { this.renderHints(); return; }
     this.restore(it);
 
-    // directions with hold-to-repeat
+    // directions with hold-to-repeat; key/d-pad taps are read as press events too, so a quick tap between two
+    // slow frames is never lost
     const d = this.heldDir();
+    const tap = this.tapDir();
+    if (tap) { d.dx = tap.dx; d.dy = tap.dy; d.mag = 1; }
     const dir = d.dx || d.dy ? `${d.dx},${d.dy}` : '';
     let fire = false;
-    if (dir && dir !== this.repDir) { fire = true; this.repT = 0.36; }
+    if (tap) { fire = true; this.repT = 0.36; }
+    else if (dir && dir !== this.repDir) { fire = true; this.repT = 0.36; }
     else if (dir) { this.repT -= dt; if (this.repT <= 0) { fire = true; this.repT = 0.11 / Math.max(0.6, d.mag) - 0.03; } }
     this.repDir = dir;
     if (fire) this.move(it, d.dx, d.dy);

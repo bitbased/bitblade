@@ -106,6 +106,7 @@ ipcMain.handle("bb:startHost", () => startHost());
 ipcMain.handle("bb:stopHost", () => stopHost());
 ipcMain.handle("bb:startTunnel", () => startTunnel());
 ipcMain.handle("bb:stopTunnel", () => stopTunnel());
+ipcMain.handle("bb:quit", () => app.quit());
 ipcMain.handle("bb:toggleFullscreen", () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 
 app.whenReady().then(() => {

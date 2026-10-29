@@ -10,6 +10,8 @@ export class Sfx {
   musicVolume = 0.35;
   private noiseBuf: AudioBuffer | null = null;
   private musicTimer = 0;
+  private nextBeat = 0;
+  private pump: ReturnType<typeof setInterval> | null = null;
   private musicStep = 0;
   private musicOn = false;
   private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
@@ -139,15 +141,21 @@ export class Sfx {
 
   music(on: boolean) { this.musicOn = on; }
 
-  /** call every frame — simple synthwave arpeggio */
-  update(dt: number) {
-    if (!this.musicOn || !this.ctx || this.ctx.state !== 'running' || this.musicVolume <= 0) return;
-    this.musicTimer -= dt;
-    if (this.musicTimer > 0) return;
-    const bpm = 118;
-    this.musicTimer += 60 / bpm / 2;
+  /**
+   * Music is scheduled on the audio clock with a lookahead, so a slow frame never delays the beat: every call
+   * (each frame, plus a timer in case frames stall) queues all steps due in the next ~0.4s at exact times.
+   */
+  update(_dt = 0) {
+    if (!this.pump && typeof setInterval !== 'undefined') this.pump = setInterval(() => this.update(), 100);
+    if (!this.musicOn || !this.ctx || this.ctx.state !== 'running' || this.musicVolume <= 0) { this.nextBeat = 0; return; }
     const c = this.ctx;
-    const t = c.currentTime + 0.02;
+    const stepLen = 60 / 118 / 2;
+    if (this.nextBeat < c.currentTime) this.nextBeat = c.currentTime + 0.05; // first start, or resuming after a long stall
+    while (this.nextBeat < c.currentTime + 0.4) { this.musicNote(this.nextBeat); this.nextBeat += stepLen; }
+  }
+
+  private musicNote(t: number) {
+    const c = this.ctx!;
     const roots = [45, 45, 41, 43];
     const bar = Math.floor(this.musicStep / 8) % 4;
     const root = roots[bar];

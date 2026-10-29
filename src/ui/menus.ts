@@ -1,7 +1,7 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { MODES, type ModeId } from '../game/types';
-import { getPlatform } from '../net/platform';
+import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
 import { FINISH_LABEL } from '../game/sim';
 import type { MatchSummary } from './match';
@@ -68,15 +68,15 @@ export class MainMenu extends Base {
     return h('div.menu-screen', null,
       h('div.menu-col', null,
         h('div.menu-logo', null, 'BITBLADE'),
-        session ? item('CONTINUE', `Back to your lobby · ${session.mode} · ${session.arena} · ${session.humans} player${session.humans === 1 ? '' : 's'}${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
+        session ? item('CONTINUE', `${session.mode} · ${session.arena} · ${session.humans}P${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
         item(session ? 'NEW GAME' : 'PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
         item('ONLINE', 'Host a room or join with a code / link', () => this.app.go('online')),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
         item('SETTINGS', 'Audio · graphics · network', () => this.app.go('settings')),
-        p ? item('QUIT', 'Exit to desktop', () => window.close()) : null,
+        p || isInstalledApp() ? item('QUIT', p ? 'Exit to desktop' : 'Close BitBlade', () => quitApp(() => this.app.toast('Swipe BitBlade away in your app switcher to close it'))) : null,
       ),
-      h('div.menu-foot', null, 'v0.1 · ', h('span.kbd', null, '↑↓'), ' navigate ', h('span.kbd', null, 'ENTER / A'), ' select ', h('span.kbd', null, 'ESC / B'), ' back'),
+      h('div.menu-foot', null, 'v0.1'),
     );
   }
   onBack() { this.app.go('title'); }

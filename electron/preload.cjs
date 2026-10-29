@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld("bitblade", {
   startTunnel: () => ipcRenderer.invoke("bb:startTunnel"),
   stopTunnel: () => ipcRenderer.invoke("bb:stopTunnel"),
   toggleFullscreen: () => ipcRenderer.invoke("bb:toggleFullscreen"),
+  quit: () => ipcRenderer.invoke("bb:quit"),
 });

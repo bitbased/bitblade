@@ -375,7 +375,7 @@ export class GameView {
   flagViews: { pole: THREE.Group; orb: THREE.Mesh; base: THREE.Mesh }[] = [];
   zoneMesh: THREE.Mesh | null = null;
   boostMeshes: THREE.Mesh[] = [];
-  spinPads: { swirl: THREE.Group; beam: THREE.Mesh; ring: THREE.Mesh; x: number; z: number; r: number }[] = [];
+  spinPads: { arms: THREE.Mesh[]; spin: number; beam: THREE.Mesh; ring: THREE.Mesh; x: number; z: number; r: number }[] = [];
   camTarget = new THREE.Vector3();
   camPos = new THREE.Vector3();
   shake = 0;
@@ -523,9 +523,9 @@ export class GameView {
     blur.rotation.x = -Math.PI / 2;
     blur.position.y = model.height * scale * 0.72;
     tilt.add(blur);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(st.radius * 1.05, st.radius * 1.2, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+    const ring = new THREE.Mesh(new THREE.RingGeometry(st.radius * 1.05, st.radius * 1.2, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
     ring.rotation.x = -Math.PI / 2;
-    const shadow = new THREE.Mesh(new THREE.CircleGeometry(st.radius * 1.1, 32), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.4, depthWrite: false }));
+    const shadow = new THREE.Mesh(new THREE.RingGeometry(0, st.radius * 1.1, 24, 3), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.4, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2;
     const label = textSprite(this.cfg.players[this.tops.length]?.name ?? blade.name, '#' + color.getHexString());
     label.position.y = 1.5;
@@ -550,7 +550,7 @@ export class GameView {
     arc.frustumCulled = false;
     const landing = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.65, 32), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
     landing.rotation.x = -Math.PI / 2;
-    const launchRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48, 1, 0, Math.PI * 2), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.9, toneMapped: false, side: THREE.DoubleSide }));
+    const launchRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48, 2, 0, Math.PI * 2), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.9, toneMapped: false, side: THREE.DoubleSide }));
     launchRing.rotation.x = -Math.PI / 2;
     this.scene.add(root, ring, shadow, trail.mesh, arc, landing, launchRing);
     this.tops.push({ root, tilt, model, ring, shadow, blur, label, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
@@ -635,27 +635,24 @@ export class GameView {
         case 'spinpad': {
           const r = m.r ?? 1.1;
           const col = '#38ffb0';
-          const g = new THREE.Group();
-          g.position.set(m.x, y + 0.04, m.z);
-          const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.82, r, 48), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
-          ring.rotation.x = -Math.PI / 2;
-          g.add(ring);
+          // ring + swirl arms are draped onto the surface (bowls curve; flat discs would cut into them)
+          const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.82, r, 48, 2), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+          this.drape(ring, m.x, m.z, 1, 0.05);
+          this.scene.add(ring);
           // three swirl arms that spin (so it reads as "re-spin here")
-          const swirl = new THREE.Group();
           const armMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
+          const arms: THREE.Mesh[] = [];
           for (let k = 0; k < 3; k++) {
-            const arm = new THREE.Mesh(new THREE.RingGeometry(r * 0.25, r * 0.7, 24, 1, (k * Math.PI * 2) / 3, Math.PI / 2.2), armMat);
-            arm.rotation.x = -Math.PI / 2;
-            swirl.add(arm);
+            const arm = new THREE.Mesh(new THREE.RingGeometry(r * 0.25, r * 0.7, 16, 3, (k * Math.PI * 2) / 3, Math.PI / 2.2), armMat);
+            this.drape(arm, m.x, m.z, 1, 0.06);
+            this.scene.add(arm);
+            arms.push(arm);
           }
-          swirl.position.y = 0.01;
-          g.add(swirl);
           // soft light column so pads are visible across the arena
           const beam = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r, 2.2, 32, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.1, toneMapped: false, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
-          beam.position.y = 1.1;
-          g.add(beam);
-          this.scene.add(g);
-          this.spinPads.push({ swirl, beam, ring, x: m.x, z: m.z, r });
+          beam.position.set(m.x, y + 1.1, m.z);
+          this.scene.add(beam);
+          this.spinPads.push({ arms, spin: 0, beam, ring, x: m.x, z: m.z, r });
           break;
         }
       }
@@ -765,6 +762,31 @@ export class GameView {
     }
   }
 
+  /**
+   * Lay a flat ring / disc (built in the XY plane) onto the terrain around (cx, cz): every vertex sits on the
+   * surface + lift. `scale` and `angle` are applied to the flat shape first (so animated pads stay draped).
+   */
+  drape(m: THREE.Mesh, cx: number, cz: number, scale: number, lift: number, angle = 0) {
+    const g = m.geometry as THREE.BufferGeometry;
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    let base = m.userData.flat as Float32Array | undefined;
+    if (!base) { base = Float32Array.from(pos.array as ArrayLike<number>); m.userData.flat = base; m.rotation.set(0, 0, 0); m.frustumCulled = false; }
+    let y0 = this.terrain.height(cx, cz);
+    if (y0 <= VOID) y0 = 0;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    for (let i = 0; i < pos.count; i++) {
+      const fx = base[i * 3] * scale, fy = base[i * 3 + 1] * scale;
+      // flat XY → ground XZ, same facing as rotation.x = -90°
+      const lx = fx * ca - fy * sa, lz = -(fx * sa + fy * ca);
+      let h = this.terrain.height(cx + lx, cz + lz);
+      if (h <= VOID) h = y0;
+      pos.setXYZ(i, lx, h - y0 + lift, lz);
+    }
+    pos.needsUpdate = true;
+    m.position.set(cx, y0, cz);
+    m.scale.setScalar(1);
+  }
+
   ring(x: number, y: number, z: number, color: string, r: number, dur: number) {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 64), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
     m.rotation.x = -Math.PI / 2;
@@ -823,12 +845,13 @@ export class GameView {
     const beacon = this.focus.some((i) => s.tops[i]?.alive && s.tops[i].spin < 0.4 && s.phase === 'battle');
     for (const p of this.spinPads) {
       const busy = s.tops.some((t) => t.alive && t.spin < 1 && Math.hypot(t.x - p.x, t.z - p.z) < p.r);
-      p.swirl.rotation.y += dt * (busy ? 9 : 2.5);
+      p.spin += dt * (busy ? 9 : 2.5);
+      for (const a of p.arms) this.drape(a, p.x, p.z, 1, 0.06, p.spin);
       const bm = p.beam.material as THREE.MeshBasicMaterial;
       bm.opacity += ((busy ? 0.32 : beacon ? 0.22 + 0.16 * Math.sin(this.time * 7) : 0.08 + 0.04 * Math.sin(this.time * 3 + p.x)) - bm.opacity) * Math.min(1, dt * 6);
       p.beam.scale.y = beacon && !busy ? 1.8 + 0.4 * Math.sin(this.time * 7) : 1;
-      p.beam.position.y = 1.1 * p.beam.scale.y;
-      p.ring.scale.setScalar(busy ? 1 + 0.06 * Math.sin(this.time * 18) : 1);
+      p.beam.position.y = this.groundY(p.x, p.z) + 1.1 * p.beam.scale.y;
+      (p.ring.material as THREE.MeshBasicMaterial).opacity = busy ? 0.6 + 0.4 * Math.abs(Math.sin(this.time * 18)) : 0.85;
     }
     // boxes
     s.boxes.forEach((b, i) => {
@@ -923,11 +946,13 @@ export class GameView {
     const gh = this.terrain.height(t.x, t.z);
     const ground = gh <= VOID ? -50 : gh;
     const above = Math.max(0, t.y - ground);
-    v.ring.position.set(t.x, ground + 0.04, t.z);
-    v.shadow.position.set(t.x, ground + 0.03, t.z);
     v.ring.visible = t.alive && gh > VOID;
     v.shadow.visible = gh > VOID;
-    v.ring.scale.setScalar(t.scale * (1 + above * 0.15));
+    // ring + shadow follow the surface under the blade (bowls, ramps, pipes) instead of cutting through it
+    if (gh > VOID) {
+      this.drape(v.ring, t.x, t.z, t.scale * (1 + above * 0.15), 0.05);
+      this.drape(v.shadow, t.x, t.z, 1, 0.035);
+    }
     (v.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.45 - above * 0.06);
     v.label.visible = t.alive && !this.attract;
     v.shield.visible = t.fx.shield > 0 && t.alive;
@@ -967,7 +992,7 @@ export class GameView {
         if (y < -6) break;
       }
       v.landing.visible = landed;
-      v.landing.scale.setScalar(1 + Math.sin(this.time * 12) * 0.15);
+      if (landed) this.drape(v.landing, v.landing.position.x, v.landing.position.z, 1 + Math.sin(this.time * 12) * 0.15, 0.06);
       (v.landing.material as THREE.MeshBasicMaterial).color.set(landed ? v.color : new THREE.Color('#ff2244'));
       if (!landed) (v.arc.material as THREE.LineDashedMaterial).color.set('#ff2244');
       else (v.arc.material as THREE.LineDashedMaterial).color.copy(v.color);
@@ -979,9 +1004,8 @@ export class GameView {
     // launch meter ring
     v.launchRing.visible = s.phase === 'launch' && !this.attract;
     if (v.launchRing.visible) {
-      v.launchRing.position.set(t.x, ground + 0.06, t.z);
       const pw = t.launchLocked ? t.launch : launchPower;
-      v.launchRing.scale.setScalar(0.6 + pw * 1.2);
+      this.drape(v.launchRing, t.x, t.z, 0.6 + pw * 1.2, 0.07);
       (v.launchRing.material as THREE.MeshBasicMaterial).color.set(t.launchLocked ? (t.launch > 0.9 ? '#38ff7a' : '#ffffff') : pw > 0.9 ? '#38ff7a' : '#ffd23a');
     }
   }
