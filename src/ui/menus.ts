@@ -47,6 +47,7 @@ export class TitleScreen extends Base {
       logo,
       h('div.tagline', null, 'LET IT RIP'),
       h('div.press-start', null, Input.isTouchDevice() ? 'TAP TO START' : 'PRESS START'),
+      (this.corner = new MusicCorner(this.app, '.on-title')).el,
       h('div.title-foot', null, h('span', null, icon('keyboard'), ' KEYBOARD'), h('span', null, icon('mouse'), ' MOUSE'), h('span', null, icon('gamepad'), ' GAMEPADS'), h('span', null, icon('phone'), ' TOUCH + GYRO')),
     );
   }
@@ -55,10 +56,64 @@ export class TitleScreen extends Base {
     this.app.sfx.music(true);
     this.app.go('menu');
   }
+  corner: MusicCorner | null = null;
   update(dt: number) {
     this.t += dt;
+    this.corner?.watch();
     const i = this.app.input;
-    if (this.t > 0.4 && (i.pressed.size > 0 || i.joinPresses().length || i.mousePressed)) this.start();
+    const musicClick = performance.now() - ((this.app as unknown as { musicClick?: number }).musicClick ?? 0) < 400;
+    if (this.t > 0.4 && !musicClick && (i.pressed.size > 0 || i.joinPresses().length || i.mousePressed)) this.start();
+  }
+  unmount() { this.corner?.dispose(); super.unmount(); }
+}
+
+
+/**
+ * The music corner (main menu + title screen): what's playing, 🎲 a brand-new surprise song every press (not
+ * saved), 📻 radio (new surprise songs keep coming), and while a surprise plays: 💾 keep it, ✕ usual music.
+ */
+export class MusicCorner {
+  el: HTMLElement;
+  constructor(private app: App, extraClass = '') {
+    this.extra = extraClass;
+    this.el = this.build();
+  }
+  private extra: string;
+  refresh() { const n = this.build(); this.el.replaceWith(n); this.el = n; }
+  /** radio / random switched songs by itself: show the new name */
+  watch() { this.app.sfx.onSongChange = () => { if (this.el.isConnected) this.refresh(); }; }
+  dispose() { this.app.sfx.onSongChange = null; }
+  build(): HTMLElement {
+    const sfx = this.app.sfx;
+    const on = musicPrefs.menu === 'surprise';
+    const song = on ? sfx.surprise : songById(musicPrefs.menu);
+    const saved = !!song && loadCustomSongs().some((s) => s.id === song.id);
+    const redo = () => this.refresh();
+    const roll = () => {
+      sfx.music(true); // (the title screen starts silent)
+      if (!on) musicPrefs.menuPrev = musicPrefs.menu;
+      musicPrefs.menu = 'surprise'; saveMusicPrefs();
+      sfx.surprise = surpriseSong(); sfx.useMusic('menu'); redo();
+    };
+    const el = h('div.music-chip' + this.extra, {
+      // the title screen starts on any click: these clicks are for the music, not for 'press start'
+      onpointerdown: (e: Event) => { e.stopPropagation(); this.app.sfx.ensure(); this.app.sfx.ctx?.resume(); this.app.input.mousePressed = 0; (this.app as unknown as { musicClick?: number }).musicClick = performance.now(); },
+      onmousedown: (e: Event) => e.stopPropagation(), // (the game's 'any press' listener watches mousedown too)
+      onclick: (e: Event) => e.stopPropagation(),
+    },
+      h('div.mm-now', null, h('span', null, on && musicPrefs.radio ? '📻 RADIO ON' : on ? 'SURPRISE SONG' : 'NOW PLAYING'), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')),
+      h('button.mm-ic.nav', { title: 'Surprise me: a brand-new song (press again for another)', onclick: roll }, '🎲'),
+      on && song ? (saved
+        ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library' }, '✓')
+        : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); } }, '💾')) : null,
+      h('button.mm-ic.mm-radio.nav' + (on && musicPrefs.radio ? '.on' : ''), {
+        'aria-pressed': on && musicPrefs.radio ? 'true' : 'false',
+        title: on && musicPrefs.radio ? 'Radio on: a new surprise song every 45s or so — click to stay on this one' : 'Radio: keep playing new surprise songs (each one at least 45s)',
+        onclick: () => { musicPrefs.radio = !(on && musicPrefs.radio); saveMusicPrefs(); if (!on) roll(); else { sfx.useMusic('menu'); redo(); } },
+      }, '📻'),
+      on ? h('button.mm-ic.nav', { title: 'Back to your usual music', onclick: () => { musicPrefs.menu = musicPrefs.menuPrev && musicPrefs.menuPrev !== 'surprise' ? musicPrefs.menuPrev : 'neon-drive'; saveMusicPrefs(); sfx.useMusic('menu'); redo(); } }, '✕') : null,
+    );
+    return el;
   }
 }
 
@@ -83,47 +138,13 @@ export class MainMenu extends Base {
         p || isInstalledApp() ? item('QUIT', p ? 'Exit to desktop' : 'Close BitBlade', () => quitApp(() => this.app.toast('Swipe BitBlade away in your app switcher to close it'))) : null,
       ),
       h('div.menu-foot', null, 'v0.1'),
-      this.musicChip(),
+      (this.corner = new MusicCorner(this.app)).el,
     );
   }
 
-  /**
-   * Bottom-right corner: what's playing + 🎲 (a brand-new surprise song every press, not saved), and while a
-   * surprise is playing: 💾 keep it in your library, ✕ go back to your usual music.
-   */
-  musicChip(): HTMLElement {
-    const sfx = this.app.sfx;
-    const on = musicPrefs.menu === 'surprise';
-    const song = on ? sfx.surprise : songById(musicPrefs.menu);
-    const saved = !!song && loadCustomSongs().some((s) => s.id === song.id);
-    const redo = () => { const old = this.chip; old?.replaceWith(this.musicChip()); };
-    const roll = () => {
-      if (!on) musicPrefs.menuPrev = musicPrefs.menu;
-      musicPrefs.menu = 'surprise'; saveMusicPrefs();
-      sfx.surprise = surpriseSong(); sfx.useMusic('menu'); redo();
-    };
-    const el = h('div.music-chip', null,
-      h('div.mm-now', null, h('span', null, on ? 'SURPRISE SONG' : 'NOW PLAYING'), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')),
-      h('button.mm-ic.nav', { title: 'Surprise me: a brand-new song (press again for another)', onclick: roll }, '🎲'),
-      on && song ? (saved
-        ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library' }, '✓')
-        : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); } }, '💾')) : null,
-      h('button.mm-ic.nav' + (on && musicPrefs.radio ? '.on' : ''), {
-        title: on && musicPrefs.radio ? 'Radio on: a new surprise song every 45s or so — click to stay on this one' : 'Radio: keep playing new surprise songs (each one at least 45s)',
-        onclick: () => { musicPrefs.radio = !(on && musicPrefs.radio); saveMusicPrefs(); if (!on) roll(); else { sfx.useMusic('menu'); redo(); } },
-      }, '📻'),
-      on ? h('button.mm-ic.nav', { title: 'Back to your usual music', onclick: () => { musicPrefs.menu = musicPrefs.menuPrev && musicPrefs.menuPrev !== 'surprise' ? musicPrefs.menuPrev : 'neon-drive'; saveMusicPrefs(); sfx.useMusic('menu'); redo(); } }, '✕') : null,
-    );
-    this.chip = el;
-    return el;
-  }
-  chip: HTMLElement | null = null;
-  update(dt: number) {
-    super.update(dt);
-    // radio / random switched songs by itself: show the new name
-    this.app.sfx.onSongChange = () => { const old = this.chip; if (old?.isConnected) old.replaceWith(this.musicChip()); };
-  }
-  unmount() { this.app.sfx.onSongChange = null; super.unmount(); }
+  corner: MusicCorner | null = null;
+  update(dt: number) { super.update(dt); this.corner?.watch(); }
+  unmount() { this.corner?.dispose(); super.unmount(); }
   onBack() { this.app.go('title'); }
 }
 
