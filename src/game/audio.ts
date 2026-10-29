@@ -149,6 +149,8 @@ export class Sfx {
   }
 
   music(on: boolean) { this.musicOn = on; }
+  /** is music actually audible right now? (browsers keep audio locked until the first click / key) */
+  get musicLive() { return this.musicOn && this.ctx?.state === 'running' && this.musicVolume > 0 && musicPrefs.menu !== 'off'; }
 
   /** play a specific song (Music Studio preview); restart=false keeps going if it's already this song */
   playSong(song: Song | null, restart = true) {

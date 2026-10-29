@@ -81,7 +81,11 @@ export class MusicCorner {
   private extra: string;
   refresh() { const n = this.build(); this.el.replaceWith(n); this.el = n; }
   /** radio / random switched songs by itself: show the new name */
-  watch() { this.app.sfx.onSongChange = () => { if (this.el.isConnected) this.refresh(); }; }
+  private live = false;
+  watch() {
+    this.app.sfx.onSongChange = () => { if (this.el.isConnected) this.refresh(); };
+    if (this.app.sfx.musicLive !== this.live) { this.live = this.app.sfx.musicLive; if (this.el.isConnected) this.refresh(); }
+  }
   dispose() { this.app.sfx.onSongChange = null; }
   build(): HTMLElement {
     const sfx = this.app.sfx;
@@ -97,11 +101,15 @@ export class MusicCorner {
     };
     const el = h('div.music-chip' + this.extra, {
       // the title screen starts on any click: these clicks are for the music, not for 'press start'
-      onpointerdown: (e: Event) => { e.stopPropagation(); this.app.sfx.ensure(); this.app.sfx.ctx?.resume(); this.app.input.mousePressed = 0; (this.app as unknown as { musicClick?: number }).musicClick = performance.now(); },
+      onpointerdown: (e: Event) => { e.stopPropagation(); this.app.sfx.ensure(); this.app.sfx.ctx?.resume(); this.app.sfx.music(true); this.app.sfx.useMusic('menu'); this.app.input.mousePressed = 0; (this.app as unknown as { musicClick?: number }).musicClick = performance.now(); },
       onmousedown: (e: Event) => e.stopPropagation(), // (the game's 'any press' listener watches mousedown too)
       onclick: (e: Event) => e.stopPropagation(),
     },
-      h('div.mm-now', null, h('span', null, on && musicPrefs.radio ? '📻 RADIO ON' : on ? 'SURPRISE SONG' : 'NOW PLAYING'), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')),
+      !sfx.musicLive && musicPrefs.menu !== 'off'
+        ? h('button.mm-play.nav', { title: 'Browsers wait for a click before playing sound — tap to start the music', onclick: () => { this.app.sfx.ensure(); void this.app.sfx.ctx?.resume().then(() => this.refresh()); this.app.sfx.music(true); this.app.sfx.useMusic('menu'); this.refresh(); } },
+            h('b', null, '▶'), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? '📻 Surprise radio' : song ? `♪ ${song.name}` : '')))
+        : null,
+      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, h('span', null, on && musicPrefs.radio ? '📻 RADIO ON' : on ? 'SURPRISE SONG' : 'NOW PLAYING'), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
       h('button.mm-ic.nav', { title: 'Surprise me: a brand-new song (press again for another)', onclick: roll }, '🎲'),
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library' }, '✓')

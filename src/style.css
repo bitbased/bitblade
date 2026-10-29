@@ -531,6 +531,14 @@ body.hints-on .menu-foot { bottom: 56px; }
 .music-chip .mm-ic.focus { outline: 3px solid #fff !important; outline-offset: 3px !important; box-shadow: 0 0 0 7px rgba(60, 242, 255, 0.55), 0 0 18px rgba(60, 242, 255, 0.7) !important; transform: scale(1.12) !important; z-index: 1; }
 .music-chip .mm-ic:hover:not(.focus) { outline: 1px solid rgba(255, 255, 255, 0.7); outline-offset: 1px; }
 .music-chip .mm-now span { white-space: nowrap; }
+/* audio still locked by the browser: a pulsing tap-to-play */
+.music-chip .mm-play { display: flex; align-items: center; gap: 10px; background: linear-gradient(135deg, rgba(255, 92, 244, 0.25), rgba(60, 242, 255, 0.18)); border: 1px solid #ff5cf4; color: var(--text); padding: 5px 12px 5px 8px; cursor: pointer; animation: mmPulse 1.4s ease-in-out infinite; text-align: left; }
+.music-chip .mm-play b { width: 30px; height: 30px; display: grid; place-items: center; background: #ff5cf4; color: #05060a; font-size: 14px; border-radius: 50%; }
+.music-chip .mm-play span { display: flex; flex-direction: column; font-family: var(--font-h); }
+.music-chip .mm-play i { font-style: normal; font-size: 11px; letter-spacing: 0.14em; color: #fff; }
+.music-chip .mm-play em { font-style: normal; font-size: 11px; color: #ff5cf4; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.music-chip .mm-play.focus { outline: 3px solid #fff !important; outline-offset: 3px !important; }
+@keyframes mmPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 92, 244, 0.55); } 50% { box-shadow: 0 0 0 7px rgba(255, 92, 244, 0); } }
 body.hints-on .music-chip { bottom: 56px; }
 .music-chip.on-title, body.hints-on .music-chip.on-title { top: 16px; bottom: auto; right: 16px; }
 @media (max-width: 700px) { .music-chip { right: 12px; bottom: 10px; } .music-chip .mm-now b { max-width: 150px; } }
