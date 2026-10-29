@@ -10,6 +10,7 @@ import { setBackdropVisible, unpinBackdrop } from './backdrop';
 import { Input } from '../input/input';
 import { settings } from '../core/settings';
 import { clientRoom, hostRoom } from '../net/room';
+import { editorName, testRide } from './testRide';
 import { icon } from './icons';
 import { getRenderer } from '../game/render';
 import { lobbySession } from './lobby';
@@ -64,6 +65,7 @@ export class MainMenu extends Base {
   build() {
     const item = (label: string, sub: string, fn: () => void) => h('button.menu-item.nav', { onclick: () => { this.app.sfx.play('select'); fn(); } }, label, h('small', null, sub));
     const p = getPlatform();
+    testRide.from = null; // reaching the main menu ends a test ride: Back no longer returns to the editor
     const session = lobbySession();
     return h('div.menu-screen', null,
       h('div.menu-col', null,
@@ -168,6 +170,7 @@ export class Results extends Base {
           h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true, next: true, autostart: true }) }, cfg.arena.track ? 'Next Track ▶' : 'Next Arena ▶'),
           h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? 'Room Lobby — change track / players' : 'Lobby — change track / players'),
           online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
+          testRide.from && !online ? h('button.btn.nav', { onclick: () => this.app.go(testRide.from!) }, `◀ Back to ${editorName()}`) : null,
           h('button.btn.nav', { onclick: () => { if (online === 'host') { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); } this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
     );
   }

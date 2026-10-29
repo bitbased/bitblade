@@ -70,6 +70,8 @@ export interface TopState {
   fx: TopFx;
   flag: number; crystals: number; score: number; kos: number; dmg: number; lives: number;
   respawnT: number; lastHit: number; lastHitT: number;
+  /** seconds of respawn grace left: obstacles pass through you (no knock-off-the-edge loops) */
+  graceT?: number;
   launch: number; launchLocked: boolean;
   drone?: boolean; scale: number;
   /** quest: index (into the arena's markers) of the last checkpoint touched, -1 = start; drones: their hive marker */

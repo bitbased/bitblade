@@ -7,8 +7,9 @@
 // The 3D VIEW tab builds the full arena (only then — editing never waits on 3D).
 import * as THREE from 'three';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { getRenderer } from '../game/render';
+import { buildRibbon, getRenderer } from '../game/render';
 import { COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { testRide } from './testRide';
 import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
 import { sampleTrack, type TrackSamples } from '../game/track';
 import { icon } from './icons';
@@ -86,7 +87,10 @@ class TrackStudio {
     sun.position.set(80, 160, 60);
     this.scene.add(sun);
     this.courses = loadTrackCourses();
-    this.cur = this.courses[0] ? clone(this.courses[0]) : this.fromCoaster();
+    // back from a test ride: reopen the track you were riding
+    const back = testRide.from === 'tracks' ? this.courses.find((c) => c.id === testRide.id) : undefined;
+    testRide.from = null;
+    this.cur = back ? clone(back) : this.courses[0] ? clone(this.courses[0]) : this.fromCoaster();
     this.root = this.build();
     app.root.append(this.root);
     this.nav = new MenuNav(app, this.el.panel, () => this.escape());
@@ -479,6 +483,25 @@ class TrackStudio {
     this.app.toast(closed ? 'Loop closed: the last point now joins back to the start (race track)' : 'Loop opened: start → goal (adventure)');
   }
 
+  /** bank each point by the curvature there: tighter corners lean more, outside edge up */
+  autoTilt() {
+    this.snapshot();
+    const S = this.S, ni = this.ranges.map((r) => r.i0);
+    if (!this.cur.closed) ni.push(S.n - 1);
+    this.cur.nodes.forEach((n, k) => {
+      const i = ni[k] ?? 0;
+      // average curvature around the point; + curvature = turning left → raise the right edge (negative tilt)
+      let cv = 0, m = 0;
+      for (let d = -12; d <= 12; d++) { const j = this.cur.closed ? (i + d + S.n) % S.n : Math.max(0, Math.min(S.n - 1, i + d)); cv += S.curv[j]; m++; }
+      cv /= m;
+      const b = Math.max(-0.4, Math.min(0.4, -cv * 9));
+      n.bank = Math.abs(b) < 0.04 ? undefined : +b.toFixed(2);
+    });
+    this.changed(true);
+    this.renderPanel();
+    this.app.toast('Corners tilted — tweak any point or stretch’s tilt in the panel');
+  }
+
   reverse() {
     this.snapshot();
     this.cur.nodes.reverse();
@@ -539,7 +562,15 @@ class TrackStudio {
           num('GAP LENGTH m', sp.gap ?? 0, 0, 18, 0.5, (v) => { sp.gap = v || undefined; }, '0 = no gap'),
           num('RAMP HEIGHT m', sp.lip ?? 0, 0, 3, 0.1, (v) => { sp.lip = v || undefined; }, 'Launch ramp right before the gap (or a kicker with no gap)')),
         h('div' + (sp.gap ? (jumpNote.startsWith('✓') ? '.ts-ok' : '.ts-bad') : '.ts-dim'), null, jumpNote),
-        h('div.ts-sub', null, 'ON THIS STRETCH'),
+        h('div.ts-sub', null, 'ROAD SHAPE'),
+        h('div.ts-seg2', null,
+          h('button.ts-segbtn.nav' + (!sp.pipe ? '.on' : ''), { onclick: () => { this.snapshot(); sp.pipe = undefined; this.changed(true); this.renderPanel(); } }, 'FLAT ROAD'),
+          h('button.ts-segbtn.nav' + (sp.pipe ? '.on' : ''), { onclick: () => { this.snapshot(); sp.pipe = true; this.changed(true); this.renderPanel(); }, title: 'U-shaped half-pipe: ride up the walls' }, 'HALF-PIPE')),
+        h('div.ts-sub', null, 'TILT (+ raises the left edge)'),
+        h('div.ts-grid', null,
+          num(`AT START (point ${s.i + 1})`, c.nodes[s.i].bank ?? 0, -0.5, 0.5, 0.05, (v) => { c.nodes[s.i].bank = v; }),
+          num(`AT END (point ${to})`, c.nodes[(s.i + 1) % c.nodes.length].bank ?? 0, -0.5, 0.5, 0.05, (v) => { c.nodes[(s.i + 1) % c.nodes.length].bank = v; })),
+        h('div.ts-sub', null, 'EDGES & EXTRAS'),
         h('div.ts-row', null,
           tog('GUARD RAILS', !!sp.rails, (v) => { sp.rails = v || undefined; }, 'Low walls along both edges'),
           tog('BOOST PAD', !!sp.boost, (v) => { sp.boost = v || undefined; }, 'Speed strip at the start of the stretch'),
@@ -577,6 +608,9 @@ class TrackStudio {
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 1.1, z * 1.1]), title: 'Grow the whole track 10%' }, 'Scale +'),
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => { const a = Math.PI / 12; return [x * Math.cos(a) - z * Math.sin(a), x * Math.sin(a) + z * Math.cos(a)]; }), title: 'Rotate 15°' }, 'Rotate ⟳'),
         h('button.btn.small.nav', { onclick: () => this.reverse(), title: 'Drive it the other way' }, 'Reverse'),
+        h('button.btn.small.nav', { onclick: () => this.autoTilt(), title: 'Bank every corner by how tight it is (outside edge up)' }, 'Auto-tilt corners'),
+        h('button.btn.small.nav', { onclick: () => { this.snapshot(); for (const n of c.nodes) delete n.bank; this.changed(true); this.renderPanel(); } }, 'Clear tilts'),
+        h('button.btn.small.nav', { onclick: () => { this.snapshot(); const all = c.spans.every((x) => x.rails); for (const x of c.spans) x.rails = all ? undefined : true; this.changed(true); this.renderPanel(); } }, c.spans.every((x) => x.rails) ? 'Remove all rails' : 'Rails everywhere'),
         h('button.btn.small.nav', { onclick: () => this.fit(), title: 'Fit the track in view' }, 'Fit view')),
       h('div.ts-sub', null, 'CHECKS'),
       ...(this.issues.length ? this.issues.map((i, k) => h('div.ts-bad.ts-issue', { title: 'Show me', onclick: () => this.goToSpot(k) }, '⚠ ' + i, h('span.ts-goto', null, ' → show'))) : [h('div.ts-ok', null, '✓ No overlaps · slopes and bends OK')]),
@@ -622,6 +656,7 @@ class TrackStudio {
   testRide() {
     this.persist();
     if (this.issues.some((x) => x.includes('passes over itself'))) { this.app.toast('Fix the overlap first: a track can’t pass over itself'); return; }
+    testRide.from = 'tracks'; testRide.id = this.cur.id;
     this.app.go('lobby', { mode: this.cur.closed ? 'race' : 'quest', arenaId: this.cur.id });
   }
 
@@ -717,45 +752,18 @@ class TrackStudio {
     const track = comp.arena.track!;
     const inR = (f: number, rs: [number, number][]) => rs.some(([a, b]) => f >= a && f <= b);
     const theme = this.cur.theme;
-    // road surface + side skirts, broken at gaps; the selected stretch glows
+    // the road exactly as the game draws it (pipes, ramps, tilt, rails, side walls)
+    const ribbon = buildRibbon(track, sampleTrack(track), theme);
+    ribbon.name = 'road';
+    this.road.add(ribbon);
+    // the selected stretch: a glowing band over it
     const sel = this.sel.kind === 'span' ? this.ranges[this.sel.i] : null;
-    const pos: number[] = [], col: number[] = [], idx: number[] = [];
-    const cFloor = new THREE.Color(theme.floor).lerp(new THREE.Color(theme.glow), 0.25), cEdge = new THREE.Color(theme.glow), cSel = new THREE.Color('#ffd23a'), cSkirt = new THREE.Color(theme.wall).multiplyScalar(0.6);
-    const last = this.cur.closed ? S.n : S.n - 1;
-    for (let i = 0; i <= last; i++) {
-      const j = i % S.n;
-      const hw = S.w[j] / 2;
-      // tilt: curvature banking + explicit tilt, as in the game
-      const bankK = Math.max(-1.2, Math.min(1.2, -S.curv[j] * hw * 6)) * 0.5 / Math.max(0.01, hw);
-      const yL = S.y[j] + (S.bank[j] + bankK) * hw, yR = S.y[j] - (S.bank[j] + bankK) * hw;
-      const lx = S.x[j] - S.tz[j] * hw, lz = S.z[j] + S.tx[j] * hw, rx = S.x[j] + S.tz[j] * hw, rz = S.z[j] - S.tx[j] * hw;
-      const inSel = !!sel && j >= sel.i0 && j <= (sel.i1 || S.n - 1);
-      const c = inSel ? cSel : cFloor;
-      pos.push(lx, yL, lz, rx, yR, rz, lx, yL - 2, lz, rx, yR - 2, rz);
-      for (const cc of [c, c, cSkirt, cSkirt]) col.push(cc.r, cc.g, cc.b);
-      if (i > 0) {
-        const f = S.cum[(i - 1) % S.n] / S.total;
-        if (inR(f, track.gaps)) continue;
-        const a = (i - 1) * 4, b = i * 4;
-        idx.push(a, b, a + 1, a + 1, b, b + 1); // top
-        idx.push(a + 2, b + 2, a, a, b + 2, b); // left skirt
-        idx.push(a + 1, b + 1, a + 3, a + 3, b + 1, b + 3); // right skirt
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    const roadMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
-    roadMesh.name = 'road';
-    this.road.add(roadMesh);
-    // glowing edges (rails brighter)
-    for (const side of [1, -1]) {
+    if (sel) {
       const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= last; i += 2) { const j = i % S.n, hw = S.w[j] / 2; pts.push(new THREE.Vector3(S.x[j] - S.tz[j] * hw * side, S.y[j] + S.bank[j] * hw * side + (inR(S.cum[j] / S.total, track.rails) ? 1.1 : 0.06), S.z[j] + S.tx[j] * hw * side)); }
-      this.road.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: cEdge })));
+      for (let i = sel.i0; i <= Math.min(S.n - 1, sel.i1 || S.n - 1); i += 2) pts.push(new THREE.Vector3(S.x[i], S.y[i] + 1.2, S.z[i]));
+      if (pts.length > 1) this.road.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), Math.max(4, pts.length), 0.5, 6), new THREE.MeshBasicMaterial({ color: '#ffd23a', toneMapped: false, transparent: true, opacity: 0.9, depthTest: false })));
     }
+    void inR;
     // obstacles & things as simple coloured shapes
     for (const m of comp.arena.markers) {
       const a = A[m.kind as SegAttachKind];

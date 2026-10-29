@@ -151,9 +151,14 @@ export class Sim {
   }
 
   placeTop(t: TopState, x: number, z: number, lift: number) {
+    const T = this.terrain.track;
+    if (T) t.prog = globalNearest(T, x, z);
+    // on overlapping tracks, land on the road this point belongs to (not the bridge above it)
+    const prev = this.terrain.hintY;
+    if (T && this.terrain.layered) this.terrain.hintY = T.y[t.prog] + 1.5;
     t.x = x; t.z = z; t.y = this.ground(x, z) + lift;
+    this.terrain.hintY = prev;
     t.vx = t.vy = t.vz = 0;
-    if (this.terrain.track) t.prog = globalNearest(this.terrain.track, x, z);
   }
 
   endT = -1;
@@ -250,11 +255,12 @@ export class Sim {
       // AI
       s.tops.forEach((t, i) => {
         const a = this.ai[i];
-        if (a && t.alive) this.setControl(i, aiControl(this, t, a, dt));
+        if (a && t.alive) { this.terrain.hintY = t.y + 0.5; this.setControl(i, aiControl(this, t, a, dt)); this.terrain.hintY = undefined; }
       });
     }
     // tops
-    s.tops.forEach((t, i) => this.updateTop(t, i, dt));
+    s.tops.forEach((t, i) => { this.terrain.hintY = t.y + 0.5; this.updateTop(t, i, dt); });
+    this.terrain.hintY = undefined;
     this.collideTops(dt);
     this.hazards(dt);
     this.updateObjects(dt);
@@ -311,6 +317,7 @@ export class Sim {
       if (t.roll <= 0) t.roll = 0;
     }
 
+    if (t.graceT) t.graceT = Math.max(0, t.graceT - dt);
     if (!t.alive) {
       t.outT += dt;
       if (t.out === 'over' || t.out === 'xtreme') this.integrate(t, i, dt, false);
@@ -587,7 +594,7 @@ export class Sim {
       if (!hp) return;
       const baseY = this.ground(m.x, m.z);
       for (const top of this.s.tops) {
-        if (!top.alive) continue;
+        if (!top.alive || top.graceT) continue; // just respawned: it passes through you
         if (top.y > baseY + 1.1) continue; // jumped over it
         const r = this.radius(top);
         let px: number, pz: number, hvx = hp.vx, hvz = hp.vz;
@@ -677,12 +684,13 @@ export class Sim {
 
   respawn(t: TopState, i: number) {
     t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1; t.off = 0;
+    t.graceT = 1.6;
     const TS = this.terrain.track;
     if (TS) {
-      // back on the ribbon a little behind where we fell off, facing forward
-      // respawn at the first solid ground at/after where we fell (so gaps don't become fall loops)
+      // back on the ribbon where we fell off, facing forward: the first solid ground at/after it that's clear of
+      // obstacles (so gaps and sweeping arms don't become fall loops)
       let k = t.prog;
-      for (let n = 0; n < 80 && !this.terrain.isSafe(TS.x[k], TS.z[k], 1.5); n++) k = (k + 2) % TS.n;
+      for (let n = 0; n < 120 && !(this.terrain.isSafe(TS.x[k], TS.z[k], 1.5) && this.clearOfHazards(TS.x[k], TS.z[k], 1.2)); n++) k = TS.open ? Math.min(TS.n - 1, k + 2) : (k + 2) % TS.n;
       const keep = t.prog;
       this.placeTop(t, TS.x[k], TS.z[k], 1.5);
       t.prog = k < keep && keep - k < TS.n / 2 ? keep : k;
@@ -692,12 +700,36 @@ export class Sim {
     if (this.cfg.mode === 'quest') {
       // back at your last checkpoint (or the start), full spin
       const cp = (t.qcp ?? -1) >= 0 ? this.markers[t.qcp!] : null;
-      const sp = cp ? { x: cp.x, z: cp.z } : this.spawnFor(t, i);
+      const sp = this.clearSpotNear(cp ? { x: cp.x, z: cp.z } : this.spawnFor(t, i));
       this.placeTop(t, sp.x, sp.z, 2.5);
       return;
     }
-    const sp = this.cfg.mode === 'gauntlet' ? this.spawnFor(t, i) : this.terrain.randomSafePoint(this.rnd, { ...this.spawnFor(t, i), r: 3 });
+    let sp = this.cfg.mode === 'gauntlet' ? this.spawnFor(t, i) : this.terrain.randomSafePoint(this.rnd, { ...this.spawnFor(t, i), r: 3 });
+    for (let n = 0; n < 12 && this.cfg.mode !== 'gauntlet' && !this.clearOfHazards(sp.x, sp.z, 1.2); n++) sp = this.terrain.randomSafePoint(this.rnd, { ...this.spawnFor(t, i), r: 3 + n });
+    if (this.cfg.mode === 'gauntlet') sp = this.clearSpotNear(sp);
     this.placeTop(t, sp.x, sp.z, 3);
+  }
+
+  /** is (x,z) outside every obstacle's reach (the whole sweep of an arm, a saw's whole orbit), with `margin` to spare? */
+  clearOfHazards(x: number, z: number, margin: number) {
+    for (const m of this.markers) {
+      const d = Math.hypot(x - m.x, z - m.z);
+      if (m.kind === 'arm' && d < (m.len ?? 4) + 0.5 + margin) return false;
+      if (m.kind === 'saw' && Math.abs(d - (m.r ?? 5)) < 0.9 + margin) return false;
+      if ((m.kind === 'bumper' || m.kind === 'pillar') && d < (m.r ?? 0.8) + 0.6 + margin) return false;
+    }
+    return true;
+  }
+
+  /** the nearest safe, obstacle-free spot to p (rings outward); p itself if nothing better */
+  clearSpotNear(p: { x: number; z: number }) {
+    if (this.terrain.isSafe(p.x, p.z, 1.2) && this.clearOfHazards(p.x, p.z, 1.2)) return p;
+    for (let r = 1.5; r <= 12; r += 1.5)
+      for (let a = 0; a < 16; a++) {
+        const x = p.x + Math.cos((a / 16) * Math.PI * 2) * r, z = p.z + Math.sin((a / 16) * Math.PI * 2) * r;
+        if (this.terrain.isSafe(x, z, 1.2) && this.clearOfHazards(x, z, 1.2)) return { x, z };
+      }
+    return p;
   }
 
   // ---------------- items & specials ----------------

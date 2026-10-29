@@ -104,7 +104,7 @@ export function compileCourse(c: SegCourse): CompiledCourse {
   const at = (d: number) => Math.max(0, Math.min(S.n - 1, Math.round((F(d) * S.n))));
   const half = c.width / 2;
   const markers: Marker[] = [];
-  const pos = (i: number, lat = 0) => ({ x: S.x[i] - S.tz[i] * lat * half, z: S.z[i] + S.tx[i] * lat * half });
+  const pos = (i: number, lat = 0) => ({ x: S.x[i] - S.tz[i] * lat * half, z: S.z[i] + S.tx[i] * lat * half, y: S.y[i] });
   // boost strips and item rows, like race tracks
   for (const f of boosts) { const i = at(f * total); markers.push({ kind: 'boost', ...pos(i), rot: Math.atan2(S.tx[i], S.tz[i]), r: c.width * 0.36 }); }
   for (const f of items) { const i = at(f * total); for (const o of [-0.6, 0, 0.6]) markers.push({ kind: 'item', ...pos(i, o) }); }
@@ -189,7 +189,7 @@ export const SEG_MARKER_KINDS: MarkerKind[] = ['arm', 'saw', 'bumper', 'pillar',
  * boost, items and obstacles. Closed = race loop (last point joins the first); open = adventure (start to goal).
  */
 export interface TrackNode { x: number; z: number; y: number; bank?: number; /** road width here (narrowing / widening); defaults to the course width */ w?: number }
-export interface Span { gap?: number; lip?: number; rails?: boolean; boost?: boolean; items?: boolean; att?: SegAttach[] }
+export interface Span { gap?: number; lip?: number; rails?: boolean; boost?: boolean; items?: boolean; /** half-pipe road shape on this stretch */ pipe?: boolean; att?: SegAttach[] }
 export interface NodeCourse {
   id: string; name: string; desc: string; theme: Theme; width: number;
   closed: boolean;
@@ -243,17 +243,19 @@ export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse 
     const sp = c.spans[k] ?? {};
     const len = end - start;
     if (sp.rails) track.rails.push([F(start), F(end)]);
+    if (sp.pipe) (track.pipes ??= []).push([F(start), F(end)]);
     if (sp.boost) track.boosts.push(F(start + Math.min(4, len * 0.2)));
     if (sp.items) track.items.push(F((start + end) / 2));
     const gap = Math.min(sp.gap ?? 0, len * 0.8);
     if (gap > 0) track.gaps.push([F(end - gap), F(end)]);
     if ((sp.lip ?? 0) > 0) track.ramps!.push({ f: F(end - gap), len: Math.min(12, Math.max(5, (len - gap) * 0.6)), h: sp.lip! });
   });
+  if (track.pipes) track.depth = 3;
   const S = sampleTrack(track);
   const half = c.width / 2;
   const at = (d: number) => Math.max(0, Math.min(S.n - 1, Math.round(F(d) * S.n)));
   // positions across the road use the local width, so obstacles stay on narrow sections
-  const pos = (i: number, lat = 0) => ({ x: S.x[i] - S.tz[i] * lat * (S.w[i] / 2), z: S.z[i] + S.tx[i] * lat * (S.w[i] / 2) });
+  const pos = (i: number, lat = 0) => ({ x: S.x[i] - S.tz[i] * lat * (S.w[i] / 2), z: S.z[i] + S.tx[i] * lat * (S.w[i] / 2), y: S.y[i] });
   const markers: Marker[] = [];
   for (const f of track.boosts) { const i = at(f * total); markers.push({ kind: 'boost', ...pos(i), rot: Math.atan2(S.tx[i], S.tz[i]), r: S.w[i] * 0.36 }); }
   for (const f of track.items) { const i = at(f * total); for (const o of [-0.6, 0, 0.6]) markers.push({ kind: 'item', ...pos(i, o) }); }
@@ -287,12 +289,14 @@ export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse 
     let lastJ = -1e9;
     for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
       if (c.closed && S.n - (j - i) < 40) continue;
-      if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < c.width + 1.5 && Math.abs(S.y[i] - S.y[j]) > 0.4) {
+      const dy = Math.abs(S.y[i] - S.y[j]);
+      // level crossings are fine; so are bridges with headroom (a blade + road needs ~3.5m)
+      if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < c.width + 1.5 && dy > 0.4 && dy < 3.5) {
         if (Math.abs(S.cum[j] - lastJ) < 30) continue;
         lastJ = S.cum[j];
-        const msg = `overlaps itself at ${Math.round(S.cum[i])}m / ${Math.round(S.cum[j])}m (heights ${S.y[i].toFixed(1)}m vs ${S.y[j].toFixed(1)}m)`;
+        const msg = `crossing at ${Math.round(S.cum[i])}m / ${Math.round(S.cum[j])}m is ${dy.toFixed(1)}m apart: make it level, or at least 3.5m apart for a bridge`;
         if (issues.length < 6) issues.push(msg);
-        spots.push({ d: S.cum[i], msg: 'overlap' }, { d: S.cum[j], msg: 'overlap' });
+        spots.push({ d: S.cum[i], msg: 'crossing' }, { d: S.cum[j], msg: 'crossing' });
         i += 20;
         break;
       }

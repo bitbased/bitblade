@@ -1,4 +1,4 @@
-import { fillTrackHeights, sampleTrack, trackBounds, type TrackDef, type TrackSamples } from './track';
+import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
@@ -30,7 +30,7 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
 export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive';
-export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number }
+export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
 
@@ -58,6 +58,14 @@ export class Terrain {
   def: ArenaDef;
   size: number; // rough span for camera
   track: TrackSamples | null = null;
+  /**
+   * Tracks that pass over themselves (bridges / overpasses) can't live in one heightfield: height() then asks
+   * "which road surface is this on?" using `hintY` (the height of whatever is asking — set by the sim per blade).
+   */
+  layered = false;
+  hintY: number | undefined = undefined;
+  private grid: SampleGrid | null = null;
+  private sctx: SurfaceCtx | null = null;
   constructor(def: ArenaDef) {
     this.def = def;
     let extentX: number, extentZ: number;
@@ -83,7 +91,17 @@ export class Terrain {
     this.nz = Math.ceil((extentZ * 2) / this.cell) + 1;
     this.size = Math.max(extentX, extentZ);
     this.h = new Float32Array(this.nx * this.nz);
-    if (this.track) { fillTrackHeights(def.track!, this.track, this.minX, this.minZ, this.cell, this.nx, this.nz, this.h); return; }
+    if (this.track) {
+      // tracks answer height() straight from the road curve, looking only at the stretches near the point asked
+      // about (no whole-area heightfield to build). Overlapping stretches (bridges) are told apart by hintY.
+      fillTrackHeights(def.track!, this.track, this.minX, this.minZ, this.cell, this.nx, this.nz, this.h);
+      if (trackOverlaps(this.track)) {
+        this.layered = true;
+        this.grid = new SampleGrid(this.track, this.minX, this.minZ, this.minX + this.nx * this.cell, this.minZ + this.nz * this.cell);
+        this.sctx = surfaceCtx(def.track!, this.track);
+      }
+      return;
+    }
     for (let j = 0; j < this.nz; j++)
       for (let i = 0; i < this.nx; i++) {
         const x = this.minX + i * this.cell, z = this.minZ + j * this.cell;
@@ -97,13 +115,31 @@ export class Terrain {
   }
 
   /** Bilinear height; returns VOID if any corner is void. */
-  height(x: number, z: number): number {
+  height(x: number, z: number, hint = this.hintY): number {
+    if (this.layered) return this.layeredHeight(x, z, hint);
     const fx = (x - this.minX) / this.cell, fz = (z - this.minZ) / this.cell;
     const i = Math.floor(fx), j = Math.floor(fz);
     const tx = fx - i, tz = fz - j;
     const a = this.raw(i, j), b = this.raw(i + 1, j), c = this.raw(i, j + 1), d = this.raw(i + 1, j + 1);
     if (a <= VOID || b <= VOID || c <= VOID || d <= VOID) return VOID;
     return a * (1 - tx) * (1 - tz) + b * tx * (1 - tz) + c * (1 - tx) * tz + d * tx * tz;
+  }
+
+  /**
+   * Overlapping roads: every surface under (x,z), then the one you're on — the highest surface not more than
+   * ~1.2m above `hint` (so under a bridge you drive the lower road; on the bridge you drive the bridge).
+   * With no hint, the top surface.
+   */
+  layeredHeight(x: number, z: number, hint?: number) {
+    const def = this.def.track!, S = this.track!;
+    let best = VOID, top = VOID;
+    for (const i of this.grid!.nearestPerStretch(x, z, S.width / 2 + 1.5)) {
+      const h = trackSurface(def, S, i, x, z, this.sctx!);
+      if (h <= VOID) continue;
+      if (h > top) top = h;
+      if (hint !== undefined && h <= hint + 1.2 && h > best) best = h;
+    }
+    return hint === undefined ? top : best;
   }
 
   /** Surface gradient (dh/dx, dh/dz). */

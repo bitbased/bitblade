@@ -1,5 +1,6 @@
 // Three.js scene for a match: heightfield arena, blades, hazards, objects, trails, trajectories, particles, bloom.
 import * as THREE from 'three';
+import { surfaceCtx, trackSurface, type SurfaceCtx } from './track';
 import { questRoute } from './ai';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -118,7 +119,120 @@ function questionTexture() {
 }
 
 // ---------------------------------------------------------------- arena mesh
+
+/**
+ * Tracks are drawn straight from the road curve (not from a heightfield grid): smooth slopes and banking, clean
+ * curved edges and side walls, and roads that pass over themselves (bridges) render both levels.
+ */
+function buildTrackRibbon(terrain: Terrain, theme: Theme): THREE.Group { return buildRibbon(terrain.def.track!, terrain.track!, theme); }
+
+/** the track surface (road, rails, pipe walls, side walls) built from the curve alone (Track Studio uses it live) */
+export function buildRibbon(def: import('./track').TrackDef, S: import('./track').TrackSamples, theme: Theme): THREE.Group {
+  const group = new THREE.Group();
+  const ctx = surfaceCtx(def, S);
+  const pipe = false;
+  // across-the-road offsets as fractions of the half width; >1 reaches the rails and pipe rims
+  const fr = [-1.12, -1.1, -1.06, -1, -0.97, -0.9, -0.75, -0.55, -0.3, 0, 0.3, 0.55, 0.75, 0.9, 0.97, 1, 1.06, 1.1, 1.12];
+  const C = fr.length;
+  const rows = S.open ? S.n : S.n + 1;
+  const pos = new Float32Array(rows * C * 3), col = new Float32Array(rows * C * 3), uv = new Float32Array(rows * C * 2), glow = new Float32Array(rows * C);
+  const ok = new Uint8Array(rows * C);
+  const floor = new THREE.Color(theme.floor), wall = new THREE.Color(theme.wall);
+  for (let r = 0; r < rows; r++) {
+    const i = r % S.n;
+    const half = S.w[i] / 2;
+    for (let c = 0; c < C; c++) {
+      // the rail / rim columns sit just past the edge (a fixed metre-ish, not proportional)
+      const f = fr[c];
+      const lat = Math.abs(f) <= 1 ? f * half : Math.sign(f) * (half + (Math.abs(f) - 1) * (pipe ? 5.8 : 6.5)); // 1.1 → +0.65m (pipe rim), 1.12 → +0.78m (rail top)
+      const x = S.x[i] - S.tz[i] * lat, z = S.z[i] + S.tx[i] * lat;
+      const h = trackSurface(def, S, i, x, z, ctx);
+      const k = r * C + c;
+      pos[k * 3] = x; pos[k * 3 + 1] = h <= VOID ? S.y[i] : h; pos[k * 3 + 2] = z;
+      ok[k] = h > VOID ? 1 : 0;
+      const edge = Math.abs(f) >= 0.97;
+      const cc = edge ? wall : floor;
+      col[k * 3] = cc.r; col[k * 3 + 1] = cc.g; col[k * 3 + 2] = cc.b;
+      uv[k * 2] = x / 6; uv[k * 2 + 1] = z / 6;
+      glow[k] = Math.abs(f) >= 1.05 ? 1 : Math.abs(f) >= 0.99 ? 0.85 : 0;
+    }
+  }
+  const idx: number[] = [];
+  for (let r = 0; r + 1 < rows; r++) for (let c = 0; c + 1 < C; c++) {
+    const a = r * C + c, b = a + 1, d = a + C, e = d + 1;
+    if (ok[a] && ok[b] && ok[d] && ok[e]) idx.push(a, d, b, b, d, e);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('glow', new THREE.BufferAttribute(glow, 1));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: gridTexture(theme), roughness: 0.62, metalness: 0.15, side: THREE.DoubleSide });
+  const glowColor = new THREE.Color(theme.glow).multiplyScalar(1.6);
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.glowColor = { value: glowColor };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float glow;\nvarying float vGlow;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = glow;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vGlow;\nuniform vec3 glowColor;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += glowColor * smoothstep(0.5, 1.0, vGlow);');
+  };
+  const road = new THREE.Mesh(geo, mat);
+  road.receiveShadow = true;
+  group.add(road);
+  // side walls: from each row's outermost solid edge straight down, glowing at the lip, smooth along the curve
+  const sp: number[] = [], sg: number[] = [], si: number[] = [];
+  const edgeOf = (r: number, side: 1 | -1) => {
+    for (let c = side < 0 ? 0 : C - 1; side < 0 ? c < C : c >= 0; c -= side) if (ok[r * C + c]) return r * C + c;
+    return -1;
+  };
+  for (const side of [-1, 1] as const) {
+    let prev = -1;
+    for (let r = 0; r < rows; r++) {
+      const k = edgeOf(r, side);
+      if (k < 0) { prev = -1; continue; }
+      const base = sp.length / 3;
+      sp.push(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2], pos[k * 3], pos[k * 3 + 1] - 3.2, pos[k * 3 + 2]);
+      sg.push(1, 0);
+      if (prev >= 0) si.push(prev, base, prev + 1, prev + 1, base, base + 1);
+      prev = base;
+    }
+  }
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  wg.setAttribute('glow', new THREE.Float32BufferAttribute(sg, 1));
+  wg.setIndex(si);
+  wg.computeVertexNormals();
+  const wmat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    uniforms: { c0: { value: new THREE.Color(theme.wall).multiplyScalar(0.55) }, c1: { value: new THREE.Color(theme.glow) } },
+    vertexShader: 'attribute float glow; varying float g; void main(){ g = glow; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'uniform vec3 c0; uniform vec3 c1; varying float g; void main(){ gl_FragColor = vec4(mix(c0, c1 * 1.3, pow(g, 6.0)), 1.0); }',
+  });
+  group.add(new THREE.Mesh(wg, wmat));
+  // abyss + grid far below, sized to the track
+  const b = trackBoundsOf(S);
+  const span = Math.max(400, (b.x1 - b.x0) * 1.6, (b.z1 - b.z0) * 1.6);
+  let lo = Infinity; for (let i = 0; i < S.n; i++) lo = Math.min(lo, S.y[i]);
+  const abyss = new THREE.Mesh(new THREE.PlaneGeometry(span, span), new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.sky2).multiplyScalar(0.35) }));
+  abyss.rotation.x = -Math.PI / 2;
+  abyss.position.set((b.x0 + b.x1) / 2, lo - 10, (b.z0 + b.z1) / 2);
+  group.add(abyss);
+  const grid = new THREE.GridHelper(span, Math.round(span / 2), new THREE.Color(theme.grid), new THREE.Color(theme.grid));
+  (grid.material as THREE.Material).transparent = true;
+  (grid.material as THREE.Material).opacity = 0.12;
+  grid.position.set((b.x0 + b.x1) / 2, lo - 9.9, (b.z0 + b.z1) / 2);
+  group.add(grid);
+  return group;
+}
+
+function trackBoundsOf(S: { n: number; x: Float32Array; z: Float32Array }) {
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < S.n; i++) { x0 = Math.min(x0, S.x[i]); x1 = Math.max(x1, S.x[i]); z0 = Math.min(z0, S.z[i]); z1 = Math.max(z1, S.z[i]); }
+  return { x0, x1, z0, z1 };
+}
+
 export function buildArenaMesh(terrain: Terrain, theme: Theme): THREE.Group {
+  if (terrain.track) return buildTrackRibbon(terrain, theme);
   const group = new THREE.Group();
   const { nx, nz, cell, minX, minZ } = terrain;
   const N = nx * nz;
@@ -389,13 +503,14 @@ export class GameView {
   focus: number[] = []; // local player ids the camera should follow (race)
   camFwd = { x: 0, z: -1 }; // camera forward on the ground plane (controls are camera-relative)
   chaseYaw: number | null = null;
+  chaseSt: { sp?: number; back?: number } = {};
   /** screen fractions covered by HUD at the top / bottom — the arena camera keeps every blade between them */
   safe = { top: 0, bottom: 0 };
   private fitCam = new THREE.PerspectiveCamera();
   private fitDist = 0;
   private fitV = new THREE.Vector3();
   /** split-screen: one chase camera per local racer */
-  splits: { id: number; cam: THREE.PerspectiveCamera; pos: THREE.Vector3; tgt: THREE.Vector3; yaw: number | null; fwd: { x: number; z: number } }[] = [];
+  splits: { id: number; cam: THREE.PerspectiveCamera; pos: THREE.Vector3; tgt: THREE.Vector3; yaw: number | null; cam3?: { sp?: number; back?: number }; fwd: { x: number; z: number } }[] = [];
 
   enableSplit(ids: number[]) {
     this.splits = ids.slice(0, 4).map((id) => ({ id, cam: new THREE.PerspectiveCamera(62, 1, 0.1, 800), pos: this.camPos.clone(), tgt: this.camTarget.clone(), yaw: null, fwd: { x: 0, z: -1 } }));
@@ -451,6 +566,7 @@ export class GameView {
     this.composer.setSize(innerWidth, innerHeight);
 
     this.buildMarkers();
+    if (import.meta.env.DEV) (window as any).__r = this; // for the headless visual checks
     const T = this.terrain.track;
     if (T) {
       // checkered start/finish line + gantry
@@ -460,17 +576,12 @@ export class GameView {
       for (let i = 0; i < 16; i++) for (let j = 0; j < 2; j++) { c.fillStyle = (i + j) % 2 ? '#fff' : '#111'; c.fillRect(i * 16, j * 16, 16, 16); }
       const tex = new THREE.CanvasTexture(cv);
       tex.colorSpace = THREE.SRGBColorSpace;
-      const y0 = this.terrain.height(T.x[0], T.z[0]);
-      const line = new THREE.Mesh(new THREE.PlaneGeometry(T.width, 1.4), new THREE.MeshBasicMaterial({ map: tex }));
-      line.rotation.order = 'YXZ';
-      line.rotation.y = Math.atan2(T.tx[0], T.tz[0]);
-      line.rotation.x = -Math.PI / 2;
-      line.position.set(T.x[0], y0 + 0.05, T.z[0]);
-      this.scene.add(line);
-      const gate = new THREE.Mesh(new THREE.TorusGeometry(T.width * 0.62, 0.12, 8, 48, Math.PI), new THREE.MeshBasicMaterial({ color: theme.glow, toneMapped: false }));
-      gate.rotation.y = Math.atan2(T.tx[0], T.tz[0]);
-      gate.position.set(T.x[0], y0, T.z[0]);
-      this.scene.add(gate);
+      // the line is a strip of the road itself (flush through banking / crests, edge to edge); the arch stands on both edges
+      const i0 = T.open ? 2 : 0;
+      const lineGeo = this.roadDecal(i0, 1.4, (T.w[i0] / 2) * 0.995, 0.05);
+      if (lineGeo) scaleV(lineGeo, 11.2 / T.w[i0]);
+      if (lineGeo) this.scene.add(new THREE.Mesh(lineGeo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 })));
+      this.scene.add(this.roadArch(i0, Math.max(3.2, T.w[i0] * 0.55), 0.12, new THREE.MeshBasicMaterial({ color: theme.glow, toneMapped: false })));
       // direction chevrons every ~9m along the ribbon
       const chevMat = new THREE.MeshBasicMaterial({ map: chevronTexture(theme.glow, 2), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       for (let i = 10; i < T.n - 6; i += 18) {
@@ -560,6 +671,8 @@ export class GameView {
     const theme = this.cfg.arena.theme;
     const glow = new THREE.Color(theme.glow);
     this.cfg.arena.markers.forEach((m, mi) => {
+      // on bridge tracks a marker belongs to the road it was placed on (its y), not the top surface
+      this.terrain.hintY = m.y !== undefined ? m.y + 1.5 : undefined;
       const y = this.groundY(m.x, m.z);
       let obj: THREE.Object3D | null = null;
       switch (m.kind) {
@@ -657,22 +770,52 @@ export class GameView {
           gate.add(banner);
           gate.position.set(m.x, y, m.z);
           gate.rotation.y = m.rot ?? this.routeYaw(m.x, m.z, mi);
-          const pad = new THREE.Mesh(new THREE.RingGeometry(r * 0.85, r, 40, 2), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false }));
-          this.drape(pad, m.x, m.z, 1, 0.05);
+          const pad = new THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>(new THREE.RingGeometry(r * 0.85, r, 40, 2), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
+          const TT = this.terrain.track;
+          if (TT) {
+            // on a track the gate spans the road: posts stand on each edge, the banner runs edge to edge
+            const bi = this.trackIdx(m.x, m.z, m.y);
+            const span = (TT.w[bi] / 2) * 0.98;
+            const L = this.roadPoint(bi, span), R = this.roadPoint(bi, -span);
+            gate.clear();
+            const top = Math.max(L.y, R.y) + 2.6;
+            for (const P of [L, R]) {
+              const hgt = top - P.y + 0.1;
+              const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, hgt, 8), postMat);
+              post.position.set(P.x, P.y - 0.1 + hgt / 2, P.z);
+              gate.add(post);
+            }
+            banner.geometry.dispose();
+            banner.geometry = new THREE.BoxGeometry(span * 2 + 0.3, 0.32, 0.08);
+            banner.position.set((L.x + R.x) / 2, top, (L.z + R.z) / 2);
+            banner.rotation.y = Math.atan2(TT.tx[bi], TT.tz[bi]);
+            gate.add(banner);
+            gate.position.set(0, 0, 0);
+            gate.rotation.set(0, 0, 0);
+            const geo = this.roadDecal(bi, 0.8, span, 0.05);
+            if (geo) { pad.geometry.dispose(); pad.geometry = geo; }
+            else this.drape(pad, m.x, m.z, 1, 0.05);
+          } else this.drape(pad, m.x, m.z, 1, 0.05);
           this.scene.add(gate, pad);
           this.checkpoints.push({ mi, banner, pad });
           break;
         }
         case 'goal': {
           // a big checkered portal ring with a light column
-          const r = m.r ?? 2.6;
+          const TT = this.terrain.track;
+          const bi = TT ? this.trackIdx(m.x, m.z, m.y) : 0;
+          // on a track the finish spans the road: centred on it, as wide as it
+          const C = TT ? this.roadPoint(bi, 0) : new THREE.Vector3(m.x, y, m.z);
+          const r = TT ? (TT.w[bi] / 2) * 0.98 : m.r ?? 2.6;
           const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.22, 10, 48), new THREE.MeshBasicMaterial({ color: '#ffd23a', toneMapped: false }));
-          ring.position.set(m.x, y + r + 0.3, m.z);
-          ring.rotation.y = m.rot ?? this.routeYaw(m.x, m.z, mi);
-          const pad = new THREE.Mesh(new THREE.RingGeometry(0, r, 40, 3), new THREE.MeshBasicMaterial({ map: checkerTexture(), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false }));
-          this.drape(pad, m.x, m.z, 1, 0.05);
+          ring.position.set(C.x, C.y + r - (TT ? 0.15 : -0.3), C.z);
+          ring.rotation.y = TT ? Math.atan2(TT.tx[bi], TT.tz[bi]) : m.rot ?? this.routeYaw(m.x, m.z, mi);
+          const pad = new THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>(new THREE.RingGeometry(0, r, 40, 3), new THREE.MeshBasicMaterial({ map: checkerTexture(), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
+          const pg = TT ? this.roadDecal(bi, 2.2, r, 0.05) : null;
+          if (pg) { scaleV(pg, 2.2 / (2 * r)); pad.geometry.dispose(); pad.geometry = pg; (pad.material.map as THREE.Texture).wrapS = THREE.RepeatWrapping; }
+          else this.drape(pad, m.x, m.z, 1, 0.05);
           const beam = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 14, 32, 1, true), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-          beam.position.set(m.x, y + 7, m.z);
+          beam.position.set(C.x, C.y + 7, C.z);
           this.scene.add(ring, pad, beam);
           this.goalRing = ring;
           break;
@@ -716,6 +859,7 @@ export class GameView {
       if (obj && (m.kind === 'arm' || m.kind === 'saw')) { this.scene.add(obj); this.hazardMeshes.push({ m: obj, mi }); }
       else if (obj) this.scene.add(obj);
     });
+    this.terrain.hintY = undefined;
   }
 
   /** surface height for placing props (bowls go below 0; void counts as 0) */
@@ -845,6 +989,39 @@ export class GameView {
    * `halfW` either side, every vertex at the real ground height (+lift). UV v runs along travel, u left→right,
    * so chevron textures point the way you drive, through curves, banking and crests. (ox, oz) shifts it sideways.
    */
+  /** nearest centre-line sample; with y, in 3D (so a marker on a bridge picks the bridge, not the road under it) */
+  trackIdx(x: number, z: number, y?: number) {
+    const T = this.terrain.track!;
+    let bi = 0, bd = Infinity;
+    for (let k = 0; k < T.n; k++) {
+      const d = (T.x[k] - x) ** 2 + (T.z[k] - z) ** 2 + (y === undefined ? 0 : (T.y[k] - y) ** 2);
+      if (d < bd) { bd = d; bi = k; }
+    }
+    return bi;
+  }
+
+  /** the road surface `lat` metres left (+) / right (-) of centre-line sample i */
+  roadPoint(i: number, lat: number) {
+    const T = this.terrain.track!;
+    const x = T.x[i] - T.tz[i] * lat, z = T.z[i] + T.tx[i] * lat;
+    const h = trackSurface(this.terrain.def.track!, T, i, x, z, (this.sctx ??= surfaceCtx(this.terrain.def.track!, T)));
+    return new THREE.Vector3(x, h <= VOID ? T.y[i] : h, z);
+  }
+
+  /** an arch over the road at sample i: feet on both road edges (whatever the banking), `rise` metres high */
+  roadArch(i: number, rise: number, thick: number, mat: THREE.Material) {
+    const T = this.terrain.track!;
+    const span = (T.w[i] / 2) * 0.98;
+    const L = this.roadPoint(i, span), R = this.roadPoint(i, -span);
+    const pts: THREE.Vector3[] = [];
+    for (let s = 0; s <= 32; s++) {
+      const a = (Math.PI * s) / 32, c = Math.cos(a), lat = c * span, u = (1 - c) / 2;
+      pts.push(new THREE.Vector3(T.x[i] - T.tz[i] * lat, L.y + (R.y - L.y) * u + Math.sin(a) * rise - 0.1, T.z[i] + T.tx[i] * lat));
+    }
+    return new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 64, thick, 8, false), mat);
+  }
+
+  private sctx: SurfaceCtx | null = null;
   roadDecal(i: number, len: number, halfW: number, lift: number, ox = 0, oz = 0) {
     const T = this.terrain.track;
     if (!T) return null;
@@ -856,7 +1033,9 @@ export class GameView {
       for (const side of [-1, 1]) {
         // left of travel is (-tz, tx)
         const x = T.x[j] - T.tz[j] * halfW * side * -1 + ox, z = T.z[j] + T.tx[j] * halfW * side * -1 + oz;
-        const h = this.terrain.height(x, z);
+        // the exact road formula at this sample (what the road mesh is built from): flush right to the edges, and the
+        // right level of a bridge
+        const h = trackSurface(this.terrain.def.track!, T, j, x, z, (this.sctx ??= surfaceCtx(this.terrain.def.track!, T)));
         if (h <= VOID) return null; // overlaps a gap or the edge: no decal hanging in the air
         pos.push(x, h + lift, z);
         uv.push(side < 0 ? 1 : 0, s / k);
@@ -976,6 +1155,7 @@ export class GameView {
         dv.label.material.map = textSprite('DRONE', '#ff2244').material.map;
       }
       this.updateTop(t, this.tops[i], s, dt, launchPower);
+      this.terrain.hintY = undefined;
     });
     // hazards
     for (const h of this.hazardMeshes) {
@@ -1070,6 +1250,7 @@ export class GameView {
   }
 
   updateTop(t: TopState, v: TopView, s: GameState, dt: number, launchPower: number) {
+    this.terrain.hintY = t.y + 0.5; // rings, shadows and arcs use the surface under this blade
     const visible = !(t.out === 'burst' && v.burstDone);
     if (t.out !== 'burst' && v.burstDone) {
       // new round after a burst: rebuild model
@@ -1170,10 +1351,11 @@ export class GameView {
       for (const v of this.splits) {
         const t = s.tops[v.id];
         if (!t) continue;
-        const c = chaseCamera(T0, [t], v.yaw, 0, dt);
-        v.yaw = c.yaw;
+        const c = chaseCamera(T0, [t], v.yaw, 0, dt, this.terrain.layered ? (x, z) => this.terrain.layeredHeight(x, z) : undefined, v.cam3);
+        v.yaw = c.yaw; v.cam3 = { sp: c.sp, back: c.back };
         v.tgt.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
         v.pos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
+        v.pos.y = this.clearSight(v.pos, [t]);
         v.cam.position.copy(v.pos);
         if (this.shake > 0) { v.cam.position.x += (Math.random() - 0.5) * this.shake * 0.4; v.cam.position.y += (Math.random() - 0.5) * this.shake * 0.4; }
         v.cam.lookAt(v.tgt);
@@ -1216,14 +1398,16 @@ export class GameView {
       for (const t of pts) spread = Math.max(spread, Math.hypot(t.x - cx, t.z - cz * 1.0));
       const T = this.terrain.track;
       if (T && pts.length) {
-        const c = chaseCamera(T, pts, this.chaseYaw, spread, dt);
-        this.chaseYaw = c.yaw;
+        const c = chaseCamera(T, pts, this.chaseYaw, spread, dt, this.terrain.layered ? (x, z) => this.terrain.layeredHeight(x, z) : undefined, this.chaseSt);
+        this.chaseYaw = c.yaw; this.chaseSt = { sp: c.sp, back: c.back };
         this.camTarget.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
         this.camPos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
         if (this.camera.fov !== 62) { this.camera.fov = 62; this.camera.updateProjectionMatrix(); }
       } else {
         // fit every blade inside the part of the screen the HUD doesn't cover (works for portrait phones too)
-        const tgt = new THREE.Vector3(cx, cy * 0.5, cz);
+        // adventure levels climb high: aim at the blades' real height, not half of it
+        const quest = this.cfg.mode === 'quest';
+        const tgt = new THREE.Vector3(cx, quest ? cy : cy * 0.5, cz);
         const base = Math.min(S * 2.2, Math.max(this.cfg.mode === 'quest' ? 17 : 11, spread * 1.7 + 8));
         const need = this.fitDistance(pts, tgt, cx, cz, base);
         this.fitDist = this.fitDist ? this.fitDist + (need - this.fitDist) * Math.min(1, dt * (need > this.fitDist ? 7 : 1.5)) : need;
@@ -1231,8 +1415,10 @@ export class GameView {
         // follow faster while blades are near the edge of the free band, gently otherwise
         const urgent = need > dist * 1.05 ? 2 : 1;
         this.camTarget.lerp(tgt, Math.min(1, dt * 3 * urgent));
-        this.camPos.lerp(new THREE.Vector3(cx * 0.9, cy * 0.5 + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2 * urgent));
+        this.camPos.lerp(new THREE.Vector3(quest ? cx : cx * 0.9, tgt.y + dist * 0.82, cz + dist * 0.72), Math.min(1, dt * 2.2 * urgent));
       }
+      // the ground must never hide your blade (e.g. the crest you just went over): lift the camera now, not after the lag
+      if (pts.length) this.camPos.y = this.clearSight(this.camPos, pts);
     }
     this.camera.position.copy(this.camPos);
     if (this.shake > 0) {
@@ -1247,6 +1433,30 @@ export class GameView {
     } else if (this.camera.view) this.camera.clearViewOffset();
     const fx = this.camTarget.x - this.camPos.x, fz = this.camTarget.z - this.camPos.z, fl = Math.hypot(fx, fz) || 1;
     this.camFwd.x = fx / fl; this.camFwd.z = fz / fl;
+  }
+
+  /**
+   * The lowest camera height (at the camera's x,z) from which every point can be seen over the terrain:
+   * for each spot along the sight line, the line must pass ~0.6m above the ground there.
+   */
+  clearSight(cam: THREE.Vector3, pts: { x: number; y: number; z: number }[]) {
+    const ter = this.terrain;
+    let need = cam.y;
+    for (const t of pts) {
+      // on bridge tracks only the roads at or below the blade count (decks above are handled by the chase camera)
+      const hint = ter.layered ? t.y + 0.5 : undefined;
+      // never inside / under the ground the camera is over (a lagging camera over a steep hill)
+      const g = ter.height(cam.x, cam.z, hint);
+      if (g > VOID) need = Math.max(need, g + 1.5);
+      // the sight line clears the ground; only the camera's end of it (near the blade the ground is the blade's own slope)
+      const by = t.y + 0.4;
+      for (let f = 0.05; f <= 0.7; f += 0.05) {
+        const h = ter.height(cam.x + (t.x - cam.x) * f, cam.z + (t.z - cam.z) * f, hint);
+        if (h <= VOID) continue;
+        need = Math.max(need, (h + 0.5 - by * f) / (1 - f));
+      }
+    }
+    return need;
   }
 
   /** smallest camera distance (along the usual arena angle) that keeps all points inside the HUD-free band */
@@ -1327,6 +1537,13 @@ export class GameView {
 
 /** Race chase camera: behind the leading followed blade, looking down the track (pure, unit-testable). */
 /** checkered finish texture for quest goals */
+/** stretch a decal's along-the-road texture coordinate (square checkers whatever the road width) */
+function scaleV(g: THREE.BufferGeometry, k: number) {
+  const uv = g.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * k);
+  uv.needsUpdate = true;
+}
+
 let checkerTex: THREE.CanvasTexture | null = null;
 function checkerTexture() {
   if (checkerTex) return checkerTex;
@@ -1339,7 +1556,7 @@ function checkerTexture() {
   return checkerTex;
 }
 
-export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | null, spread: number, dt: number) {
+export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | null, spread: number, dt: number, deckAt?: (x: number, z: number) => number, st: { sp?: number; back?: number } = {}) {
   const lead = pts.reduce((a, b) => (b.lap * T.n + b.prog > a.lap * T.n + a.prog ? b : a));
   let cx = 0, cz = 0, cy = 0;
   for (const t of pts) { cx += t.x; cz += t.z; cy += Math.max(-2, t.y); }
@@ -1349,10 +1566,12 @@ export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | 
   for (let k = 2; k < 22; k++) { const q = (lead.prog + k) % T.n; hx += T.tx[q]; hz += T.tz[q]; }
   const hl = Math.hypot(hx, hz) || 1;
   hx /= hl; hz /= hl;
-  const sp = Math.hypot(lead.vx, lead.vz);
-  if (lead.off > 0 && sp > 1) { hx = lead.vx / sp; hz = lead.vz / sp; }
-  else if (sp > 4 && lead.alive) {
-    const vx = lead.vx / sp, vz = lead.vz / sp;
+  const rawSp = Math.hypot(lead.vx, lead.vz);
+  // distances below scale with speed: smooth it, or every boost pad / bump yanks the camera
+  const sp = st.sp === undefined ? rawSp : st.sp + (rawSp - st.sp) * Math.min(1, dt * 2);
+  if (lead.off > 0 && rawSp > 1) { hx = lead.vx / rawSp; hz = lead.vz / rawSp; }
+  else if (sp > 4 && rawSp > 1 && lead.alive) {
+    const vx = lead.vx / rawSp, vz = lead.vz / rawSp;
     if (vx * hx + vz * hz > 0) { const w = Math.min(0.35, (sp - 4) / 30); hx = hx * (1 - w) + vx * w; hz = hz * (1 - w) + vz * w; }
   }
   const want = Math.atan2(hx, hz);
@@ -1363,9 +1582,47 @@ export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | 
   yaw += d * Math.min(1, dt * 3);
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
   // pull back and look further ahead the faster we go
-  const back = Math.min(30, 8.5 + spread * 1.2 + sp * 0.25);
+  const backMax = Math.min(30, 8.5 + spread * 1.2 + sp * 0.25);
   const up = 4 + spread * 0.5 + sp * 0.08;
-  return { yaw, fx, fz, tx: cx + fx * (11 + sp * 0.4), ty: cy + 0.4, tz: cz + fz * 11, px: cx - fx * back, py: cy + up, pz: cz - fz * back };
+  const wrap = (i: number) => (T.open ? Math.max(0, Math.min(T.n - 1, i)) : ((i % T.n) + T.n) % T.n);
+  // everything below is a continuous function of where you are (fractional sample, interpolated road heights): no steps,
+  // no caps, so the camera can't jump or flicker on steep hills
+  const along = (cx - T.x[lead.prog]) * T.tx[lead.prog] + (cz - T.z[lead.prog]) * T.tz[lead.prog];
+  const pf = lead.prog + Math.max(-1, Math.min(1, along / 0.5));
+  const roadY = (q: number) => { const i0 = Math.floor(q), u = q - i0; return T.y[wrap(i0)] * (1 - u) + T.y[wrap(i0 + 1)] * u; };
+  // look at the road ahead, not a point level with the blade: downhill tips the view down the slope
+  const ty = cy + 0.4 + Math.max(-10, Math.min(3, roadY(pf + (11 + sp * 0.4) / 0.5) - roadY(pf))) * 0.7;
+  // camera height needed `b` metres back: above the road behind you, and with a sight line over every crest between
+  const heightAt = (b: number) => {
+    let h = Math.max(cy + up, roadY(pf - b / 0.5) + up * 0.7);
+    for (let dd = 2.5; dd < b; dd += 0.5) {
+      const ry = roadY(pf - dd / 0.5) + 1.2;
+      if (ry > cy) h = Math.max(h, cy + ((ry - cy) * b) / dd);
+    }
+    return h;
+  };
+  // over a steep crest, come in closer (coaster style) rather than climbing sky-high: the furthest distance whose
+  // height stays sensible; the distance itself glides (closes in fast, eases back out slowly) so nothing jumps
+  let wantB = 6;
+  for (let b = backMax; b >= 6; b -= 1) if (heightAt(b) <= cy + up + 5) { wantB = b; break; }
+  const prevB = st.back ?? wantB;
+  const back = Math.max(6, Math.min(backMax, prevB + Math.max(-dt * 30, Math.min(dt * 6, wantB - prevB))));
+  let py = Math.min(heightAt(back), cy + up + back + 10); // (falling far below the road: don't fly off into the sky)
+  const px = cx - fx * back, pz = cz - fz * back;
+  // bridges: never put the camera inside (or above) a road deck that's above the blade
+  if (deckAt) {
+    for (const [qx, qz] of [[px, pz], [(px + cx) / 2, (pz + cz) / 2]]) {
+      const deck = deckAt(qx, qz);
+      if (deck > cy + 1.8 && deck < py + 2) py = Math.max(cy + 1.6, deck - 1.4);
+    }
+  }
+  // aim: down the road ahead, but never so far that your blade drops toward the bottom of the screen (steep drops,
+  // where the camera sits high): keep it within ~13 degrees below centre
+  const tx = cx + fx * (11 + sp * 0.4), tz = cz + fz * 11;
+  const th = Math.hypot(tx - px, tz - pz) || 1;
+  const toBlade = Math.atan2(py - cy, back), toTgt = Math.atan2(py - ty, th);
+  const aimY = toBlade - toTgt > 0.23 ? py - Math.tan(toBlade - 0.23) * th : ty;
+  return { yaw, fx, fz, tx, ty: aimY, tz, px, py, pz, sp, back };
 }
 
 function sync<T extends { id: number }>(map: Map<number, THREE.Mesh>, list: T[], make: () => THREE.Mesh, scene: THREE.Scene) {

@@ -14,6 +14,7 @@ import { settings } from '../core/settings';
 import { icon, drawIcon } from './icons';
 import type { MatchArg } from './match';
 import { hostRoom } from '../net/room';
+import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
 
@@ -691,6 +692,7 @@ export class LobbyScreen implements Screen {
   }
 
   leave() {
+    if (testRide.from && !hostRoom.t) { this.app.go(testRide.from); return; } // test ride: back to the editor
     if (hostRoom.t) {
       if (!confirmTwice(this.app, 'close-room', `Room ${hostRoom.t.code} is open — press again to CLOSE it for everyone`)) return;
       hostRoom.close();

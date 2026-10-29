@@ -92,6 +92,7 @@ addEventListener('resize', () => {
 
 // deep link: /join/CODE or ?join=CODE  → straight to the online join flow
 const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);
+if (import.meta.env.DEV) (window as any).__app = app; // headless checks
 if (m) app.go('online', { join: location.protocol.startsWith('http') && location.pathname.includes('/join/') ? location.href : decodeURIComponent(m[1]) });
 else app.go('title');
 

@@ -9,6 +9,7 @@ import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from 
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
 import { clientRoom, hostRoom } from '../net/room';
+import { editorName, testRide } from './testRide';
 import { NetClient } from '../net/netclient';
 
 export interface MatchArg {
@@ -96,6 +97,7 @@ export class MatchScreen implements Screen {
     } else {
       this.sim = new Sim(cfg);
       this.state = this.sim.s;
+      if (import.meta.env.DEV) (window as any).__m = this; // headless checks
       if (this.arg.host) {
         const { peerSlot } = this.arg.host;
         hostRoom.onInput = (peer, m) => {
@@ -321,6 +323,7 @@ export class MatchScreen implements Screen {
         buttons = [
           h('button.btn.nav', { onclick: () => this.restart() }, 'Restart'),
           h('button.btn.nav', { onclick: () => this.toLobby() }, 'Back to Lobby — change track / players'),
+          ...(testRide.from ? [h('button.btn.nav', { onclick: () => { this.ended = true; this.app.go(testRide.from!); } }, `◀ Back to ${editorName()}`)] : []),
           h('button.btn.nav', { onclick: () => this.quit() }, 'Quit to Menu'),
         ];
       }

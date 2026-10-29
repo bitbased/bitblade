@@ -2,6 +2,7 @@
 // Tools: Paint · Level · Erase · Place · Select · Eyedropper. Live ghost preview of the exact piece geometry,
 // auto-orienting walls, drag-to-aim/size markers, brush + rectangle fill, mirror symmetry, templates.
 import * as THREE from 'three';
+import { testRide } from './testRide';
 import { PadCursor } from './padCursor';
 import './courseDesigner.css';
 import { h, type App, type Screen } from './app';
@@ -325,7 +326,9 @@ class CourseEditor {
     this.padHint = h('div.cd-padhint', null, ...['Ⓐ use tool / click', 'Ⓧ erase', 'Ⓑ back', 'Ⓨ courses', 'LB RB rotate', '✚ ◀▶ tool · ▲▼ level', 'LT RT zoom', 'R-stick orbit', 'L3 frame', 'SELECT undo', 'START test'].map((t) => h('span', null, t)));
     this.root.append(this.padHint);
     app.root.appendChild(this.root);
-    const first = this.custom[0] ?? BUILTIN_ARENAS.find((a) => a.course)!;
+    const back = testRide.from === 'courses' ? this.custom.find((a) => a.id === testRide.id) : undefined;
+    testRide.from = null;
+    const first = back ?? this.custom[0] ?? BUILTIN_ARENAS.find((a) => a.course)!;
     this.select(first);
     this.resize();
   }
@@ -711,6 +714,7 @@ class CourseEditor {
 
   testRide() {
     if (!this.save(true)) return;
+    testRide.from = 'courses'; testRide.id = this.def.id;
     this.app.go('lobby', { mode: this.testMode, arenaId: this.def.id });
   }
 

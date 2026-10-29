@@ -21,6 +21,8 @@ export interface TrackDef {
   widths?: number[];
   /** jump ramps on the road: rise `h` metres over the `len` metres before fraction `f` (the lip) */
   ramps?: { f: number; len: number; h: number }[];
+  /** fractions of the lap that are a half-pipe (on an otherwise flat road) */
+  pipes?: [number, number][];
   /** false: no automatic 1.5m kicker before gaps (use explicit ramps instead) */
   autoKick?: boolean;
 }
@@ -115,72 +117,112 @@ export function sampleTrack(def: TrackDef): TrackSamples {
 
 const inRanges = (f: number, r: [number, number][]) => r.some(([a, b]) => (a <= b ? f >= a && f <= b : f >= a || f <= b));
 
-/** Fill a heightfield for a track. Uses a bucket grid to find the nearest centerline sample quickly. */
-export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, minZ: number, cell: number, nx: number, nz: number, out: Float32Array) {
-  const B = 4;
-  const bx0 = minX, bz0 = minZ;
-  const bnx = Math.ceil((nx * cell) / B) + 1, bnz = Math.ceil((nz * cell) / B) + 1;
-  const buckets: number[][] = Array.from({ length: bnx * bnz }, () => []);
-  for (let i = 0; i < S.n; i++) {
-    const bi = Math.floor((S.x[i] - bx0) / B), bj = Math.floor((S.z[i] - bz0) / B);
-    if (bi >= 0 && bj >= 0 && bi < bnx && bj < bnz) buckets[bj * bnx + bi].push(i);
+/** per-track precomputed bits for surface queries */
+export interface SurfaceCtx { gapStarts: number[]; ramps: { end: number; len: number; h: number }[] }
+export function surfaceCtx(def: TrackDef, S: TrackSamples): SurfaceCtx {
+  return {
+    gapStarts: def.autoKick === false ? [] : def.gaps.map(([a]) => a * S.total),
+    ramps: (def.ramps ?? []).map((r) => ({ end: r.f * S.total, len: r.len, h: r.h })),
+  };
+}
+
+/** height of the road surface at (x, z), measured against centre-line sample `best` (VOID if off this road) */
+export function trackSurface(def: TrackDef, S: TrackSamples, best: number, x: number, z: number, ctx: SurfaceCtx) {
+  const d = Math.hypot(S.x[best] - x, S.z[best] - z);
+  const half = S.w[best] / 2 + 1e-3; // this stretch's width (narrowing sections); the epsilon keeps the exact edge on the road (no sawtooth rim)
+  // signed lateral offset (left of tangent positive)
+  const side = (x - S.x[best]) * -S.tz[best] + (z - S.z[best]) * S.tx[best];
+  const f = S.cum[best] / S.total;
+  // curvature banking + any explicit tilt (positive raises the left edge)
+  const base = S.y[best] + Math.max(-1.2, Math.min(1.2, -S.curv[best] * side * 6)) * 0.5 + S.bank[best] * side;
+  let kick = 0;
+  for (const g of ctx.gapStarts) {
+    let ds = g - S.cum[best];
+    if (ds < 0 && !S.open) ds += S.total;
+    if (ds >= 0 && ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
   }
-  const reach = Math.ceil((S.width / 2 + 1.5) / B);
-  // gap kickers: the 7m before every gap ramps up (unless the course uses explicit ramps)
-  const gapStarts = def.autoKick === false ? [] : def.gaps.map(([a]) => a * S.total);
-  const ramps = (def.ramps ?? []).map((r) => ({ end: r.f * S.total, len: r.len, h: r.h }));
+  // explicit jump ramps: steepest at the lip
+  for (const r of ctx.ramps) {
+    const ds = r.end - S.cum[best];
+    if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u); }
+  }
+  if (def.profile === 'pipe' || (def.pipes && inRanges(f, def.pipes))) {
+    // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
+    const D = def.depth ?? 3;
+    const bank = Math.max(-0.6, Math.min(0.6, -S.curv[best] * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
+    const y0 = S.y[best] + kick;
+    if (d <= half) { const u = d / half; return inRanges(f, def.gaps) ? VOID : y0 + D * (1 - Math.sqrt(Math.max(0, 1 - u * u * 0.96))) + bank * side; }
+    if (d <= half + 0.7 && !inRanges(f, def.gaps)) return y0 + D * 0.8 + bank * side; // the rim: go over it and you're out
+    return VOID;
+  }
+  if (d <= half) return inRanges(f, def.gaps) ? VOID : base + Math.pow(d / half, 4) * 0.9 + kick;
+  if (d <= half + 0.8 && inRanges(f, def.rails) && !inRanges(f, def.gaps)) {
+    const t = (d - half) / 0.5;
+    return base + 0.9 + 1.1 * Math.min(1, t * t * (3 - 2 * t));
+  }
+  return VOID;
+}
+
+/** does the road pass over itself (bridges / overpasses)? then one heightfield can't hold it */
+export function trackOverlaps(S: TrackSamples) {
+  for (let i = 0; i < S.n; i += 4) for (let j = i + 40; j < S.n; j += 4) {
+    if (!S.open && S.n - (j - i) < 40) continue;
+    if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < (S.w[i] + S.w[j]) / 2 + 2 && Math.abs(S.y[i] - S.y[j]) > 0.4) return true;
+  }
+  return false;
+}
+
+/** a bucket grid of centre-line samples for fast nearest lookups */
+export class SampleGrid {
+  B = 4; x0: number; z0: number; nx: number; nz: number; cells: number[][];
+  constructor(public S: TrackSamples, x0: number, z0: number, x1: number, z1: number) {
+    this.x0 = x0; this.z0 = z0;
+    this.nx = Math.ceil((x1 - x0) / this.B) + 1; this.nz = Math.ceil((z1 - z0) / this.B) + 1;
+    this.cells = Array.from({ length: this.nx * this.nz }, () => []);
+    for (let i = 0; i < S.n; i++) {
+      const bi = Math.floor((S.x[i] - x0) / this.B), bj = Math.floor((S.z[i] - z0) / this.B);
+      if (bi >= 0 && bj >= 0 && bi < this.nx && bj < this.nz) this.cells[bj * this.nx + bi].push(i);
+    }
+  }
+  /** for each separate stretch of road near (x,z), its nearest sample (stretches = runs of nearby indices) */
+  nearestPerStretch(x: number, z: number, reachM: number) {
+    const r = Math.ceil(reachM / this.B);
+    const bi = Math.floor((x - this.x0) / this.B), bj = Math.floor((z - this.z0) / this.B);
+    const cand: { i: number; d: number }[] = [];
+    for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+      const ii = bi + di, jj = bj + dj;
+      if (ii < 0 || jj < 0 || ii >= this.nx || jj >= this.nz) continue;
+      for (const s of this.cells[jj * this.nx + ii]) { const d = (this.S.x[s] - x) ** 2 + (this.S.z[s] - z) ** 2; if (d <= reachM * reachM) cand.push({ i: s, d }); }
+    }
+    cand.sort((a, b) => a.i - b.i);
+    const out: number[] = [];
+    let grp: { i: number; d: number } | null = null, lastI = -1e9;
+    const n = this.S.n;
+    for (const c of cand) {
+      if (grp && c.i - lastI <= 30) { if (c.d < grp.d) grp = c; }
+      else { if (grp) out.push(grp.i); grp = c; }
+      lastI = c.i;
+    }
+    if (grp) out.push(grp.i);
+    // a loop's first and last stretches are the same road
+    if (!this.S.open && out.length > 1 && out[0] < 30 && n - 1 - out[out.length - 1] < 30) {
+      const a = out[0], b = out.pop()!;
+      if ((this.S.x[b] - x) ** 2 + (this.S.z[b] - z) ** 2 < (this.S.x[a] - x) ** 2 + (this.S.z[a] - z) ** 2) out[0] = b;
+    }
+    return out;
+  }
+}
+
+/** Fill a heightfield for a track (the highest road wherever stretches overlap). */
+export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, minZ: number, cell: number, nx: number, nz: number, out: Float32Array) {
+  const grid = new SampleGrid(S, minX, minZ, minX + nx * cell, minZ + nz * cell);
+  const ctx = surfaceCtx(def, S);
+  const reach = S.width / 2 + 1.5;
   for (let j = 0; j < nz; j++)
     for (let i = 0; i < nx; i++) {
       const x = minX + i * cell, z = minZ + j * cell;
-      const bi = Math.floor((x - bx0) / B), bj = Math.floor((z - bz0) / B);
-      let best = -1, bd = 1e9;
-      for (let dj = -reach; dj <= reach; dj++)
-        for (let di = -reach; di <= reach; di++) {
-          const ii = bi + di, jj = bj + dj;
-          if (ii < 0 || jj < 0 || ii >= bnx || jj >= bnz) continue;
-          for (const s of buckets[jj * bnx + ii]) {
-            const d = (S.x[s] - x) ** 2 + (S.z[s] - z) ** 2;
-            if (d < bd) { bd = d; best = s; }
-          }
-        }
       let h = VOID;
-      if (best >= 0) {
-        const d = Math.sqrt(bd);
-        const half = S.w[best] / 2; // this stretch's width (narrowing sections)
-        // signed lateral offset (left of tangent positive)
-        const side = (x - S.x[best]) * -S.tz[best] + (z - S.z[best]) * S.tx[best];
-        const f = S.cum[best] / S.total;
-        // curvature banking + any explicit tilt (positive raises the left edge)
-        const base = S.y[best] + Math.max(-1.2, Math.min(1.2, -S.curv[best] * side * 6)) * 0.5 + S.bank[best] * side;
-        let kick = 0;
-        for (const g of gapStarts) {
-          let ds = g - S.cum[best];
-          if (ds < 0 && !S.open) ds += S.total;
-          if (ds >= 0 && ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
-        }
-        // explicit jump ramps: a smooth rise to a sharp lip
-        for (const r of ramps) {
-          const ds = r.end - S.cum[best];
-          if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u); } // concave: steepest at the lip
-        }
-        if (def.profile === 'pipe') {
-          // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
-          const D = def.depth ?? 3;
-          const bank = Math.max(-0.6, Math.min(0.6, -S.curv[best] * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
-          const y0 = S.y[best] + kick;
-          if (d <= half) {
-            const u = d / half;
-            h = inRanges(f, def.gaps) ? VOID : y0 + D * (1 - Math.sqrt(Math.max(0, 1 - u * u * 0.96))) + bank * side;
-          } else if (d <= half + 0.7 && !inRanges(f, def.gaps)) {
-            h = y0 + D * 0.8 + bank * side; // the rim: go over it and you're out
-          }
-        } else if (d <= half) {
-          h = inRanges(f, def.gaps) ? VOID : base + Math.pow(d / half, 4) * 0.9 + kick;
-        } else if (d <= half + 0.8 && inRanges(f, def.rails) && !inRanges(f, def.gaps)) {
-          const t = (d - half) / 0.5;
-          h = base + 0.9 + 1.1 * Math.min(1, t * t * (3 - 2 * t));
-        }
-      }
+      for (const best of grid.nearestPerStretch(x, z, reach)) { const v = trackSurface(def, S, best, x, z, ctx); if (v > h) h = v; }
       out[j * nx + i] = h;
     }
 }
