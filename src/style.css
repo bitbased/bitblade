@@ -558,3 +558,14 @@ body.hints-on .music-chip { bottom: 56px; }
 .hud.hud-pin .hud-cards { left: 14px; right: auto; bottom: 14px; top: auto; justify-content: flex-start; max-width: 300px; }
 .hud.hud-pin .hud-timer { min-width: 150px; }
 @media (max-width: 700px) { .hud.hud-pin .hud-cards { top: auto; bottom: 10px; left: 10px; max-width: 46vw; } }
+
+/* pinball touch: big flipper pads in the bottom corners; jump / item / special have no use on a table */
+.touch-ui.pin .tb-jump, .touch-ui.pin .tb-item, .touch-ui.pin .tb-special { display: none; }
+.touch-ui.pin .touch-btns { bottom: 130px; }
+.tf { position: absolute; bottom: 14px; width: 40vw; max-width: 260px; height: 92px; border-radius: 22px; border: 2px solid var(--accent); background: rgba(10, 14, 30, 0.55); color: #fff; font-family: var(--font-h); font-size: 15px; letter-spacing: 0.12em; pointer-events: auto; touch-action: none; }
+.tf-l { left: 12px; } .tf-r { right: 12px; }
+.tf.down { background: rgba(60, 242, 255, 0.35); transform: scale(0.97); }
+/* pinball on a phone: the card goes up top (the flipper pads own the bottom), the stick rests above the pads */
+.hud.hud-pin.hud-touch .hud-cards { top: 64px; bottom: auto; }
+.touch-ui.pin .touch-base { bottom: 150px; }
+.touch-ui.pin .touch-stick-zone { height: calc(70% - 120px); bottom: 120px; }

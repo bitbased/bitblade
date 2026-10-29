@@ -200,6 +200,7 @@ export class Input {
           c.mx = t.jx; c.mz = t.jy;
           c.dash = t.edge.dash; c.jump = t.edge.jump; c.item = t.edge.item; c.special = t.edge.special;
           c.hold = t.dashHeld;
+          c.flipL = t.flipLHeld; c.flipR = t.flipRHeld;
         }
         if (spec.gyro && this.gyro.on) {
           const gx = (this.gyro.gamma - this.gyro.g0) / 25, gz = (this.gyro.beta - this.gyro.b0) / 25;
@@ -234,22 +235,25 @@ export class TouchControls {
   jx = 0; jy = 0;
   edge = { dash: false, jump: false, item: false, special: false };
   dashHeld = false;
+  /** pinball: the big flipper pads (held) */
+  flipLHeld = false;
+  flipRHeld = false;
   private stickId = -1;
   private cx = 0; private cy = 0;
   private knob: HTMLDivElement;
   private base: HTMLDivElement;
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, pinball = false) {
     this.root = document.createElement('div');
-    this.root.className = 'touch-ui';
+    this.root.className = 'touch-ui' + (pinball ? ' pin' : '');
     this.root.innerHTML = `
       <div class="touch-stick-zone"><div class="touch-base"><div class="touch-knob"></div></div></div>
       <div class="touch-btns">
         <button data-b="special" class="tb tb-special">SP</button>
         <button data-b="item" class="tb tb-item">ITEM</button>
         <button data-b="jump" class="tb tb-jump">JUMP</button>
-        <button data-b="dash" class="tb tb-dash">DASH</button>
-      </div>`;
+        <button data-b="dash" class="tb tb-dash">${pinball ? 'LAUNCH' : 'DASH'}</button>
+      </div>${pinball ? '<button data-f="L" class="tf tf-l">◀ FLIP</button><button data-f="R" class="tf tf-r">FLIP ▶</button>' : ''}`;
     parent.appendChild(this.root);
     this.base = this.root.querySelector('.touch-base')!;
     this.knob = this.root.querySelector('.touch-knob')!;
@@ -300,7 +304,17 @@ export class TouchControls {
       b.addEventListener('touchend', up);
       b.addEventListener('touchcancel', up);
     });
+    this.wireFlippers();
   }
   endFrame() { this.edge.dash = this.edge.jump = this.edge.item = this.edge.special = false; }
+  /** pinball flipper pads: held while a finger is on them (several fingers at once is fine) */
+  private wireFlippers() {
+    this.root.querySelectorAll<HTMLButtonElement>('.tf').forEach((b) => {
+      const set = (v: boolean) => { if (b.dataset.f === 'L') this.flipLHeld = v; else this.flipRHeld = v; b.classList.toggle('down', v); };
+      b.addEventListener('touchstart', (e) => { e.preventDefault(); set(true); navigator.vibrate?.(6); }, { passive: false });
+      b.addEventListener('touchend', () => set(false));
+      b.addEventListener('touchcancel', () => set(false));
+    });
+  }
   dispose() { this.root.remove(); }
 }

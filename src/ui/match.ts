@@ -73,7 +73,7 @@ export class MatchScreen implements Screen {
     }
     const clientTouch = !!this.arg.client && this.arg.client.mine.length > 0 && Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches;
     if (clientTouch || cfg.players.some((p) => p.ctrl.type === 'touch' && this.isLocal(cfg.players.indexOf(p)))) {
-      this.touch = new TouchControls(this.wrap);
+      this.touch = new TouchControls(this.wrap, cfg.mode === 'pinball'); this.hud.root.classList.toggle('hud-touch', true);
       app.input.touch = this.touch;
     }
     app.input.mouseWorld = () => {
