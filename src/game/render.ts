@@ -472,17 +472,12 @@ export class GameView {
       gate.position.set(T.x[0], y0, T.z[0]);
       this.scene.add(gate);
       // direction chevrons every ~9m along the ribbon
-      const chevMat = new THREE.MeshBasicMaterial({ map: chevronTexture(theme.glow, 2), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-      const chevGeo = new THREE.PlaneGeometry(T.width * 0.45, T.width * 0.45);
+      const chevMat = new THREE.MeshBasicMaterial({ map: chevronTexture(theme.glow, 2), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       for (let i = 10; i < T.n - 6; i += 18) {
-        const h = this.terrain.height(T.x[i], T.z[i]);
-        if (h <= VOID) continue;
-        const m = new THREE.Mesh(chevGeo, chevMat);
-        m.rotation.order = 'YXZ';
-        m.rotation.y = planeYaw(T.tx[i], T.tz[i]);
-        m.rotation.x = -Math.PI / 2;
-        m.position.set(T.x[i], h + 0.04, T.z[i]);
-        this.scene.add(m);
+        if (this.terrain.height(T.x[i], T.z[i]) <= VOID) continue;
+        // a strip of the road itself: bends with the curve, tilts with banking, sits flush over crests
+        const geo = this.roadDecal(i, T.width * 0.45, T.width * 0.45 * 0.5, 0.05);
+        if (geo) this.scene.add(new THREE.Mesh(geo, chevMat));
       }
       this.boostMeshes.push(new THREE.Mesh(new THREE.BufferGeometry(), chevMat)); // scroll the chevrons too
       if (cfg.arena.track?.profile === 'pipe') {
@@ -627,12 +622,22 @@ export class GameView {
           break;
         }
         case 'boost': {
-          const pad = new THREE.Mesh(new THREE.PlaneGeometry((m.r ?? 0.9) * 2, this.terrain.track ? 3.6 : 2.8), new THREE.MeshBasicMaterial({ map: chevronTexture('#ffe23a'), blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false }));
+          const pad = new THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>(new THREE.PlaneGeometry((m.r ?? 0.9) * 2, this.terrain.track ? 3.6 : 2.8), new THREE.MeshBasicMaterial({ map: chevronTexture('#ffe23a'), blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
           const r = m.rot ?? 0;
-          pad.rotation.order = 'YXZ';
-          pad.rotation.y = planeYaw(Math.sin(r), Math.cos(r)); // sim pushes along (sin rot, cos rot)
-          pad.rotation.x = -Math.PI / 2;
-          pad.position.set(m.x, y + 0.05, m.z);
+          const TT = this.terrain.track;
+          if (TT) {
+            // on tracks the pad is a strip of road, following its curve and tilt
+            let bi = 0, bd = Infinity;
+            for (let k = 0; k < TT.n; k++) { const d = (TT.x[k] - m.x) ** 2 + (TT.z[k] - m.z) ** 2; if (d < bd) { bd = d; bi = k; } }
+            const geo = this.roadDecal(bi, 3.6, m.r ?? 0.9, 0.06, m.x - TT.x[bi], m.z - TT.z[bi]);
+            if (geo) { pad.geometry.dispose(); pad.geometry = geo; }
+          } else {
+            pad.rotation.order = 'YXZ';
+            pad.rotation.y = planeYaw(Math.sin(r), Math.cos(r)); // sim pushes along (sin rot, cos rot)
+            pad.rotation.x = -Math.PI / 2;
+            pad.position.set(m.x, y + 0.05, m.z);
+            this.drape(pad, m.x, m.z, 1, 0.05, planeYaw(Math.sin(r), Math.cos(r)));
+          }
           this.scene.add(pad);
           this.boostMeshes.push(pad);
           break;
@@ -833,6 +838,37 @@ export class GameView {
     if (route && route.length === 1 && prev) return Math.atan2(x - prev.x, z - prev.z);
     const next = ms.slice(mi + 1).find((m) => m.kind === 'checkpoint' || m.kind === 'goal');
     return next ? Math.atan2(next.x - x, next.z - z) : prev ? Math.atan2(x - prev.x, z - prev.z) : Math.PI / 2;
+  }
+
+  /**
+   * A decal that is a piece of the track surface: `len` metres along the centre line around sample `i`,
+   * `halfW` either side, every vertex at the real ground height (+lift). UV v runs along travel, u left→right,
+   * so chevron textures point the way you drive, through curves, banking and crests. (ox, oz) shifts it sideways.
+   */
+  roadDecal(i: number, len: number, halfW: number, lift: number, ox = 0, oz = 0) {
+    const T = this.terrain.track;
+    if (!T) return null;
+    const k = Math.max(2, Math.round(len / 0.5));
+    const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+    for (let s = 0; s <= k; s++) {
+      let j = i - Math.floor(k / 2) + s;
+      j = T.open ? Math.max(0, Math.min(T.n - 1, j)) : ((j % T.n) + T.n) % T.n;
+      for (const side of [-1, 1]) {
+        // left of travel is (-tz, tx)
+        const x = T.x[j] - T.tz[j] * halfW * side * -1 + ox, z = T.z[j] + T.tx[j] * halfW * side * -1 + oz;
+        const h = this.terrain.height(x, z);
+        if (h <= VOID) return null; // overlaps a gap or the edge: no decal hanging in the air
+        pos.push(x, h + lift, z);
+        uv.push(side < 0 ? 1 : 0, s / k);
+      }
+      if (s > 0) { const a = (s - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    return g;
   }
 
   /** quest: the next checkpoint after `qcp` (marker index), else the goal */
