@@ -1,6 +1,6 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { allSongs, musicPrefs, saveMusicPrefs } from '../game/music';
+import { allSongs, loadCustomSongs, musicPrefs, saveCustomSongs, saveMusicPrefs, songById, surpriseSong } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
@@ -83,8 +83,38 @@ export class MainMenu extends Base {
         p || isInstalledApp() ? item('QUIT', p ? 'Exit to desktop' : 'Close BitBlade', () => quitApp(() => this.app.toast('Swipe BitBlade away in your app switcher to close it'))) : null,
       ),
       h('div.menu-foot', null, 'v0.1'),
+      this.musicChip(),
     );
   }
+
+  /** bottom-right: what's playing, the 🎲 Surprise toggle (a fresh unsaved song), roll another, save it */
+  musicChip(): HTMLElement {
+    const sfx = this.app.sfx;
+    const on = musicPrefs.menu === 'surprise';
+    const song = on ? sfx.surprise : songById(musicPrefs.menu);
+    const saved = !!song && loadCustomSongs().some((s) => s.id === song.id);
+    const redo = () => { const old = this.chip; old?.replaceWith(this.musicChip()); };
+    const toggle = h('div.toggle.panel.nav.mm-toggle' + (on ? '.on' : ''), {
+      title: 'Surprise music: a brand-new song made for you (not saved unless you save it)',
+      onclick: () => {
+        if (on) { musicPrefs.menu = musicPrefs.menuPrev || 'neon-drive'; }
+        else { musicPrefs.menuPrev = musicPrefs.menu === 'surprise' ? 'neon-drive' : musicPrefs.menu; musicPrefs.menu = 'surprise'; sfx.surprise = surpriseSong(); }
+        saveMusicPrefs(); sfx.useMusic('menu'); redo();
+      },
+    }, h('span.dot'), '🎲 SURPRISE MUSIC');
+    const el = h('div.music-chip', null,
+      h('div.mm-now', null, h('span', null, musicPrefs.menu === 'off' ? 'MUSIC OFF' : 'NOW PLAYING'), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : '')),
+      h('div.mm-row', null,
+        toggle,
+        on ? h('button.btn.small.nav', { title: 'Make another one', onclick: () => { sfx.surprise = surpriseSong(); sfx.useMusic('menu'); redo(); } }, '🎲 Another') : null,
+        on && song ? (saved
+          ? h('span.mm-saved', null, '✓ Saved')
+          : h('button.btn.small.nav', { title: 'Keep this song in your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); } }, '💾 Save')) : null),
+    );
+    this.chip = el;
+    return el;
+  }
+  chip: HTMLElement | null = null;
   onBack() { this.app.go('title'); }
 }
 
@@ -226,7 +256,7 @@ export class SettingsScreen extends Base {
       h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
         slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }),
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
-        musicPick('MENU MUSIC', 'menu', [['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
+        musicPick('MENU MUSIC', 'menu', [['surprise', '🎲 Surprise — a brand-new song each session'], ['random', '🔀 Random — a new song every couple of loops'], ['off', 'Off']]),
         musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),
         toggle('TRAJECTORY PREDICTION', () => settings.trajectories, (v) => { settings.trajectories = v; settings.save(); }),

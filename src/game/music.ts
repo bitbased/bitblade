@@ -231,7 +231,7 @@ export function sanitizeSong(s: Partial<Song>): Song {
  * What plays where. menu: a song id, 'random' (cycles) or 'off'. game: 'track' (each track/course's own song,
  * else a fitting preset), a song id (always that), 'random' (cycles) or 'off'.
  */
-export const musicPrefs = { menu: 'neon-drive', game: 'track' };
+export const musicPrefs = { menu: 'neon-drive', game: 'track', /** what menu music to go back to when Surprise is switched off */ menuPrev: 'neon-drive' };
 try { Object.assign(musicPrefs, JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')); } catch { /* ignore */ }
 export function saveMusicPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(musicPrefs)); } catch { /* ignore */ } }
 
@@ -503,4 +503,79 @@ export class SongPlayer {
     this.wet.gain.setTargetAtTime(wet, t, 0.02);
     this.dry.gain.setTargetAtTime(1 - wet * 0.85, t, 0.02);
   }
+}
+
+// ------------------------------------------------------------------ generators (🎲)
+/** a random voice for a lane, kept within ranges that suit its job (bass stays low, hats stay short...) */
+export function genVoice(l: Lane): Partial<Lane> {
+  const r = Math.random, pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
+  const rng = (a: number, b: number) => +(a + r() * (b - a)).toFixed(2);
+  switch (l.kind) {
+    case 'lead': return { wave: pick(['square', 'pulse25', 'pulse12', 'saw', 'triangle', 'sine']), oct: pick([1, 1, 2]), decay: rng(0.15, 0.6), cutoff: rng(0.45, 0.95), echo: rng(0, 0.5), vib: rng(0, 0.45), chord: r() < 0.15 };
+    case 'arp': return { wave: pick(['pulse12', 'pulse25', 'square', 'triangle']), oct: pick([1, 2, 2]), decay: rng(0.08, 0.25), cutoff: rng(0.5, 1), echo: rng(0.1, 0.5), vib: 0, chord: r() < 0.75 };
+    case 'bass': return { wave: pick(['triangle', 'square', 'pulse25', 'saw']), oct: pick([-1, 0, 0]), decay: rng(0.12, 0.45), cutoff: rng(0.3, 0.65), echo: 0, vib: 0, chord: false };
+    case 'pad': return { wave: pick(['sine', 'triangle', 'square', 'saw']), oct: pick([0, 1, 1]), decay: rng(0.6, 1.8), cutoff: rng(0.35, 0.7), echo: rng(0.15, 0.55), vib: rng(0, 0.3), chord: true };
+    case 'perc': return { wave: pick(['pulse25', 'pulse12', 'square', 'triangle', 'noise']), oct: pick([1, 2, 3]), decay: rng(0.04, 0.15), cutoff: rng(0.5, 1), echo: rng(0, 0.5), vib: 0, chord: false };
+    case 'kick': return { wave: pick(['sine', 'sine', 'triangle', 'square']), decay: rng(0.12, 0.35), cutoff: 1, echo: 0 };
+    case 'snare': return { decay: rng(0.08, 0.3), cutoff: rng(0.4, 1), echo: rng(0, 0.25) };
+    case 'hat': return { decay: rng(0.02, 0.1), cutoff: rng(0.5, 1), echo: rng(0, 0.2) };
+  }
+  return {};
+}
+
+/** a musical starting idea for one lane (in key, sensible rhythm for its job) */
+export function genLane(kind: Lane['kind'], s: { scale: ScaleId }): string {
+  const r = Math.random, n = SCALES[s.scale].steps.length;
+  const out = Array(STEPS).fill('.');
+  const pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
+  switch (kind) {
+    case 'kick': return pick(['x...x...x...x...', 'x.....x.x.......', 'x...x.x.x...x.x.', 'x.......x.x.....', 'x..x..x...x.....']);
+    case 'snare': return pick(['....x.......x...', '....x.......x..x', '....X.......X...', '........x.......', '....x..x....x...']);
+    case 'hat': return pick(['..x...x...x...x.', 'x.x.x.x.x.x.x.x.', 'xxxxxxxxxxxxxxxx', 'x.xxx.xxx.xxx.xx', '....x.......x...']);
+    case 'bass': {
+      const rhythm = pick(['0...0...0...0...', '0.0.0.0.0.0.0.0.', '0..0..0.0..0..0.', '0.....0...0.....']);
+      const alt = [0, 0, 0, Math.min(4, n - 1), 2];
+      return rhythm.split('').map((c, i) => (c === '.' ? '.' : DEG_CHARS[i > 8 && r() < 0.4 ? pick(alt) : 0])).join('');
+    }
+    case 'pad': return pick(['0---------------', '0-------4-------', '0-------2-------']);
+    case 'arp': return pick(['0...0...0...0...', '0.......0.......', '0.2.4.2.0.2.4.2.', '0.4.7.4.0.4.7.4.']).replace(/7/g, DEG_CHARS[Math.min(n, 7)]);
+    case 'perc': { for (let i = 0; i < STEPS; i++) if (r() < 0.12) out[i] = DEG_CHARS[Math.floor(r() * (n + 2))]; return out.join(''); }
+    case 'lead': {
+      // a phrase: notes on 8ths with a gentle random walk, some held, ends near home
+      let d = Math.floor(r() * n);
+      for (let i = 0; i < STEPS; i += 2) {
+        if (r() < 0.28) continue;
+        d = Math.max(0, Math.min(n + 3, d + pick([-2, -1, -1, 0, 1, 1, 2])));
+        out[i] = DEG_CHARS[d];
+        if (r() < 0.3 && i + 1 < STEPS) out[i + 1] = '-';
+      }
+      out[STEPS - 2] = r() < 0.5 ? DEG_CHARS[0] : out[STEPS - 2];
+      return out.join('');
+    }
+  }
+  return EMPTY;
+}
+
+/**
+ * 🎲 Surprise me: a whole song from a few dice rolls inside rules that keep it musical — a random mood/key/
+ * tempo (+ maybe swing / crunch / chip waves), every lane written for its job (genLane), two patterns (A answers
+ * B), arranged over a proven chord progression. Notes are scale degrees, so nothing can land out of key.
+ */
+export function surpriseSong(): Song {
+    const s = newSong('Surprise ' + Math.floor(Math.random() * 900 + 100));
+    const scales = Object.keys(SCALES) as ScaleId[];
+    s.scale = scales[Math.floor(Math.random() * scales.length)];
+    s.bpm = 90 + Math.floor(Math.random() * 14) * 5;
+    s.root = 40 + Math.floor(Math.random() * 12);
+    s.swing = Math.random() < 0.3 ? 0.15 + Math.random() * 0.15 : 0;
+    s.crunch = Math.random() < 0.3 ? Math.random() * 0.4 : 0;
+    const chip: Lane['wave'][] = ['square', 'pulse25', 'pulse12', 'triangle', 'saw'];
+    s.lanes.forEach((l) => { if (!DRUMS.has(l.kind) && l.kind !== 'pad') l.wave = chip[Math.floor(Math.random() * chip.length)]; });
+    s.lanes[3].mute = Math.random() < 0.4;
+    s.lanes[7].mute = Math.random() < 0.5;
+    s.patterns = [0, 1].map(() => LANE_KINDS.map((k) => genLane(k, s)));
+    const progs = [[0, 4, 5, 3], [0, 3, 4, 4], [0, 5, 3, 4], [0, 0, 3, 4], [0, 3, 0, 4]];
+    const pr = progs[Math.floor(Math.random() * progs.length)];
+    s.arrange = [...pr.map((t) => ({ p: 0, t })), ...pr.map((t) => ({ p: 1, t }))];
+  return s;
 }

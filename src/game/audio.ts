@@ -1,5 +1,5 @@
 // Procedural WebAudio sound effects + chip-tune songs (see music.ts). No asset files needed.
-import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, PRESET_SONGS, type Song } from './music';
+import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, surpriseSong, PRESET_SONGS, type Song } from './music';
 
 export type SfxName = 'tick' | 'select' | 'back' | 'clash' | 'bigclash' | 'land' | 'launch' | 'count' | 'go' | 'finish' | 'burst' | 'pickup' | 'item' | 'shock' | 'dash' | 'jump' | 'special' | 'crystal' | 'gem' | 'hazard' | 'win' | 'grind';
 
@@ -16,6 +16,8 @@ export class Sfx {
   player: SongPlayer | null = null;
   private wanted: Song | null = null;
   private cycleLoops = 0;
+  /** the menu's 🎲 Surprise song: made fresh each session, kept only in memory until you save it */
+  surprise: Song | null = null;
   private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
 
   constructor() {
@@ -162,6 +164,7 @@ export class Sfx {
     const random = pref === 'random';
     let song: Song | null;
     if (random) song = this.wanted && this.player?.song ? this.wanted : randomSong();
+    else if (pref === 'surprise' && where === 'menu') song = this.surprise ??= surpriseSong();
     else if (where === 'game' && pref === 'track') song = songById(arena?.song) ?? (arena ? defaultSongFor(arena.id) : PRESET_SONGS[0]);
     else song = songById(pref) ?? PRESET_SONGS[0];
     const same = !!song && this.wanted?.id === song.id;
