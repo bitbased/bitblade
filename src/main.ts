@@ -3,6 +3,7 @@ import { Input } from './input/input';
 import { Sfx } from './game/audio';
 import { getRenderer } from './game/render';
 import { perf } from './core/settings';
+import { enhanceInputs } from './ui/widgets';
 import { h, type App, type Screen, type ScreenName } from './ui/app';
 import { TitleScreen, MainMenu, ModeSelect, Results, SettingsScreen } from './ui/menus';
 import { LobbyScreen } from './ui/lobby';
@@ -15,6 +16,7 @@ import { updateBackdrop, resizeBackdrop, setBackdropVisible } from './ui/backdro
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
 const root = document.getElementById('ui') as HTMLElement;
 getRenderer(canvas);
+enhanceInputs(root);
 
 const factories: Record<ScreenName, () => Screen> = {
   title: () => new TitleScreen(),

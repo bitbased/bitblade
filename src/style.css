@@ -215,3 +215,31 @@ body.ingame .hide-ingame { display: none; }
 .online-badge { position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--line); font-family: var(--font-h); font-size: 12px; letter-spacing: 0.15em; pointer-events: none; }
 .online-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #38ff7a; box-shadow: 0 0 8px #38ff7a; animation: blink 1.6s infinite; }
 .online-badge small { color: var(--muted); font-size: 10px; letter-spacing: 0.12em; }
+
+/* ---------- game-style form widgets (src/ui/widgets.ts) ---------- */
+.gx-step, .gx-select { display: inline-flex; align-items: stretch; gap: 0; background: rgba(0, 0, 0, 0.45); border: 1px solid var(--line); clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); vertical-align: middle; }
+.gx-step.focus, .gx-select.focus, .gx-step:hover, .gx-select:hover { border-color: var(--accent); box-shadow: 0 0 12px rgba(60, 242, 255, 0.35); }
+.gx-btn { background: linear-gradient(180deg, rgba(60, 242, 255, 0.18), rgba(60, 242, 255, 0.05)); border: none; color: var(--accent); font-family: var(--font-h); font-weight: 900; font-size: 14px; min-width: 28px; cursor: pointer; padding: 4px 8px; user-select: none; touch-action: none; }
+.gx-btn:hover { background: var(--accent); color: #05060a; }
+.gx-btn:active { transform: scale(0.92); }
+.gx-num { width: 3.6em; text-align: center; background: transparent !important; border: none !important; color: var(--text); font-family: var(--font-h); font-size: 14px; padding: 4px 0 !important; outline: none; -moz-appearance: textfield; appearance: textfield; }
+.gx-num::-webkit-outer-spin-button, .gx-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.gx-step.gx-bump .gx-num { animation: gxBump 0.18s; }
+@keyframes gxBump { 50% { transform: scale(1.18); color: var(--gold); } }
+.gx-label { flex: 1; min-width: 7em; background: transparent; border: none; color: var(--text); font-family: var(--font-h); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gx-label:hover { color: #fff; text-shadow: 0 0 8px var(--accent); }
+.gx-pop { position: fixed; z-index: 200; display: flex; flex-direction: column; overflow-y: auto; background: var(--panel2); border: 1px solid var(--accent); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(60, 242, 255, 0.25); padding: 4px; backdrop-filter: blur(10px); animation: fadeUp 0.12s both; }
+.gx-opt { text-align: left; background: transparent; border: none; color: var(--text); font-family: var(--font-h); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 10px; cursor: pointer; }
+.gx-opt:hover { background: rgba(60, 242, 255, 0.18); }
+.gx-opt.on { color: var(--gold); }
+/* neon sliders everywhere */
+input[type=range] { -webkit-appearance: none; appearance: none; height: 18px; background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; background: linear-gradient(90deg, var(--accent), var(--accent2)); opacity: 0.7; clip-path: polygon(2px 0, 100% 0, calc(100% - 2px) 100%, 0 100%); }
+input[type=range]::-moz-range-track { height: 4px; background: linear-gradient(90deg, var(--accent), var(--accent2)); opacity: 0.7; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; background: #fff; transform: rotate(45deg); box-shadow: 0 0 10px var(--accent); border: 2px solid var(--accent); }
+input[type=range]::-moz-range-thumb { width: 12px; height: 12px; background: #fff; border: 2px solid var(--accent); border-radius: 0; transform: rotate(45deg); box-shadow: 0 0 10px var(--accent); }
+input[type=range]:hover::-webkit-slider-thumb, input[type=range].focus::-webkit-slider-thumb { background: var(--gold); box-shadow: 0 0 16px var(--gold); }
+/* color swatches */
+input[type=color] { -webkit-appearance: none; appearance: none; width: 34px; height: 24px; border: 1px solid var(--line); background: transparent; padding: 0; cursor: pointer; }
+input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+input[type=color]::-webkit-color-swatch { border: none; }
