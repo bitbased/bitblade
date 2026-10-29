@@ -266,10 +266,18 @@ class MusicStudio {
       drum ? null : h('button.ms-toggle.nav' + (lane.chord ? '.on' : ''), { onclick: () => set((l) => (l.chord = !l.chord), true), title: lane.kind === 'pad' ? 'Play each note as a full chord' : 'Chip arpeggio: each note flickers through its chord' }, lane.kind === 'pad' ? '♫ Chords' : '♫ Chip arpeggio'),
       h('button.ms-toggle.nav' + (lane.mute ? '.on' : ''), { onclick: () => set((l) => (l.mute = !l.mute), true) }, lane.mute ? '🔇 Muted' : '🔊 Mute'),
       h('div.ms-btns', null,
+        h('button.btn.small.nav', { onclick: () => { set((l) => Object.assign(l, genVoice(l)), true); this.previewLane(); } }, '🎲 Random voice'),
         h('button.btn.small.nav', { onclick: () => { this.editable(); this.song.patterns[this.pat][this.lane] = genLane(lane.kind, this.song); this.changed(); this.renderMain(); } }, `🎲 New ${LANE_LABEL[lane.kind].toLowerCase()} idea`),
         h('button.btn.small.nav', { onclick: () => { this.editable(); this.song.patterns[this.pat][this.lane] = EMPTY; this.changed(); this.renderMain(); } }, 'Clear lane'),
         h('button.btn.small.nav', { onclick: () => set((l) => Object.assign(l, laneDefaults(l.kind)), true) }, 'Reset voice')),
     ].filter(Boolean) as HTMLElement[]));
+  }
+
+  /** play a note (or hit) from this lane so you hear its voice */
+  previewLane() {
+    const li = this.lane, row = this.song.patterns[this.pat][li];
+    const ch = DRUMS.has(this.song.lanes[li].kind) ? 'x' : [...row].find((c) => c !== '.' && c !== '-') ?? '4';
+    this.app.sfx.player?.preview(this.song, li, ch, this.song.arrange[this.part]?.t ?? 0);
   }
 
   // ------------------------------------------------------------------ clicks
@@ -375,6 +383,23 @@ class MusicStudio {
     this.root.remove();
     this.app.sfx.useMusic('menu');
   }
+}
+
+/** a random voice for a lane, kept within ranges that suit its job (bass stays low, hats stay short...) */
+export function genVoice(l: Lane): Partial<Lane> {
+  const r = Math.random, pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
+  const rng = (a: number, b: number) => +(a + r() * (b - a)).toFixed(2);
+  switch (l.kind) {
+    case 'lead': return { wave: pick(['square', 'pulse25', 'pulse12', 'saw', 'triangle', 'sine']), oct: pick([1, 1, 2]), decay: rng(0.15, 0.6), cutoff: rng(0.45, 0.95), echo: rng(0, 0.5), vib: rng(0, 0.45), chord: r() < 0.15 };
+    case 'arp': return { wave: pick(['pulse12', 'pulse25', 'square', 'triangle']), oct: pick([1, 2, 2]), decay: rng(0.08, 0.25), cutoff: rng(0.5, 1), echo: rng(0.1, 0.5), vib: 0, chord: r() < 0.75 };
+    case 'bass': return { wave: pick(['triangle', 'square', 'pulse25', 'saw']), oct: pick([-1, 0, 0]), decay: rng(0.12, 0.45), cutoff: rng(0.3, 0.65), echo: 0, vib: 0, chord: false };
+    case 'pad': return { wave: pick(['sine', 'triangle', 'square', 'saw']), oct: pick([0, 1, 1]), decay: rng(0.6, 1.8), cutoff: rng(0.35, 0.7), echo: rng(0.15, 0.55), vib: rng(0, 0.3), chord: true };
+    case 'perc': return { wave: pick(['pulse25', 'pulse12', 'square', 'triangle', 'noise']), oct: pick([1, 2, 3]), decay: rng(0.04, 0.15), cutoff: rng(0.5, 1), echo: rng(0, 0.5), vib: 0, chord: false };
+    case 'kick': return { wave: pick(['sine', 'sine', 'triangle', 'square']), decay: rng(0.12, 0.35), cutoff: 1, echo: 0 };
+    case 'snare': return { decay: rng(0.08, 0.3), cutoff: rng(0.4, 1), echo: rng(0, 0.25) };
+    case 'hat': return { decay: rng(0.02, 0.1), cutoff: rng(0.5, 1), echo: rng(0, 0.2) };
+  }
+  return {};
 }
 
 /** a musical starting idea for one lane (in key, sensible rhythm for its job) */
