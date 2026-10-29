@@ -191,7 +191,7 @@ function templateCourse(id: TemplateId, w: number, hh: number): { course: Course
       fill(); wrapWalls(c);
       const mid = Math.floor(w / 2);
       if (w >= 8) {
-        for (let j = 0; j < hh; j++) { const p = pieceAt(c, mid, j); if (p) c.pieces.splice(c.pieces.indexOf(p), 1); set('kicker', mid - 1, j, 1); }
+        for (let j = 0; j < hh; j++) { const p = pieceAt(c, mid, j); if (p) c.pieces.splice(c.pieces.indexOf(p), 1); set('kicker', mid - 1, j, 3); } // rot 3 launches +x, over the gap
       }
       for (let j = 0; j < hh; j++) markers.push({ kind: 'spawn', x: tcx(0), z: tcz(j) });
       markers.push({ kind: 'checkpoint', x: tcx(Math.min(w - 2, mid + 2)), z: tcz(0), r: 2.2 }, { kind: 'gem', x: tcx(2), z: tcz(0) }, { kind: 'gem', x: tcx(mid + 1), z: tcz(hh - 1) }, { kind: 'goal', x: tcx(w - 1), z: 0, r: 2.6 });
@@ -203,7 +203,7 @@ function templateCourse(id: TemplateId, w: number, hh: number): { course: Course
       const ci = Math.floor(w / 2), cj = Math.floor(hh / 2);
       if (w >= 6 && hh >= 6) {
         for (let j = cj - 1; j <= cj; j++) for (let i = ci - 1; i <= ci; i++) set('flat', i, j, 0, 1);
-        set('ramp', ci - 2, cj, 1); set('ramp', ci + 1, cj - 2, 0);
+        set('ramp', ci - 2, cj, 3, 0); set('ramp', ci, cj - 2, 0, 0); // rot 3 rises +x, rot 0 rises +z: both onto the plateau
       }
       markers.push({ kind: 'spawn', x: tcx(1), z: tcz(1) }, { kind: 'spawn', x: tcx(2), z: tcz(1) },
         { kind: 'hive', x: tcx(ci), z: tcz(cj), r: 8, len: 2 }, { kind: 'gem', x: tcx(ci), z: tcz(cj) - 2 }, { kind: 'gem', x: tcx(1), z: tcz(hh - 2) }, { kind: 'gem', x: tcx(w - 2), z: tcz(1) },

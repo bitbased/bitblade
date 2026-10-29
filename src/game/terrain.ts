@@ -708,7 +708,7 @@ function questLevel(id: string, name: string, desc: string, theme: Theme, rows: 
     let best = 0, bv = -Infinity;
     for (let r = 0; r < 4; r++) {
       const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
-      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      const val = at(0.5 + dx * 0.2, 0.5 + dz * 0.2) - at(0.5 - dx * 0.2, 0.5 - dz * 0.2) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
       if (val > bv) { bv = val; best = r; }
     }
     return best;
@@ -797,7 +797,7 @@ function walkLevel(id: string, name: string, desc: string, theme: Theme, opts: {
     let best = 0, bv = -Infinity;
     for (let r = 0; r < 4; r++) {
       const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
-      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      const val = at(0.5 + dx * 0.2, 0.5 + dz * 0.2) - at(0.5 - dx * 0.2, 0.5 - dz * 0.2) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
       if (val > bv) { bv = val; best = r; }
     }
     return best;
@@ -844,7 +844,7 @@ function titanPeak(): ArenaDef {
     let best = 0, bv = -Infinity;
     for (let r = 0; r < 4; r++) {
       const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
-      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      const val = at(0.5 + dx * 0.2, 0.5 + dz * 0.2) - at(0.5 - dx * 0.2, 0.5 - dz * 0.2) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
       if (val > bv) { bv = val; best = r; }
     }
     return best;
