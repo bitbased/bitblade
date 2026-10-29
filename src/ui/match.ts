@@ -263,7 +263,7 @@ export class MatchScreen implements Screen {
         case 'burst': sfx.play('burst'); break;
         case 'shock': sfx.play('shock'); break;
         case 'pickup': sfx.play(e.what === 'crystal' ? 'crystal' : e.what === 'gem' ? 'gem' : e.what === 'box' ? 'item' : 'pickup'); break;
-        case 'use': sfx.play('pickup'); break;
+        case 'use': sfx.play(e.item === 'surge' ? 'special' : 'pickup'); if (e.item === 'surge') this.rumble([e.id], 0.5, 200); break;
         case 'special': sfx.play('special'); break;
         case 'dash': sfx.play('dash'); break;
         case 'jump': sfx.play('jump'); break;

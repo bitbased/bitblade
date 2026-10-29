@@ -145,6 +145,7 @@ export class Hud {
       if (!c) return;
       c.el.classList.toggle('out', !t.alive);
       c.spin.style.transform = `scaleX(${Math.max(0, Math.min(1, t.spin))})`;
+      c.spin.parentElement!.classList.toggle('over', t.spin > 1.005 || t.fx.surge > 0);
       c.burst.style.transform = `scaleX(${Math.min(1, t.burst)})`;
       c.sp.style.transform = `scaleX(${t.special})`;
       c.spBar.classList.toggle('full', t.special >= 1);

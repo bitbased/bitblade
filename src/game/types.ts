@@ -55,7 +55,7 @@ export interface MatchConfig {
 export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }
 export const NO_CONTROL: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
 
-export interface TopFx { turbo: number; shield: number; titan: number; vortex: number; frozen: number; special: number; dash: number }
+export interface TopFx { turbo: number; shield: number; titan: number; vortex: number; frozen: number; special: number; dash: number; /** Spin Surge overcharge time left */ surge: number }
 
 export interface TopState {
   id: number; team: number; name: string; color: string; cpu: boolean;

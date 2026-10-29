@@ -124,7 +124,7 @@ export class Sim {
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, spin: 1, dir: blade.spinDir, angle: 0, tx: 0, tz: 0,
       grounded: false, air: 0, alive: true, out: '', outT: 0, burst: 0, special: 0, specialKind: best[0],
       dashCd: 0, jumpCd: 0, itemCd: 0, item: null, roll: 0,
-      fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0 },
+      fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 },
       flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : 99,
       respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
       lap: 0, prog: 0, cp: 0, place: 0, finishT: -1, off: 0,
@@ -170,7 +170,7 @@ export class Sim {
     s.tops.forEach((t, i) => {
       if (t.drone) return;
       t.alive = true; t.out = ''; t.outT = 0; t.spin = 1; t.burst = 0; t.launchLocked = false; t.launch = 0.6;
-      t.fx = { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0 };
+      t.fx = { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 };
       t.flag = -1; t.item = null; t.roll = 0; t.scale = 1;
       const sp = this.spawnFor(t, i);
       this.placeTop(t, sp.x, sp.z, 1.6);
@@ -332,8 +332,8 @@ export class Sim {
 
     // spin decay
     const decay = st.spinDecay * (0.55 + 0.45 * t.spin) * (t.grounded ? 1 : 0.25) * (this.cfg.mode === 'gauntlet' ? 1.25 : this.cfg.mode === 'race' ? 0.3 : 1) + (t.spin < 0.25 ? 0.006 : 0);
-    if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * dt;
-    else t.spin = Math.min(1.1, t.spin + 0.12 * dt);
+    if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * (t.fx.surge > 0 ? 0.3 : 1) * dt + (t.spin > 1 && t.fx.surge <= 0 ? (t.spin - 1) * 0.6 * dt : 0);
+    else t.spin = Math.max(t.spin, Math.min(1.1, t.spin + 0.12 * dt));
     t.angle += t.dir * (6 + t.spin * 34) * dt;
 
     // finishes
@@ -485,7 +485,7 @@ export class Sim {
     const sA = A.dir * A.spin * S_SURF, sB = -B.dir * B.spin * S_SURF;
     const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
     const slip = vt + sA - sB;
-    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + t.spin * 0.6);
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // overcharge (>100%) is defence, not extra punch
     const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
     const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
     const approach = Math.max(0, -vn);
@@ -504,11 +504,11 @@ export class Sim {
     const sAn = sA - (jt * 2 / mA) * fric * (1.3 - dA * 0.35);
     const sBn = sB + (jt * 2 / mB) * fric * (1.3 - dB * 0.35);
     const before = [A.spin, B.spin];
-    A.spin = Math.max(0, Math.min(1.15, (sAn * A.dir) / S_SURF));
-    B.spin = Math.max(0, Math.min(1.15, (-sBn * B.dir) / S_SURF));
-    // direct impact damage
-    A.spin -= (approach * 0.003 + 0.004) * (aB / dA);
-    B.spin -= (approach * 0.003 + 0.004) * (aA / dB);
+    A.spin = Math.max(0, Math.min(1.35, (sAn * A.dir) / S_SURF));
+    B.spin = Math.max(0, Math.min(1.35, (-sBn * B.dir) / S_SURF));
+    // direct impact damage (a surging top shrugs off half)
+    A.spin -= (approach * 0.003 + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
+    B.spin -= (approach * 0.003 + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
     const lossA = Math.max(0, before[0] - A.spin), lossB = Math.max(0, before[1] - B.spin);
     A.dmg += lossB; B.dmg += lossA;
     A.special = Math.min(1, A.special + lossB * 2.2 + 0.015);
@@ -545,7 +545,7 @@ export class Sim {
           const dx = top.x - m.x, dz = top.z - m.z;
           if (m.kind === 'spinpad') {
             // spin pads: park on one to re-spin (worth fighting over); fastest when nearly spun out
-            if (Math.hypot(dx, dz) < (m.r ?? 1.1)) top.spin = Math.min(1, top.spin + (0.13 + (1 - top.spin) * 0.12) * dt);
+            if (Math.hypot(dx, dz) < (m.r ?? 1.1) && top.spin < 1) top.spin = Math.min(1, top.spin + (0.13 + (1 - top.spin) * 0.12) * dt);
           } else {
             const a = m.rot ?? 0, fx = Math.sin(a), fz = Math.cos(a);
             const along = dx * fx + dz * fz, side = dx * fz - dz * fx;
@@ -691,7 +691,8 @@ export class Sim {
       case 'turbo': t.fx.turbo = 3.5; break;
       case 'shield': t.fx.shield = 5; break;
       case 'shock': this.shockwave(t, 5, 13, 0.05); break;
-      case 'surge': t.spin = Math.min(1.1, t.spin + 0.4); break;
+      // Spin Surge: rip back up to at least full spin, overcharged up to 135%, and 6s of slow decay + halved clash damage
+      case 'surge': t.spin = Math.min(1.35, Math.max(1, t.spin + 0.55)); t.fx.surge = 6; break;
       case 'vortex': t.fx.vortex = 4; break;
       case 'titan': t.fx.titan = 6; break;
       case 'comet': {
@@ -716,7 +717,7 @@ export class Sim {
     switch (t.specialKind) {
       case 'rush': t.fx.special = 1.2; break;
       case 'fortress': t.fx.special = 3.5; t.fx.shield = Math.max(t.fx.shield, 3.5); break;
-      case 'vortex': t.fx.special = 3; t.spin = Math.min(1.1, t.spin + 0.2); break;
+      case 'vortex': t.fx.special = 3; t.spin = Math.max(t.spin, Math.min(1.1, t.spin + 0.2)); break;
       case 'skydive': t.fx.special = 3; t.vy = 13; t.grounded = false; break;
     }
   }
@@ -965,7 +966,7 @@ export class Sim {
             t.score++;
             s.teamScores[0]++;
             s.gemsLeft--;
-            t.spin = Math.min(1.05, t.spin + 0.06);
+            t.spin = Math.max(t.spin, Math.min(1.05, t.spin + 0.06));
             this.ev({ k: 'pickup', id: t.id, what: 'gem', x: g.x, y: g.y, z: g.z });
             if (s.teamScores[0] % 4 === 0) this.spawnDrone();
             break;
