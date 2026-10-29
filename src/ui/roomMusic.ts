@@ -37,15 +37,17 @@ export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canS
     o.onSet(choices[(Math.max(0, k) + d + choices.length) % choices.length]);
   };
   const s = o.song;
-  const sub = s ? `${s.custom ? 'custom song' : 'preset'}${o.by ? ` · picked by ${o.by}` : ''}` : "each track plays its own song";
+  const sub = s ? `${s.custom ? 'custom song' : 'preset'}${o.by ? ` · picked by ${o.by}` : ''}` : 'room music';
   const row = h('div.selector.panel' + (o.canSet ? '.nav' : ''), { 'data-navx': o.canSet ? '1' : undefined },
     h('span.lbl', null, 'MUSIC'),
     o.canSet ? h('button.arrow', { onclick: () => cycle(-1) }, '◀') : null,
     h('div.val', null, h('b', null, s ? `♪ ${s.name}` : 'AUTO'), h('span', null, sub)),
     o.canSet ? h('button.arrow', { onclick: () => cycle(1) }, '▶') : null);
   if (o.canSet) row.addEventListener('navx', (e) => cycle((e as CustomEvent).detail));
-  const copy = s && !inMyLibrary(s)
-    ? h('button.btn.small.nav', { title: 'Save this song to your Music Studio library', onclick: () => { copyToMySongs(s); app.toast(`♪ ${s.name} saved to your songs`); o.onCopied?.(); } }, '⬇ Copy song to my library')
-    : s && s.custom ? h('div.hint', null, '✓ This song is in your library') : null;
-  return h('div.room-music', null, row, copy);
+  // one fixed-height status line, whatever it holds — so clicking through songs never shifts the room UI
+  const status = h('div.rm-status', null,
+    s && !inMyLibrary(s)
+      ? h('button.btn.small.nav', { title: 'Save this song to your Music Studio library', onclick: () => { copyToMySongs(s); app.toast(`♪ ${s.name} saved to your songs`); o.onCopied?.(); } }, '⬇ Copy song to my library')
+      : h('span', null, s && s.custom ? '✓ This song is in your library' : s ? 'Preset — everyone has it' : 'Auto: each track plays its own song'));
+  return h('div.room-music', null, row, status);
 }
