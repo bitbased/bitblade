@@ -13,6 +13,12 @@ export const S_SURF = 7;
 const POINTS: Record<FinishType, number> = { spin: 1, over: 2, burst: 2, xtreme: 3 };
 export const FINISH_LABEL: Record<FinishType, string> = { spin: 'SPIN FINISH', over: 'OVER FINISH', burst: 'BURST FINISH', xtreme: 'XTREME FINISH' };
 const ITEM_POOL: ItemKind[] = ['turbo', 'shield', 'shock', 'surge', 'vortex', 'titan', 'comet', 'mine'];
+/** 83.456 -> '1:23.45' */
+export function fmtTime(sec: number) {
+  const m = Math.floor(sec / 60), r = sec - m * 60;
+  return `${m}:${r.toFixed(2).padStart(5, '0')}`;
+}
+
 const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race', 'quest']);
 
 function mulberry(seed: number) {
@@ -223,6 +229,7 @@ export class Sim {
       }
       s.phase = 'battle';
       s.phaseT = 0;
+      s.t0 = s.t;
       this.ev({ k: 'go' });
       this.ev({ k: 'announce', text: 'LET IT RIP!', color: '#ffd23a' });
     }
@@ -1141,9 +1148,10 @@ export class Sim {
       } else if (m.kind === 'goal') {
         for (const t of players) {
           if (t.alive && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 2.6) + this.radius(t) && Math.abs(t.y - this.ground(m.x, m.z)) < 3) {
-            const tm = (this.cfg.timeLimit - s.timeLeft).toFixed(1);
+            t.finishT = s.t;
+            const tm = fmtTime(s.t - (s.t0 ?? 0));
             const total = this.markers.filter((x) => x.kind === 'gem').length;
-            return this.endMatch(0, `${t.name} reached the goal · ${tm}s · gems ${s.teamScores[0]}/${total}`);
+            return this.endMatch(0, `${t.name} reached the goal in ${tm} · gems ${s.teamScores[0]}/${total}`);
           }
         }
       } else if (m.kind === 'hive') {

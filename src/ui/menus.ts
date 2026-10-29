@@ -3,7 +3,7 @@ import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
-import { FINISH_LABEL } from '../game/sim';
+import { FINISH_LABEL, fmtTime } from '../game/sim';
 import type { MatchSummary } from './match';
 import { TEAM_COLORS } from './hud';
 import { setBackdropVisible, unpinBackdrop } from './backdrop';
@@ -122,22 +122,43 @@ export class Results extends Base {
     const banner2 = h('div.res-banner', null, banner);
     banner2.style.setProperty('--wc', wc ?? '#fff');
     if (w >= 0) this.app.sfx.play('win');
-    const rows = state.tops.filter((t) => !t.drone).map((t, i) => {
-      const score = cfg.mode === 'rush' ? t.crystals : cfg.mode === 'gauntlet' || cfg.mode === 'quest' ? t.score : cfg.mode === 'koth' ? Math.floor(state.teamScores[t.team]) : state.teamScores[t.team];
-      const tr = h('tr', null,
-        h('td', null, h('b', { style: { color: t.color } }, t.name)),
-        h('td', null, String(score ?? 0)),
-        h('td', null, String(t.kos)),
-        h('td', null, `${Math.round(t.dmg * 100)}%`),
-        h('td', null, t.alive ? `${Math.round(t.spin * 100)}% spin` : t.out ? FINISH_LABEL[t.out] : '—'));
-      if (t.team === w) tr.classList.add('win');
+    // columns depend on the mode: timed modes show finish times, collect modes show what you collected
+    const t0 = state.t0 ?? 0;
+    const time = (t: (typeof state.tops)[number]) => (t.finishT >= 0 ? fmtTime(t.finishT - t0) : null);
+    const name = (t: (typeof state.tops)[number]) => h('b', { style: { color: t.color } }, t.name);
+    const status = (t: (typeof state.tops)[number]) => (t.alive ? `${Math.round(t.spin * 100)}% spin` : t.out ? FINISH_LABEL[t.out] : '—');
+    let head: string[];
+    let list = state.tops.filter((t) => !t.drone);
+    let cells: (t: (typeof list)[number]) => (string | Node)[];
+    if (cfg.mode === 'quest') {
+      head = ['BLADER', 'TIME', 'GEMS', 'LIVES LEFT', 'RESULT'];
+      const total = cfg.arena.markers.filter((m) => m.kind === 'gem').length;
+      list = [...list].sort((a, b) => (a.finishT >= 0 ? 0 : 1) - (b.finishT >= 0 ? 0 : 1) || b.score - a.score);
+      cells = (t) => [name(t), time(t) ?? '—', `${t.score} / ${total}`, String(Math.max(0, t.lives)), t.finishT >= 0 ? 'GOAL!' : t.lives <= 0 ? 'OUT OF LIVES' : 'DID NOT FINISH'];
+    } else if (cfg.mode === 'race') {
+      head = ['POS', 'BLADER', 'TIME', 'LAPS', 'KOs'];
+      list = [...list].sort((a, b) => (a.finishT >= 0 ? a.finishT : 1e9) - (b.finishT >= 0 ? b.finishT : 1e9) || (a.place || 99) - (b.place || 99));
+      cells = (t) => [`P${t.place || list.indexOf(t) + 1}`, name(t), time(t) ?? 'DNF', `${Math.min(t.lap, cfg.target)} / ${cfg.target}`, String(t.kos)];
+    } else if (cfg.mode === 'gauntlet') {
+      head = ['BLADER', 'GEMS', 'KOs', 'LIVES LEFT', 'FINAL'];
+      cells = (t) => [name(t), String(t.score), String(t.kos), String(Math.max(0, t.lives)), status(t)];
+    } else {
+      head = ['BLADER', 'SCORE', 'KOs', 'DAMAGE DEALT', 'FINAL'];
+      cells = (t) => {
+        const score = cfg.mode === 'rush' ? t.crystals : cfg.mode === 'koth' ? Math.floor(state.teamScores[t.team]) : state.teamScores[t.team];
+        return [name(t), String(score ?? 0), String(t.kos), `${Math.round(t.dmg * 100)}%`, status(t)];
+      };
+    }
+    const rows = list.map((t, i) => {
+      const tr = h('tr', null, ...cells(t).map((c) => h('td', null, c)));
+      if (cfg.mode === 'quest' || cfg.mode === 'race' ? t.finishT >= 0 && (cfg.mode === 'quest' || t.place === 1) : t.team === w) tr.classList.add('win');
       tr.style.animationDelay = `${0.3 + i * 0.08}s`;
       return tr;
     });
     return h('div.screen.results', null,
       banner2,
       h('div.screen-sub', null, state.lastFinish),
-      h('table.res-table', null, h('tr', null, ...['BLADER', 'SCORE', 'KOs', 'DAMAGE DEALT', 'FINAL'].map((x) => h('th', null, x))), ...rows),
+      h('table.res-table', null, h('tr', null, ...head.map((x) => h('th', null, x))), ...rows),
       online === 'client'
         ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return; clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
         : h('div.lobby-bottom', null,

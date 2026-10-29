@@ -110,6 +110,8 @@ export interface GameState {
   phaseT: number;
   round: number;
   timeLeft: number;
+  /** sim time the current battle started (after the launch countdown) — finish times are measured from here */
+  t0?: number;
   tops: TopState[];
   teamScores: number[];
   boxes: Box[];
