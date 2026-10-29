@@ -525,7 +525,7 @@ export class GameView {
     const theme = this.cfg.arena.theme;
     const glow = new THREE.Color(theme.glow);
     this.cfg.arena.markers.forEach((m, mi) => {
-      const y = Math.max(0, this.terrain.height(m.x, m.z));
+      const y = this.groundY(m.x, m.z);
       let obj: THREE.Object3D | null = null;
       switch (m.kind) {
         case 'arm': {
@@ -608,6 +608,12 @@ export class GameView {
       if (obj && (m.kind === 'arm' || m.kind === 'saw')) { this.scene.add(obj); this.hazardMeshes.push({ m: obj, mi }); }
       else if (obj) this.scene.add(obj);
     });
+  }
+
+  /** surface height for placing props (bowls go below 0; void counts as 0) */
+  groundY(x: number, z: number) {
+    const h = this.terrain.height(x, z);
+    return h <= VOID ? 0 : h;
   }
 
   ensureObjects(s: GameState) {
@@ -746,7 +752,7 @@ export class GameView {
       const p = hazardPose(m, s.t);
       if (!p) continue;
       if (p.kind === 'arm') h.m.rotation.y = -p.angle;
-      else if (p.kind === 'saw') { h.m.position.set(p.ax, Math.max(0, this.terrain.height(p.ax, p.az)), p.az); h.m.rotation.y = p.angle; if (Math.random() < 0.3) this.particles.emit(p.ax, h.m.position.y + 0.35, p.az, (Math.random() - 0.5) * 6, 2, (Math.random() - 0.5) * 6, new THREE.Color('#ffc46b'), 0.07, 0.25); }
+      else if (p.kind === 'saw') { h.m.position.set(p.ax, this.groundY(p.ax, p.az), p.az); h.m.rotation.y = p.angle; if (Math.random() < 0.3) this.particles.emit(p.ax, h.m.position.y + 0.35, p.az, (Math.random() - 0.5) * 6, 2, (Math.random() - 0.5) * 6, new THREE.Color('#ffc46b'), 0.07, 0.25); }
     }
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
     // boxes

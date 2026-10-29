@@ -118,6 +118,9 @@ export class NetClient {
       const age = Math.max(0, Math.min(0.1, this.renderT - (a?.t ?? L.t)));
       return { ...t, x: src.x + src.vx * age, y: src.y + src.vy * age, z: src.z + src.vz * age };
     });
-    return { ...L, tops };
+    // hazards are pure functions of time: show them at the time our predicted blade lives in,
+    // so sweeps/saws line up with the hits we feel (remote blades interpolate ~0.1s behind)
+    const t = this.mine.some((i) => this.canPredict(i)) ? this.pred.s.t : this.renderT;
+    return { ...L, t, tops };
   }
 }
