@@ -574,3 +574,62 @@ body.hints-on .music-chip { bottom: 56px; }
 .hud.hud-pin .hud-top { left: 14px; transform: none; }
 .hud.hud-pin .hud-obj { left: 18px; transform: none; top: 70px; }
 @media (max-width: 700px) { .hud.hud-pin .hud-top { left: 10px; top: 10px; } .hud.hud-pin .hud-obj { left: 12px; top: 58px; } .hud.hud-pin.hud-touch .hud-cards { top: 84px; } }
+
+/* ================= short screens (phone landscape, short desktop windows) =================
+   Everything must stay reachable: screens scroll when they don't fit, the main menu sizes itself to the height,
+   the prompt bar / music chip shrink, and the in-game player cards become a compact column in the top-left corner
+   (clear of the touch sticks, the timer and the play area). */
+.screen { overflow-y: auto; overscroll-behavior: contain; }
+.menu-screen { overflow-y: auto; align-items: safe center; }
+@media (max-height: 560px) {
+  .menu-screen { padding-top: 10px; padding-bottom: 10px; }
+  body.hints-on .menu-screen { padding-bottom: 40px; }
+  .menu-col { gap: clamp(2px, 1.2vh, 12px); }
+  .menu-logo { font-size: clamp(24px, 10vh, 58px); margin-bottom: clamp(4px, 2vh, 26px); }
+  .menu-item { font-size: clamp(15px, 6.2vh, 40px); padding: 1px 0; }
+  .menu-item small { font-size: 12px; }
+  .menu-item.focus small, .menu-item:hover small { max-height: 18px; }
+  .menu-item.focus::before, .menu-item:hover::before { left: -26px; }
+  .menu-foot { bottom: 6px; font-size: 11px; }
+  .screen { padding-top: 10px; padding-bottom: 10px; gap: 10px; }
+  .screen-title { font-size: 24px; }
+  body.hints-on .screen { padding-bottom: 38px; }
+  .nav-hints { bottom: 4px; padding: 3px 10px; font-size: 9px; }
+  .nav-hints .g { transform: scale(0.85); }
+  .music-chip { bottom: 8px; right: 10px; transform: scale(0.8); transform-origin: bottom right; }
+  body.hints-on .music-chip { bottom: 34px; }
+  body.hints-on .menu-foot { bottom: 34px; }
+  /* in game: small cards stacked top-left */
+  .hud:not(.split):not(.hud-pin) .hud-cards { top: 8px; left: 8px; right: auto; bottom: auto; flex-direction: column; flex-wrap: nowrap; align-items: flex-start; gap: 4px; justify-content: flex-start; }
+  .pcard { width: 148px; padding: 3px 8px 4px; }
+  .pcard::before { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%); }
+  .pcard .nm { font-size: 10px; }
+  .pcard .rpm { font-size: 8px; }
+  .pcard .bar { height: 5px; margin-top: 3px; }
+  .pcard .bar.thin { height: 3px; margin-top: 2px; }
+  .pcard .meta { font-size: 9px; margin-top: 1px; gap: 6px; }
+  .pcard .meta .place { font-size: 11px; }
+  .pcard .item { width: 28px; height: 28px; font-size: 16px; right: -32px; top: 0; }
+  .pcard .item .ico { width: 18px; height: 18px; }
+  .hud-top { top: 6px; transform: translateX(-50%) scale(0.72); transform-origin: top center; }
+  .hud-obj { top: 44px; font-size: 9px; letter-spacing: 0.14em; }
+}
+@media (max-height: 420px) {
+  .pcard { width: 128px; }
+  .pcard .meta, .pcard .bar.burst, .pcard .pc-tip { display: none; }
+  .menu-item small { display: none; }
+}
+
+@media (max-height: 560px) {
+  /* the lobby: rows at their natural height and the screen scrolls (the cards used to spill over the rules row) */
+  .lobby { grid-template-rows: auto auto auto auto; }
+  .pcard .nm { white-space: nowrap; overflow: hidden; gap: 6px; }
+}
+
+@media (max-height: 420px) {
+  /* pinball touch on a short screen: lower flipper pads, LAUNCH just above them (clear of the pause button) */
+  .tf { height: 64px; bottom: 8px; }
+  .touch-ui.pin .touch-btns { bottom: 80px; }
+  .touch-ui.pin .touch-base { bottom: 6px; left: 30px; width: 84px; height: 84px; }
+  .touch-ui.pin .touch-stick-zone { height: calc(70% - 80px); bottom: 80px; }
+}

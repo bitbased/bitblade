@@ -248,8 +248,12 @@ export class MenuNav {
       const sp = scrollParent(el);
       if (sp) {
         const pr = sp.getBoundingClientRect(), er = el.getBoundingClientRect();
-        if (er.top < pr.top + 8) sp.scrollTop -= pr.top + 8 - er.top;
-        else if (er.bottom > pr.bottom - 8) sp.scrollTop += er.bottom - (pr.bottom - 8);
+        const pad = Math.min(40, pr.height * 0.12); // (keep a little of what's next in view)
+        if (er.top < pr.top + pad) sp.scrollTop -= pr.top + pad - er.top;
+        else if (er.bottom > pr.bottom - pad) sp.scrollTop += er.bottom - (pr.bottom - pad);
+      } else {
+        const er = el.getBoundingClientRect();
+        if (er.bottom > innerHeight || er.top < 0 || er.right > innerWidth || er.left < 0) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     }
   }
@@ -290,9 +294,13 @@ export class MenuNav {
     }
     if (best) return best;
     if (dy) {
-      // wrap: list order
-      const i = it.indexOf(cur);
-      return it[(i + dy + it.length) % it.length];
+      // wrap round to the far end (down past the last row → the top row), in the column nearest where you are
+      const ends = it.filter((e) => e !== cur).map((e) => ({ e, r: e.getBoundingClientRect() }));
+      if (!ends.length) return null;
+      const edge = dy > 0 ? Math.min(...ends.map((o) => o.r.top)) : Math.max(...ends.map((o) => o.r.bottom));
+      const row = ends.filter((o) => (dy > 0 ? o.r.top - edge : edge - o.r.bottom) < Math.min(12, o.r.height * 0.5));
+      row.sort((p, q) => Math.abs((p.r.left + p.r.right) / 2 - ax) - Math.abs((q.r.left + q.r.right) / 2 - ax));
+      return row[0].e;
     }
     return null;
   }
@@ -340,7 +348,9 @@ export class MenuNav {
       const ax = this.axis(0), ay = this.axis(1);
       if (Math.max(Math.abs(ax), Math.abs(ay)) > 0.55) {
         setDevice('pad');
-        if (Math.abs(ay) >= Math.abs(ax)) dy = Math.sign(ay); else dx = Math.sign(ax);
+        // on a selector, only a clearly sideways push changes it — anything near vertical moves on (easy to leave)
+        const sideways = this.cur?.dataset.navx !== undefined ? Math.abs(ax) > Math.abs(ay) * 1.6 : Math.abs(ax) > Math.abs(ay);
+        if (!sideways) dy = Math.sign(ay); else dx = Math.sign(ax);
         mag = Math.max(Math.abs(ax), Math.abs(ay));
       }
     }
