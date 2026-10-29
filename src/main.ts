@@ -12,6 +12,7 @@ import { OnlineScreen } from './ui/online';
 import { bladeDesignerScreen } from './ui/bladeDesigner';
 import { courseDesignerScreen } from './ui/courseDesigner';
 import { trackStudioScreen } from './ui/trackStudio';
+import { musicStudioScreen } from './ui/musicStudio';
 import { updateBackdrop, resizeBackdrop, setBackdropVisible } from './ui/backdrop';
 
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -31,6 +32,7 @@ const factories: Record<ScreenName, () => Screen> = {
   blades: () => bladeDesignerScreen,
   courses: () => courseDesignerScreen,
   tracks: () => trackStudioScreen,
+  music: () => musicStudioScreen,
 };
 const NO_BACKDROP = new Set<ScreenName>(['match', 'blades', 'courses', 'tracks']);
 

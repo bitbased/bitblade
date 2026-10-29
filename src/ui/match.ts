@@ -117,6 +117,7 @@ export class MatchScreen implements Screen {
         });
       }
     }
+    app.sfx.useMusic('game', cfg.arena);
     app.sfx.music(true);
   }
 

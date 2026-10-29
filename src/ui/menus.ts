@@ -1,5 +1,6 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
+import { allSongs, musicPrefs, saveMusicPrefs } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
@@ -24,6 +25,7 @@ abstract class Base implements Screen {
   initialFocus = 0;
   mount(app: App, arg?: unknown) {
     this.app = app;
+    app.sfx.useMusic('menu');
     setBackdropVisible(this.backdrop, app.canvas);
     if (!(this instanceof Results)) unpinBackdrop();
     this.el = this.build(arg);
@@ -76,6 +78,7 @@ export class MainMenu extends Base {
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
         item('TRACK STUDIO', 'Build race tracks and track adventures from segments', () => this.app.go('tracks')),
+        item('MUSIC STUDIO', 'Make chip-tune songs for menus, tracks and courses', () => this.app.go('music')),
         item('SETTINGS', 'Audio · graphics · network', () => this.app.go('settings')),
         p || isInstalledApp() ? item('QUIT', p ? 'Exit to desktop' : 'Close BitBlade', () => quitApp(() => this.app.toast('Swipe BitBlade away in your app switcher to close it'))) : null,
       ),
@@ -210,6 +213,11 @@ export class SettingsScreen extends Base {
       el.classList.toggle('on', get());
       return el;
     };
+    const musicPick = (label: string, key: 'menu' | 'game', extra: [string, string][]) => {
+      const opts: [string, string][] = [...extra, ...allSongs().map((s) => [s.id, `♪ ${s.name}${s.custom ? '' : ' ★'}`] as [string, string])];
+      const se = h<HTMLSelectElement>('select.nav', { onchange: () => { musicPrefs[key] = se.value; saveMusicPrefs(); if (key === 'menu') sfx.useMusic('menu'); } }, ...opts.map(([v, t]) => h('option', { value: v, selected: musicPrefs[key] === v }, t)));
+      return h('div.field', null, h('label', null, label), se);
+    };
     const relay = h<HTMLInputElement>('input', { type: 'url', placeholder: 'https://bitblade.<you>.workers.dev', value: cloudRelayUrl() });
     relay.addEventListener('change', () => { try { localStorage.setItem('bitblade.cloudRelay', relay.value.trim()); } catch { /* ignore */ } });
     const p = getPlatform();
@@ -218,6 +226,8 @@ export class SettingsScreen extends Base {
       h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
         slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }),
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
+        musicPick('MENU MUSIC', 'menu', [['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
+        musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),
         toggle('TRAJECTORY PREDICTION', () => settings.trajectories, (v) => { settings.trajectories = v; settings.save(); }),
         toggle('AUTO RESOLUTION (keeps FPS up)', () => settings.adaptive, (v) => { settings.adaptive = v; settings.save(); }),

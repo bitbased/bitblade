@@ -10,6 +10,7 @@ import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { buildRibbon, getRenderer } from '../game/render';
 import { COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
 import { testRide } from './testRide';
+import { allSongs, songById } from '../game/music';
 import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
 import { sampleTrack, type TrackSamples } from '../game/track';
 import { icon } from './icons';
@@ -603,6 +604,9 @@ class TrackStudio {
         h('button.ts-segbtn.nav' + (c.closed ? '.on' : ''), { onclick: () => this.setClosed(true), title: 'Closed loop: Grand Prix laps' }, 'RACE LOOP'),
         h('button.ts-segbtn.nav' + (!c.closed ? '.on' : ''), { onclick: () => this.setClosed(false), title: 'Open: start → goal with checkpoints (Blade Quest)' }, 'ADVENTURE')),
       h('div.ts-grid', null, num('ROAD WIDTH m', c.width, 6, 20, 0.5, (v) => { c.width = v; }, 'Default width (points can override it)'), h('div.ts-field', null, h('label', null, 'THEME'), theme)),
+      h('div.ts-field', null, h('label', null, 'MUSIC'), h<HTMLSelectElement>('select', {
+        onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; c.song = v || undefined; this.persist(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
+      }, h('option', { value: '' }, 'Auto (a fitting preset)'), ...allSongs().map((s) => h('option', { value: s.id, selected: c.song === s.id }, `♪ ${s.name}${s.custom ? '' : ' ★'}`)))),
       h('div.ts-row', null,
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 0.9, z * 0.9]), title: 'Shrink the whole track 10%' }, 'Scale −'),
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 1.1, z * 1.1]), title: 'Grow the whole track 10%' }, 'Scale +'),

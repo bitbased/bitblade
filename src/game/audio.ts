@@ -1,4 +1,5 @@
-// Procedural WebAudio sound effects + simple synth music loop. No asset files needed.
+// Procedural WebAudio sound effects + chip-tune songs (see music.ts). No asset files needed.
+import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, PRESET_SONGS, type Song } from './music';
 
 export type SfxName = 'tick' | 'select' | 'back' | 'clash' | 'bigclash' | 'land' | 'launch' | 'count' | 'go' | 'finish' | 'burst' | 'pickup' | 'item' | 'shock' | 'dash' | 'jump' | 'special' | 'crystal' | 'gem' | 'hazard' | 'win' | 'grind';
 
@@ -9,11 +10,12 @@ export class Sfx {
   volume = 0.7;
   musicVolume = 0.35;
   private noiseBuf: AudioBuffer | null = null;
-  private musicTimer = 0;
-  private nextBeat = 0;
   private pump: ReturnType<typeof setInterval> | null = null;
-  private musicStep = 0;
   private musicOn = false;
+  /** the song sequencer (created with the audio context) */
+  player: SongPlayer | null = null;
+  private wanted: Song | null = null;
+  private cycleLoops = 0;
   private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
 
   constructor() {
@@ -48,6 +50,8 @@ export class Sfx {
       this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = this.noiseBuf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.player = new SongPlayer(this.ctx, this.musicGain, this.noiseBuf);
+      if (this.wanted) this.player.play(this.wanted);
     } catch { this.ctx = null; }
     return this.ctx;
   }
@@ -141,49 +145,40 @@ export class Sfx {
 
   music(on: boolean) { this.musicOn = on; }
 
+  /** play a specific song (Music Studio preview); restart=false keeps going if it's already this song */
+  playSong(song: Song | null, restart = true) {
+    this.wanted = song;
+    this.cycleLoops = 0;
+    if (this.player) { this.player.onLoop = null; this.player.solo = null; this.player.play(song, restart); }
+  }
+
+  /**
+   * Pick the music for a place (see musicPrefs): menus, or a match on `arena` (its own song when it has one).
+   * Doesn't restart a song that's already playing, so moving between menus is seamless.
+   */
+  useMusic(where: 'menu' | 'game', arena?: { id: string; song?: string }) {
+    const pref = where === 'menu' ? musicPrefs.menu : musicPrefs.game;
+    if (pref === 'off') { this.playSong(null); return; }
+    const random = pref === 'random';
+    let song: Song | null;
+    if (random) song = this.wanted && this.player?.song ? this.wanted : randomSong();
+    else if (where === 'game' && pref === 'track') song = songById(arena?.song) ?? (arena ? defaultSongFor(arena.id) : PRESET_SONGS[0]);
+    else song = songById(pref) ?? PRESET_SONGS[0];
+    const same = !!song && this.wanted?.id === song.id;
+    this.playSong(song, !same);
+    if (random && this.player) {
+      // random: a new song every couple of times round
+      this.player.onLoop = () => { if (++this.cycleLoops >= 2) { this.cycleLoops = 0; const n = randomSong(this.wanted?.id); this.wanted = n; this.player!.play(n); } };
+    }
+  }
+
   /**
    * Music is scheduled on the audio clock with a lookahead, so a slow frame never delays the beat: every call
    * (each frame, plus a timer in case frames stall) queues all steps due in the next ~0.4s at exact times.
    */
   update(_dt = 0) {
     if (!this.pump && typeof setInterval !== 'undefined') this.pump = setInterval(() => this.update(), 100);
-    if (!this.musicOn || !this.ctx || this.ctx.state !== 'running' || this.musicVolume <= 0) { this.nextBeat = 0; return; }
-    const c = this.ctx;
-    const stepLen = 60 / 118 / 2;
-    if (this.nextBeat < c.currentTime) this.nextBeat = c.currentTime + 0.05; // first start, or resuming after a long stall
-    while (this.nextBeat < c.currentTime + 0.4) { this.musicNote(this.nextBeat); this.nextBeat += stepLen; }
-  }
-
-  private musicNote(t: number) {
-    const c = this.ctx!;
-    const roots = [45, 45, 41, 43];
-    const bar = Math.floor(this.musicStep / 8) % 4;
-    const root = roots[bar];
-    const arp = [0, 7, 12, 15, 12, 7, 10, 7];
-    const midi = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
-    const note = (n: number, dur: number, type: OscillatorType, vol: number) => {
-      const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
-      o.type = type; o.frequency.value = midi(n);
-      f.type = 'lowpass'; f.frequency.value = 1800;
-      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(f).connect(g).connect(this.musicGain!);
-      o.start(t); o.stop(t + dur + 0.05);
-    };
-    note(root + 24 + arp[this.musicStep % 8], 0.22, 'sawtooth', 0.05);
-    if (this.musicStep % 2 === 0) note(root, 0.3, 'square', 0.06);
-    if (this.musicStep % 4 === 0) {
-      // kick
-      const o = c.createOscillator(), g = c.createGain();
-      o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.15);
-      g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-      o.connect(g).connect(this.musicGain!); o.start(t); o.stop(t + 0.25);
-    }
-    if (this.musicStep % 4 === 2) {
-      const s = c.createBufferSource(); s.buffer = this.noiseBuf;
-      const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000;
-      const g = c.createGain(); g.gain.setValueAtTime(0.06, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
-      s.connect(f).connect(g).connect(this.musicGain!); s.start(t); s.stop(t + 0.1);
-    }
-    this.musicStep++;
+    if (!this.musicOn || !this.ctx || this.ctx.state !== 'running' || this.musicVolume <= 0 || !this.player) return;
+    this.player.schedule();
   }
 }

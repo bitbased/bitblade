@@ -3,6 +3,7 @@
 // auto-orienting walls, drag-to-aim/size markers, brush + rectangle fill, mirror symmetry, templates.
 import * as THREE from 'three';
 import { testRide } from './testRide';
+import { allSongs, songById } from '../game/music';
 import { PadCursor } from './padCursor';
 import './courseDesigner.css';
 import { h, type App, type Screen } from './app';
@@ -455,6 +456,9 @@ class CourseEditor {
       h('div.cd-sub', null, 'THIS COURSE'),
       name, desc,
       h('div.cd-row', null, h('label', null, 'Theme'), theme),
+      h('div.cd-row', null, h('label', null, 'Music'), h<HTMLSelectElement>('select.cd-input', {
+        onchange: (e: Event) => { if (!this.ensureEditable()) return; const v = (e.target as HTMLSelectElement).value; this.def.song = v || undefined; this.scheduleSave(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
+      }, h('option', { value: '' }, 'Auto (a fitting preset)'), ...allSongs().map((s) => h('option', { value: s.id, selected: this.def?.song === s.id }, `♪ ${s.name}${s.custom ? '' : ' ★'}`)))),
       h('div.cd-row', null,
         h('button.btn', { onclick: () => this.duplicate() }, 'Duplicate'),
         del),

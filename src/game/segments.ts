@@ -155,7 +155,7 @@ export function compileCourse(c: SegCourse): CompiledCourse {
   }
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < S.n; i++) { lo = Math.min(lo, S.y[i]); hi = Math.max(hi, S.y[i]); }
-  const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers };
+  const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers, song: (c as { song?: string }).song };
   (arena as ArenaDef & { segCourse?: SegCourse }).segCourse = c;
   return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1) };
 }
@@ -194,6 +194,8 @@ export interface NodeCourse {
   id: string; name: string; desc: string; theme: Theme; width: number;
   closed: boolean;
   nodes: TrackNode[];
+  /** Music Studio song id */
+  song?: string;
   /** spans[k] runs from node k to node k+1 (and, when closed, the last runs back to node 0) */
   spans: Span[];
 }
@@ -311,7 +313,7 @@ export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse 
   }
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < S.n; i++) { lo = Math.min(lo, S.y[i]); hi = Math.max(hi, S.y[i]); }
-  const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers };
+  const arena: ArenaDef = { id: c.id, name: c.name, desc: c.desc, theme: c.theme, track, markers, song: (c as { song?: string }).song };
   return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1), spots };
 }
 

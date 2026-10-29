@@ -116,6 +116,7 @@ export class LobbyScreen implements Screen {
 
   mount(app: App, arg?: unknown) {
     this.app = app;
+    app.sfx.useMusic('menu');
     setBackdropVisible(true, app.canvas);
     // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
     // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)

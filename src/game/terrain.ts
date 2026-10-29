@@ -48,6 +48,8 @@ export interface ArenaDef {
   track?: TrackDef;
   markers: Marker[];
   custom?: boolean;
+  /** Music Studio song id for this arena / course / track (else a fitting preset) */
+  song?: string;
 }
 
 export const VOID = -1000;
