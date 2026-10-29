@@ -865,6 +865,9 @@ export class GameView {
       const lx = fx * ca - fy * sa, lz = -(fx * sa + fy * ca);
       let h = this.terrain.height(cx + lx, cz + lz);
       if (h <= VOID) h = y0;
+      // follow curves and slopes, but not walls or cliff drops: beyond ~35° the ring stays level with the centre
+      const lim = Math.hypot(lx, lz) * 0.7 + 0.05;
+      if (Math.abs(h - y0) > lim) h = y0;
       pos.setXYZ(i, lx, h - y0 + lift, lz);
     }
     pos.needsUpdate = true;
