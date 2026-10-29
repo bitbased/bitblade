@@ -408,6 +408,17 @@ function trackArena(id: string, name: string, desc: string, theme: Theme, track:
   }
   // obstacles: positions are relative to the road so they always sit on the ribbon
   const half = track.width / 2;
+  // every track gets spin pads in the edge lanes (or the pipe floor), clear of boosts, item rows and jumps
+  const havePads = obstacles.filter((o) => o.kind === 'spinpad').length;
+  if (havePads < 3) {
+    const busy = [...track.boosts, ...track.items, ...track.gaps.flat(), ...obstacles.map((o) => o.f)];
+    const near = (f: number) => busy.some((b) => Math.min(Math.abs(b - f), 1 - Math.abs(b - f)) < 0.035);
+    [0.2, 0.52, 0.84].slice(0, 3 - havePads).forEach((f0, k) => {
+      let f = f0;
+      for (let n = 0; n < 12 && near(f); n++) f = (f + 0.02) % 1;
+      obstacles = [...obstacles, { f, kind: 'spinpad', lat: track.profile === 'pipe' ? 0 : k % 2 ? -0.55 : 0.55, size: 1.4 }];
+    });
+  }
   for (const o of obstacles) {
     const i = at(o.f);
     const lat = (o.lat ?? 0) * half;

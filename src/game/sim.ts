@@ -1019,6 +1019,14 @@ export class Sim {
       }
       if (t.off > 0) t.off = 0;
       t.prog = ns.i;
+      // edge riding: carving the outer lane / rail line at speed rips spin back up (sparks fly)
+      {
+        const sp = Math.hypot(t.vx, t.vz), edge = ns.d / (S.width / 2);
+        if (t.grounded && edge > 0.62 && edge < 1.15 && sp > 7 && t.spin < 1) {
+          t.spin = Math.min(1, t.spin + (0.06 + Math.min(0.05, (sp - 7) * 0.004)) / 120);
+          if (Math.random() < 0.15) this.ev({ k: 'grind', x: t.x, y: t.y, z: t.z, id: t.id });
+        }
+      }
       const q = Math.floor((t.prog / S.n) * 4);
       if (q === t.cp + 1) t.cp = q;
       if (prev > S.n * 0.85 && t.prog < S.n * 0.15) {

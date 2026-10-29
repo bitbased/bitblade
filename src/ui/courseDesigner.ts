@@ -2,6 +2,7 @@
 // Tools: Paint · Level · Erase · Place · Select · Eyedropper. Live ghost preview of the exact piece geometry,
 // auto-orienting walls, drag-to-aim/size markers, brush + rectangle fill, mirror symmetry, templates.
 import * as THREE from 'three';
+import { PadCursor } from './padCursor';
 import './courseDesigner.css';
 import { h, type App, type Screen } from './app';
 import { icon } from './icons';
@@ -252,6 +253,8 @@ class CourseEditor {
   undo: string[] = [];
   redo: string[] = [];
   yaw = 0; pitch = 0.95; dist = 40;
+  pad: PadCursor | null = null;
+  padHint: HTMLElement | null = null;
   target = new THREE.Vector3();
   time = 0;
   rebuildT = -1;
@@ -289,6 +292,9 @@ class CourseEditor {
 
     this.custom = loadCustomArenas().filter((a) => a.course);
     this.root = this.buildDom();
+    this.pad = new PadCursor(app, this.root);
+    this.padHint = h('div.cd-padhint', null, ...['Ⓐ use tool / click', 'Ⓧ erase', 'Ⓑ back', 'Ⓨ courses', 'LB RB rotate', '✚ ◀▶ tool · ▲▼ level', 'LT RT zoom', 'R-stick orbit', 'L3 frame', 'SELECT undo', 'START test'].map((t) => h('span', null, t)));
+    this.root.append(this.padHint);
     app.root.appendChild(this.root);
     const first = this.custom[0] ?? BUILTIN_ARENAS.find((a) => a.course)!;
     this.select(first);
@@ -1310,7 +1316,7 @@ class CourseEditor {
   }
 
   onDown(e: PointerEvent) {
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* synthetic (gamepad cursor) pointer */ }
     this.mouse = { x: e.clientX, y: e.clientY };
     this.refreshHover(e);
     if (e.button === 2 || (e.button === 0 && e.altKey)) { this.rightDown = { x: e.clientX, y: e.clientY, moved: false }; return; }
@@ -1617,8 +1623,39 @@ class CourseEditor {
     if (px || py) this.pan(px, py);
   }
 
+  /** controller: cursor + tool shortcuts + camera (see the hint strip) */
+  padControls(dt: number) {
+    const pc = this.pad;
+    if (!pc) return;
+    const using = pc.update(dt);
+    this.padHint?.classList.toggle('on', using);
+    if (!using) return;
+    if (pc.edge(1)) this.app.input.pressed.add('Escape');
+    if (pc.edge(3)) this.toggleDrawer();
+    if (pc.edge(4) || pc.edge(5)) { const d = pc.edge(4) ? -1 : 1; if (this.tool === 'select') this.rotateSelected(d); else this.rotatePaint(d); }
+    if (pc.edge(12)) this.setPaintLevel(this.paintLevel + 1);
+    if (pc.edge(13)) this.setPaintLevel(this.paintLevel - 1);
+    if (pc.edge(14) || pc.edge(15)) { const i = TOOLS.findIndex((t) => t.id === this.tool); this.setTool(TOOLS[(i + (pc.edge(15) ? 1 : -1) + TOOLS.length) % TOOLS.length].id); this.app.sfx.play('tick'); }
+    if (pc.edge(8)) this.doUndo();
+    if (pc.edge(9)) this.testRide();
+    if (pc.edge(10)) this.frame();
+    const inp = this.app.input;
+    let rx = 0, ry = 0, lt = 0, rt = 0;
+    for (let p = 0; p < inp.padAxes.length; p++) {
+      const a = inp.padAxes[p] ?? [];
+      if (Math.abs(a[2] ?? 0) > Math.abs(rx)) rx = a[2] ?? 0;
+      if (Math.abs(a[3] ?? 0) > Math.abs(ry)) ry = a[3] ?? 0;
+    }
+    if (pc.btn(6)) lt = 1;
+    if (pc.btn(7)) rt = 1;
+    if (Math.abs(rx) > 0.15) this.yaw -= rx * 2.2 * dt;
+    if (Math.abs(ry) > 0.15) this.pitch = Math.max(0.25, Math.min(1.45, this.pitch - ry * 1.6 * dt));
+    if (lt || rt) this.dist = Math.max(6, Math.min(180, this.dist * Math.pow(1.9, (lt - rt) * dt)));
+  }
+
   update(dt: number) {
     this.time += dt;
+    this.padControls(dt);
     this.keys();
     if (this.rebuildT > 0) { this.rebuildT -= dt; if (this.rebuildT <= 0) this.rebuildTerrain(); }
     if (this.saveT > 0) { this.saveT -= dt; if (this.saveT <= 0) this.persist(); }

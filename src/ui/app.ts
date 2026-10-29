@@ -44,62 +44,7 @@ export function h<T extends HTMLElement = HTMLElement>(sel: string, props: Recor
   return el as T;
 }
 
-/**
- * Gamepad/keyboard focus navigation for menus: arrows/dpad/stick move between `.nav` elements,
- * A/Enter/Space activates, B/Escape goes back. Call update() each frame.
- */
-export class MenuNav {
-  idx = 0;
-  private cool = 0;
-  constructor(private app: App, private container: HTMLElement, private onBack?: () => void) {}
-  items() { return Array.from(this.container.querySelectorAll<HTMLElement>('.nav')).filter((e) => e.offsetParent !== null); }
-  focus(i: number) {
-    const it = this.items();
-    if (!it.length) return;
-    this.idx = (i + it.length) % it.length;
-    it.forEach((e, k) => e.classList.toggle('focus', k === this.idx));
-    it[this.idx].scrollIntoView({ block: 'nearest' });
-  }
-  update(dt: number) {
-    const inp = this.app.input;
-    this.cool -= dt;
-    const it = this.items();
-    if (!it.length) return;
-    if (!it.some((e) => e.classList.contains('focus'))) this.focus(this.idx);
-    let dy = 0, dx = 0;
-    if (inp.pressed.has('ArrowDown') || inp.pressed.has('KeyS')) dy = 1;
-    if (inp.pressed.has('ArrowUp') || inp.pressed.has('KeyW')) dy = -1;
-    if (inp.pressed.has('ArrowRight') || inp.pressed.has('KeyD')) dx = 1;
-    if (inp.pressed.has('ArrowLeft') || inp.pressed.has('KeyA')) dx = -1;
-    let confirm = inp.pressed.has('Enter') || inp.pressed.has('Space');
-    let back = inp.pressed.has('Escape') || inp.pressed.has('Backspace');
-    for (let p = 0; p < inp.padNow.length; p++) {
-      const now = inp.padNow[p] ?? [], prev = inp.padPrev[p] ?? [];
-      const e = (b: number) => now[b] && !prev[b];
-      if (e(13)) dy = 1;
-      if (e(12)) dy = -1;
-      if (e(15)) dx = 1;
-      if (e(14)) dx = -1;
-      if (e(0)) confirm = true;
-      if (e(1)) back = true;
-      const ax = inp.padAxes[p] ?? [];
-      if (this.cool <= 0) {
-        if ((ax[1] ?? 0) > 0.6) { dy = 1; this.cool = 0.22; }
-        else if ((ax[1] ?? 0) < -0.6) { dy = -1; this.cool = 0.22; }
-        else if ((ax[0] ?? 0) > 0.6) { dx = 1; this.cool = 0.22; }
-        else if ((ax[0] ?? 0) < -0.6) { dx = -1; this.cool = 0.22; }
-      }
-    }
-    const cur = it[this.idx];
-    if (dx && cur?.dataset.navx !== undefined) {
-      cur.dispatchEvent(new CustomEvent('navx', { detail: dx }));
-      this.app.sfx.play('tick');
-    } else if (dx) dy = dx;
-    if (dy) { this.focus(this.idx + dy); this.app.sfx.play('tick'); }
-    if (confirm && cur) { cur.click(); }
-    if (back && this.onBack) { this.onBack(); this.app.sfx.play('back'); }
-  }
-}
+export { MenuNav } from './nav';
 
 const confirms = new Map<string, number>();
 /** Destructive actions need a second press within 2.5s. Returns true when confirmed. */

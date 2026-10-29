@@ -814,11 +814,15 @@ export class GameView {
     }
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
     // spin pads: swirl turns; flares up while someone is re-spinning on it
+    // when one of your blades is low on spin, every pad pulses like a beacon so you can find one
+    const beacon = this.focus.some((i) => s.tops[i]?.alive && s.tops[i].spin < 0.4 && s.phase === 'battle');
     for (const p of this.spinPads) {
       const busy = s.tops.some((t) => t.alive && t.spin < 1 && Math.hypot(t.x - p.x, t.z - p.z) < p.r);
       p.swirl.rotation.y += dt * (busy ? 9 : 2.5);
       const bm = p.beam.material as THREE.MeshBasicMaterial;
-      bm.opacity += ((busy ? 0.32 : 0.08 + 0.04 * Math.sin(this.time * 3 + p.x)) - bm.opacity) * Math.min(1, dt * 6);
+      bm.opacity += ((busy ? 0.32 : beacon ? 0.22 + 0.16 * Math.sin(this.time * 7) : 0.08 + 0.04 * Math.sin(this.time * 3 + p.x)) - bm.opacity) * Math.min(1, dt * 6);
+      p.beam.scale.y = beacon && !busy ? 1.8 + 0.4 * Math.sin(this.time * 7) : 1;
+      p.beam.position.y = 1.1 * p.beam.scale.y;
       p.ring.scale.setScalar(busy ? 1 + 0.06 * Math.sin(this.time * 18) : 1);
     }
     // boxes

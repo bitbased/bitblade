@@ -4,7 +4,7 @@ import { Sfx } from './game/audio';
 import { getRenderer } from './game/render';
 import { perf } from './core/settings';
 import { enhanceInputs } from './ui/widgets';
-import { h, type App, type Screen, type ScreenName } from './ui/app';
+import { h, MenuNav, type App, type Screen, type ScreenName } from './ui/app';
 import { TitleScreen, MainMenu, ModeSelect, Results, SettingsScreen } from './ui/menus';
 import { LobbyScreen } from './ui/lobby';
 import { MatchScreen } from './ui/match';
@@ -88,6 +88,7 @@ function frame(now: number) {
   if (!NO_BACKDROP.has(currentName)) updateBackdrop(dt);
   try { current?.update?.(dt); } catch (e) { console.error(e); }
   app.sfx.update(dt);
+  MenuNav.endFrame();
   app.input.endFrame();
   requestAnimationFrame(frame);
 }

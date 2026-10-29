@@ -15,7 +15,7 @@ export class Hud {
   ann = h('div.announce');
   hint = h('div.launch-hint');
   wrong = h('div.wrong-way', null, 'WRONG WAY');
-  cardEls: { el: HTMLElement; spin: HTMLElement; burst: HTMLElement; sp: HTMLElement; spBar: HTMLElement; item: HTMLElement; meta: HTMLElement; rpm: HTMLElement }[] = [];
+  cardEls: { el: HTMLElement; spin: HTMLElement; burst: HTMLElement; sp: HTMLElement; spBar: HTMLElement; item: HTMLElement; meta: HTMLElement; rpm: HTMLElement; tip: HTMLElement; low: boolean }[] = [];
   scoreEls: HTMLElement[] = [];
   annQueue: { text: string; sub?: string; color?: string }[] = [];
   annT = 0;
@@ -49,12 +49,13 @@ export class Hud {
       const item = h('div.item');
       const meta = h('div.meta');
       const rpm = h('span.rpm');
+      const tip = h('div.pc-tip');
       const el = h('div.pcard', { style: { '--c': c } as unknown as Record<string, string> },
         h('div.nm', null, `P${i + 1} ${p.name}`, rpm),
-        h('div.bar', null, spin), h('div.bar.burst.thin', null, burst), spBar, meta, item);
+        h('div.bar', null, spin), h('div.bar.burst.thin', null, burst), spBar, meta, item, tip);
       el.style.setProperty('--c', c);
       this.cards.append(el);
-      this.cardEls.push({ el, spin, burst, sp: spI, spBar, item, meta, rpm });
+      this.cardEls.push({ el, spin, burst, sp: spI, spBar, item, meta, rpm, tip, low: false });
     });
   }
 
@@ -165,6 +166,34 @@ export class Hud {
       if (t.special >= 1) bits.push('SPECIAL READY');
       const html = bits.join(' · ');
       if (c.meta.dataset.h !== html) { c.meta.dataset.h = html; c.meta.innerHTML = html; }
+    });
+  }
+
+  /**
+   * Low-spin coaching for local players: under ~35% spin a tip pops above their card telling them how to
+   * spin back up here (use a held Spin Surge, carve the track edge, park on a green pad, wall-ride, grab boxes).
+   */
+  tips(s: GameState, local: number[]) {
+    const ITEM_KEY: Record<string, string> = { kb1: 'E', kb2: '/', mouse: 'E', pad: 'X', touch: 'ITEM' };
+    const race = this.cfg.mode === 'race';
+    const pads = this.cfg.arena.markers.some((m) => m.kind === 'spinpad');
+    s.tops.forEach((t, i) => {
+      const c = this.cardEls[i];
+      if (!c) return;
+      // hysteresis: pops in under 35%, clears above 50%
+      if (!local.includes(i) || !t.alive || s.phase !== 'battle') c.low = false;
+      else if (t.spin < 0.35) c.low = true;
+      else if (t.spin > 0.5) c.low = false;
+      let html = '';
+      if (c.low) {
+        const key = ITEM_KEY[this.cfg.players[i]?.ctrl.type ?? ''] ?? 'ITEM';
+        const crit = t.spin < 0.18;
+        if (t.item === 'surge' && t.roll <= 0) html = `<b>USE SPIN SURGE</b> <i class="k">${key}</i>`;
+        else if (race) html = `<b>${crit ? 'SPIN CRITICAL' : 'LOW SPIN'}</b> carve the track edge · roll over a <span class="g-pad">green pad</span> · grab item boxes`;
+        else html = `<b>${crit ? 'SPIN CRITICAL' : 'LOW SPIN'}</b> ${pads ? 'park on a <span class="g-pad">green spin pad</span> · ' : ''}wall-ride fast · grab item boxes`;
+        if (crit) c.tip.classList.add('crit'); else c.tip.classList.remove('crit');
+      }
+      if (c.tip.dataset.h !== html) { c.tip.dataset.h = html; c.tip.innerHTML = html; c.tip.classList.toggle('on', !!html); }
     });
   }
 

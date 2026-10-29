@@ -213,6 +213,7 @@ export class MatchScreen implements Screen {
     const launchPower = 0.5 - 0.5 * Math.cos(renderState.phaseT * 4.2);
     this.view.update(renderState, dt, launchPower);
     this.hud.update(renderState, dt);
+    this.hud.tips(renderState, this.view.focus);
     const TS = this.view.terrain.track;
     if (TS && renderState.phase === 'battle') {
       const isWrong = (t: (typeof renderState.tops)[number]) => t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog] < -2.5;

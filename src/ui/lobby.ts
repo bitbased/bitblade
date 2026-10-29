@@ -1,5 +1,6 @@
 // Local + online-host lobby: press-to-join slots, blades, teams, arena, rules, invite codes.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
+import { glyph } from './nav';
 import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
 import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
@@ -92,6 +93,7 @@ export class LobbyScreen implements Screen {
   dirty = true;
   iconT = 0;
   unsub: (() => void) | null = null;
+  padCool = new Map<number, number>();
   /** how to open the room when hosting (name / public / persistent code) — set by the online hub */
   roomOpts: RoomOpts = { name: '', public: false, persistent: false };
 
@@ -187,11 +189,13 @@ export class LobbyScreen implements Screen {
       return el;
     };
     const modeSel = selector('MODE', m.name.toUpperCase(), m.tag, (d) => this.stepMode(d));
+    modeSel.dataset.trigger = 'mode';
     const order = this.arenaOrder();
     setBackdropArena(findArena(L.arenaId), L.mode);
     const sz = arenaSize(arena);
     const arenaSel = selector('ARENA', arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`, (d) => this.stepArena(d));
     arenaSel.style.flex = '1';
+    arenaSel.dataset.shoulder = 'arena';
     const sizeSel = selector('SIZE', L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`, (d) => this.stepSize(d));
     sizeSel.style.minWidth = '200px';
     arenaSel.style.setProperty('border-color', arena.theme.glow);
@@ -382,6 +386,7 @@ export class LobbyScreen implements Screen {
         h('div.pnum', null, `P${i + 1}`),
         this.isTeamMode() ? h('div.team-tag', { onclick: () => { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } }, s.team === 0 ? 'RED' : 'BLUE') : null,
         cv, name, bladeRow, this.statLine(d), ctrl,
+        this.isPersonalPad(i) ? h('div.slot-pad', { html: `<i class="g stick">◀▶</i> blade ${'<i class="g g-y">Y</i>'} random${this.isTeamMode() ? ' <i class="g g-x">X</i> team' : ''} <i class="g g-b">B</i> leave` }) : null,
         L.slots.length > 1 ? h('div.x', { onclick: () => this.removeSlot(i), title: 'Remove' }, icon('close')) : null);
       card.style.setProperty('--slot', this.slotColor(s, i));
       card.style.animationDelay = `${i * 0.04}s`;
@@ -402,6 +407,58 @@ export class LobbyScreen implements Screen {
         h('b', null, info.short),
         h('span.ssbar', null, h('i', { style: { width: `${st.points[k] * 10}%`, background: info.color } })));
     }));
+  }
+
+  /** pads that joined as P2+ steer their own slot; P1's device (or keyboard) drives the menu */
+  isPersonalPad(i: number) {
+    const s = L.slots[i];
+    return i > 0 && s?.ctrl.type === 'pad';
+  }
+
+  cycleSlotBlade(i: number, dir: number, random = false) {
+    const s = L.slots[i];
+    const blades = allBlades();
+    const k = blades.findIndex((b) => b.id === s.bladeId);
+    s.bladeId = random ? blades[Math.floor(Math.random() * blades.length)].id : blades[(k + dir + blades.length) % blades.length].id;
+    s.blade = undefined;
+    this.renderSlots();
+    this.dirty = true;
+    this.app.sfx.play('tick');
+    this.flashSlot(i);
+  }
+
+  flashSlot(i: number) {
+    const el = this.slotsEl.children[i] as HTMLElement | undefined;
+    if (!el) return;
+    el.classList.remove('slot-bump');
+    void el.offsetWidth;
+    el.classList.add('slot-bump');
+  }
+
+  /** each joined pad (P2+) changes its own blade / team or leaves, without touching the shared menu */
+  personalPads(dt: number) {
+    const inp = this.app.input;
+    const mine = new Set<number>();
+    L.slots.forEach((s, i) => {
+      if (!this.isPersonalPad(i) || s.ctrl.type !== 'pad') return;
+      const p = s.ctrl.index;
+      mine.add(p);
+      const now = inp.padNow[p] ?? [], prev = inp.padPrev[p] ?? [];
+      const e = (b: number) => now[b] && !prev[b];
+      const ax = inp.padAxes[p]?.[0] ?? 0;
+      let cool = (this.padCool.get(p) ?? 0) - dt;
+      let dir = e(15) ? 1 : e(14) ? -1 : 0;
+      if (!dir && Math.abs(ax) > 0.6 && cool <= 0) { dir = Math.sign(ax); cool = 0.28; }
+      if (Math.abs(ax) < 0.3) cool = 0;
+      this.padCool.set(p, cool);
+      if (dir) this.cycleSlotBlade(i, dir);
+      else if (e(3)) this.cycleSlotBlade(i, 0, true);
+      else if (e(2) && this.isTeamMode()) { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; this.flashSlot(i); this.app.sfx.play('tick'); }
+      else if (e(1)) { this.app.toast(`${s.name} left`); this.removeSlot(i); this.fillCpus(); this.renderSlots(); }
+      else if (e(9)) this.start();
+    });
+    // those pads don't also move the shared menu
+    this.nav.ignorePads = mine;
   }
 
   removeSlot(i: number) {
@@ -576,6 +633,7 @@ export class LobbyScreen implements Screen {
       const joined = this.join(spec);
       if (joined) return; // swallow the confirm press
     }
+    this.personalPads(dt);
     this.nav.update(dt);
     this.angle += dt * 2.5;
     this.iconT += dt;
