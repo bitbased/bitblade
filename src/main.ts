@@ -67,6 +67,20 @@ const app: App = {
   },
 };
 
+// The phone's back button / back gesture and the browser's Back act like Esc on every screen: we keep one
+// history entry "armed" and turn each pop into an Escape press for whatever screen is showing.
+let armed = false;
+const arm = () => { if (armed) return; try { window.history.pushState({ bitblade: 1 }, ''); armed = true; } catch { /* ignore */ } };
+addEventListener('popstate', () => {
+  armed = false;
+  if (currentName === 'title') return; // back from the title screen leaves the app as usual
+  app.input.pressed.add('Escape');
+  arm();
+});
+// browsers only honour history entries made after a user gesture
+addEventListener('pointerdown', arm, { once: true });
+addEventListener('keydown', arm, { once: true });
+
 addEventListener('resize', () => {
   const { renderer } = getRenderer(canvas);
   renderer.setSize(innerWidth, innerHeight);
@@ -75,7 +89,7 @@ addEventListener('resize', () => {
 });
 
 // deep link: /join/CODE or ?join=CODE  → straight to the online join flow
-const m = location.pathname.match(/\/join\/([A-Za-z0-9]{5})/) || location.search.match(/[?&]join=([^&]+)/);
+const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);
 if (m) app.go('online', { join: location.protocol.startsWith('http') && location.pathname.includes('/join/') ? location.href : decodeURIComponent(m[1]) });
 else app.go('title');
 

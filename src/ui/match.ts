@@ -1,6 +1,7 @@
 // Match screen: runs the sim (local / host) or mirrors snapshots (client), renders, HUD, pause.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { Hud } from './hud';
+import { icon } from './icons';
 import { Sim } from '../game/sim';
 import { GameView } from '../game/render';
 import { Input, TouchControls } from '../input/input';
@@ -61,6 +62,8 @@ export class MatchScreen implements Screen {
     this.wrap = h('div', { style: { position: 'absolute', inset: '0', pointerEvents: 'none' } });
     app.root.append(this.wrap);
     this.hud = new Hud(this.wrap, cfg);
+    // always-reachable pause / menu (touch has no Esc; also handy with a mouse)
+    this.wrap.append(h('button.pause-btn', { 'aria-label': 'Pause', title: 'Pause (Esc / P / START)', onclick: () => { if (!this.ended) this.togglePause(); } }, icon('pause')));
     if (this.view.splits.length > 1) this.hud.split(this.view.focus);
     if (this.arg.host || this.arg.client) {
       const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
@@ -311,7 +314,7 @@ export class MatchScreen implements Screen {
       const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
       this.pauseEl = h('div.pause', null, h('h2', null, online ? 'MENU' : 'PAUSED'),
         online ? h('div.hint', null, `ONLINE ROOM ${code ?? ''} · the match keeps running while this menu is open`) : null,
-        resume, ...buttons, this.hud.controlsHelp());
+        resume, ...buttons, this.hud.controlsHelp(this.view.focus));
       this.wrap.append(this.pauseEl);
       this.pauseNav = new MenuNav(this.app, this.pauseEl);
       this.pauseNav.focus(0);

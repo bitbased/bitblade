@@ -197,8 +197,11 @@ export class Hud {
     });
   }
 
-  controlsHelp() {
-    return h('div.controls-help', null, ...Object.entries(CONTROL_HELP).filter(([k]) => k !== 'cpu' && k !== 'remote').map(([k, v]) => h('div', null, h('span.kbd', null, k.toUpperCase()), ' ', v)));
+  /** only the controls the players in this match are actually using */
+  controlsHelp(local: number[] = []) {
+    const used = new Set<string>(local.map((i) => this.cfg.players[i]?.ctrl.type as string).filter((t) => !!t && t !== 'cpu' && t !== 'remote'));
+    if (!used.size) used.add(document.body.classList.contains('dev-touch') ? 'touch' : 'kb1');
+    return h('div.controls-help', null, ...Object.entries(CONTROL_HELP).filter(([k]) => used.has(k)).map(([k, v]) => h('div', null, h('span.kbd', null, k.toUpperCase()), ' ', v)));
   }
 
   dispose() { this.root.remove(); }

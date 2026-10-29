@@ -475,3 +475,14 @@ body.pad-ps [data-tabs]::before { content: attr(data-psl); } body.pad-ps [data-t
   .nav-hints .g { min-width: 15px; height: 15px; font-size: 8px; margin-right: 2px; }
   .nav-hints .sep { margin: 0 3px; }
 }
+
+/* in-match pause button (touch has no Esc) */
+.pause-btn { position: absolute; top: 12px; right: 12px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: rgba(5, 7, 14, 0.7); border: 1px solid var(--line); color: var(--text); cursor: pointer; pointer-events: auto; z-index: 6; clip-path: polygon(0 0, 100% 0, 100% 100%, 8px 100%, 0 calc(100% - 8px)); opacity: 0.75; }
+.pause-btn:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+.pause-btn .ico { width: 20px; height: 20px; }
+body.dev-touch .pause-btn { width: 48px; height: 48px; opacity: 0.9; }
+.hud.split ~ .pause-btn { top: 50%; right: 50%; transform: translate(50%, -50%) translateY(26px); width: 34px; height: 34px; }
+div:has(> .pause) > .pause-btn { display: none; }
+.pause { z-index: 10; overflow-y: auto; padding: 20px 16px; }
+body.dev-touch .launch-hint { bottom: auto; top: calc(50% + 30px); }
+@media (max-width: 640px) { .pause h2 { font-size: 40px; margin-bottom: 8px; } .pause .btn { max-width: 92vw; } }

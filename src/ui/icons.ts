@@ -43,6 +43,7 @@ export const ICONS: Record<string, IconDef> = {
   lock: { d: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4' },
   dice: { d: 'M4 4h16v16H4zM8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01' },
   close: { d: 'M6 6l12 12M18 6L6 18' },
+  pause: { d: 'M7 5h3.5v14H7zM13.5 5H17v14h-3.5z', fill: true },
   users: { d: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21c0-4 3-6 7-6s7 2 7 6M16 3a4 4 0 0 1 0 8M18 15c2.5.5 4 2.5 4 6' },
   gear: { d: 'M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1' },
   finish: { d: 'M4 22V3M4 3h16v10H4M8 3v10M12 3v10M16 3v10M4 8h16' },
