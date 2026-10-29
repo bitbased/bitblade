@@ -221,6 +221,52 @@ export function randomSong(except?: string) {
 }
 
 // ------------------------------------------------------------------ the synth
+/**
+ * The crusher runs per sample in an AudioWorklet: hold each sample for `hold` samples (sample-rate reduction)
+ * and round it to `bits` bits. The signal is level-matched first (music runs quiet, so rounding the raw mix
+ * left quiet notes to crackle and drop out) and gently saturated, then scaled back.
+ */
+const CRUSH_SRC = `
+class BBCrush extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'hold', defaultValue: 1, minValue: 1, maxValue: 32 }, { name: 'bits', defaultValue: 12, minValue: 2, maxValue: 16 }]; }
+  constructor() { super(); this.n = 0; this.h = [0, 0]; this.env = 0.05; }
+  process(inputs, outputs, p) {
+    const inp = inputs[0], out = outputs[0];
+    if (!inp || !inp.length) return true;
+    const hold = Math.max(1, Math.round(p.hold[0])), q = Math.pow(2, p.bits[0] - 1);
+    const len = out[0].length, chans = out.length;
+    for (let i = 0; i < len; i++) {
+      // follow the loudness, so the bit grid is relative to the music rather than to full scale
+      const a = Math.abs(inp[0][i]);
+      this.env = a > this.env ? this.env + (a - this.env) * 0.01 : this.env + (a - this.env) * 0.0002;
+      const g = 0.6 / Math.max(0.02, this.env);
+      if (this.n <= 0) {
+        for (let c = 0; c < chans; c++) {
+          const x = (inp[c] || inp[0])[i] * g;
+          this.h[c] = (Math.round(Math.tanh(x) * q) / q) / g;
+        }
+        this.n = hold;
+      }
+      this.n--;
+      for (let c = 0; c < chans; c++) out[c][i] = this.h[c];
+    }
+    return true;
+  }
+}
+registerProcessor('bb-crush', BBCrush);
+`;
+const crusherLoads = new WeakMap<AudioContext, Promise<boolean>>();
+function loadCrusher(ctx: AudioContext) {
+  let p = crusherLoads.get(ctx);
+  if (!p) {
+    p = ctx.audioWorklet
+      ? ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([CRUSH_SRC], { type: 'application/javascript' }))).then(() => true, () => false)
+      : Promise.resolve(false);
+    crusherLoads.set(ctx, p);
+  }
+  return p;
+}
+
 /** Plays a Song on the audio clock (look-ahead scheduling: a busy frame never makes the beat stumble). */
 export class SongPlayer {
   song: Song | null = null;
@@ -232,15 +278,25 @@ export class SongPlayer {
   private stepIdx = 0;
   private log: { t: number; part: number; step: number; p: number }[] = [];
   private bus: GainNode;
-  private shaper: WaveShaperNode;
+  private dry: GainNode;
+  private wet: GainNode;
+  private crusher: AudioWorkletNode | null = null;
   private echoIn: GainNode;
   private crunchNow = -1;
   private waves = new Map<string, PeriodicWave>();
 
   constructor(private ctx: AudioContext, out: AudioNode, private noise: AudioBuffer) {
     this.bus = ctx.createGain();
-    this.shaper = ctx.createWaveShaper();
-    this.bus.connect(this.shaper).connect(out);
+    // crunch = a chip-style bit crusher (sample-rate + bit-depth reduction) blended with the clean mix
+    this.dry = ctx.createGain(); this.wet = ctx.createGain(); this.wet.gain.value = 0;
+    this.bus.connect(this.dry).connect(out);
+    this.wet.connect(out);
+    loadCrusher(ctx).then((ok) => {
+      if (!ok) return;
+      this.crusher = new AudioWorkletNode(ctx, 'bb-crush', { outputChannelCount: [2] });
+      this.bus.connect(this.crusher).connect(this.wet);
+      this.crunchNow = -1; // apply the current setting now that it exists
+    });
     // shared echo: a dotted-eighth-ish delay with a darkening feedback loop
     this.echoIn = ctx.createGain();
     const d = ctx.createDelay(2), fb = ctx.createGain(), lp = ctx.createBiquadFilter();
@@ -410,10 +466,13 @@ export class SongPlayer {
 
   private setCrunch(k: number) {
     this.crunchNow = k;
-    if (k <= 0.001) { this.shaper.curve = null; return; }
-    const levels = Math.max(3, Math.round(Math.pow(2, 8 - k * 5.5)));
-    const N = 2048, curve = new Float32Array(N);
-    for (let i = 0; i < N; i++) { const x = (i / (N - 1)) * 2 - 1; curve[i] = Math.round(x * levels) / levels; }
-    this.shaper.curve = curve;
+    const c = this.crusher, t = this.ctx.currentTime;
+    if (!c || k <= 0.001) { this.dry.gain.setTargetAtTime(1, t, 0.02); this.wet.gain.setTargetAtTime(0, t, 0.02); return; }
+    // more crunch: fewer samples per second (grainy, aliased console sound) and fewer bits, more of it in the mix
+    c.parameters.get('hold')!.setValueAtTime(1 + Math.round(k * 14 * (0.4 + 0.6 * k)), t); // 30% → ~16kHz, 100% → ~3kHz
+    c.parameters.get('bits')!.setValueAtTime(10 - k * 6, t);
+    const wet = Math.min(1, 0.35 + k * 0.9);
+    this.wet.gain.setTargetAtTime(wet, t, 0.02);
+    this.dry.gain.setTargetAtTime(1 - wet * 0.85, t, 0.02);
   }
 }
