@@ -451,6 +451,9 @@ export class LobbyScreen implements Screen {
   // -------------------------------------------------------------- online host
   renderOnline() {
     const el = this.onlineEl;
+    // typing a room name: redraw once they're done instead of wiping the field mid-word
+    const typing = el.querySelector<HTMLInputElement>('.room-name');
+    if (typing && document.activeElement === typing) { typing.addEventListener('blur', () => this.renderOnline(), { once: true }); return; }
     el.innerHTML = '';
     if (hostRoom.t) {
       const t = hostRoom.t;

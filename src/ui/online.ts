@@ -178,6 +178,7 @@ export class OnlineScreen implements Screen {
   // -------------------------------------------------------------- my rooms
   renderMyRooms() {
     const el = this.myEl;
+    if (el.querySelector('.rr-rename')) return; // don't wipe a rename in progress (the list refreshes every few seconds)
     el.innerHTML = '';
     const mine = loadMyRooms();
     if (!mine.length) { el.append(h('div.hint', null, 'Tick KEEP ROOM when hosting to save a room with a fixed code and link.')); return; }
@@ -206,6 +207,7 @@ export class OnlineScreen implements Screen {
     const finish = (save: boolean) => {
       if (done) return;
       done = true;
+      inp.remove();
       const v = inp.value.trim();
       if (save && v && v !== r.name) { saveMyRoom({ ...r, name: v }); this.app.toast(`Renamed to ${v}`); }
       this.renderMyRooms();
