@@ -284,6 +284,7 @@ export const THEMES: Record<string, Theme> = {
   toxic: { floor: '#13261a', wall: '#1f4a2a', glow: '#74ff5a', sky1: '#020a05', sky2: '#0b2a14', grid: '#9cff7a' },
   ice: { floor: '#2c6390', wall: '#163a5c', glow: '#7fe6ff', sky1: '#050d1a', sky2: '#1b3a5e', grid: '#bfefff' },
   concrete: { floor: '#4f525b', wall: '#3a3d45', glow: '#ff3db4', sky1: '#0f1018', sky2: '#3a2448', grid: '#c9cbd6' },
+  sunset: { floor: '#3a1f3d', wall: '#5c2a4f', glow: '#ffb347', sky1: '#120617', sky2: '#5a1f3a', grid: '#ff9fd1' },
   tube: { floor: '#1b2a44', wall: '#2c4f7c', glow: '#ff8a1f', sky1: '#04060c', sky2: '#16223d', grid: '#7fa8ff' },
   royal: { floor: '#241433', wall: '#3d1f5c', glow: '#ffcc33', sky1: '#07030d', sky2: '#2a0d3d', grid: '#d6a2ff' },
 };
@@ -570,6 +571,40 @@ BUILTIN_ARENAS.push(
   ]),
 );
 
+/**
+ * Trefoil knot: three lobes, three flat X-crossings, roller-coaster hills in between.
+ * Crossings are found numerically; the road dips to the same height at each one, and rails skip them.
+ */
+function trefoilTrack(): ArenaDef {
+  const Rk = 17, N = 720, CTRL = 54, H = 6.5;
+  const pos = (t: number): [number, number] => [Rk * (Math.sin(t) + 2 * Math.sin(2 * t)), Rk * (Math.cos(t) - 2 * Math.cos(2 * t))];
+  // crossing parameters: pairs far apart along the curve but (almost) touching in space
+  const crossT: number[] = [];
+  for (let i = 0; i < N; i++) for (let j = i + 60; j < N; j++) {
+    if (N - (j - i) < 60) continue;
+    const a = pos((i / N) * Math.PI * 2), b = pos((j / N) * Math.PI * 2);
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.9) for (const k of [i, j]) { const t = (k / N) * Math.PI * 2; if (!crossT.some((c) => Math.abs(c - t) < 0.2)) crossT.push(t); }
+  }
+  const dT = (a: number, b: number) => { const d = Math.abs(a - b) % (Math.PI * 2); return Math.min(d, Math.PI * 2 - d); };
+  const flat = (t: number) => Math.min(1, ...crossT.map((c) => { const x = Math.max(0, Math.min(1, (dT(t, c) - 0.1) / 0.45)); return x * x * (3 - 2 * x); }));
+  const elev = (t: number) => H * flat(t) * (0.55 + 0.45 * Math.sin(t * 3 + 0.6) ** 2);
+  const t0 = crossT.length ? crossT[0] + 0.55 : 0; // start between crossings
+  const pts: [number, number, number][] = [];
+  for (let k = 0; k < CTRL; k++) { const t = t0 + (k / CTRL) * Math.PI * 2; const [x, z] = pos(t); pts.push([x, z, elev(t)]); }
+  // rails everywhere except near crossings (as lap fractions)
+  const rails: [number, number][] = [];
+  let open = -1;
+  for (let k = 0; k <= 200; k++) {
+    const f = k / 200, t = t0 + f * Math.PI * 2;
+    const nearX = crossT.some((c) => dT(t, c) < 0.3);
+    if (!nearX && open < 0) open = f;
+    if ((nearX || k === 200) && open >= 0) { if (f - open > 0.02) rails.push([open, f]); open = -1; }
+  }
+  return trackArena('trefoil', 'Trefoil Twister', 'Three-lobed knot: roller-coaster hills, three flat X-crossings where traffic collides.', THEMES.sunset, {
+    width: 9, pts, rails, gaps: [], boosts: [0.08, 0.41, 0.74], items: [0.2, 0.53, 0.86],
+  });
+}
+
 /** Figure-8 control points: both lobes cross flat at the origin (same height) so racers can T-bone each other. */
 function figure8(rx: number, rz: number, n: number, elev: (t: number) => number, skew = 0): [number, number, number][] {
   const out: [number, number, number][] = [];
@@ -597,14 +632,7 @@ BUILTIN_ARENAS.push(
     boosts: [0.2, 0.7],
     items: [0.1, 0.45, 0.6, 0.95],
   }),
-  trackArena('twin-clash', 'Twin Loop Clash', 'Big lopsided figure-eight: two crossings of traffic, a jump on each lobe, boosts into the X.', THEMES.neon, {
-    width: 9,
-    pts: figure8(74, 42, 18, (t) => 3 * Math.sin(t) ** 2 + 1.2 * Math.sin(t * 3) ** 2, 12),
-    rails: [[0.03, 0.22], [0.26, 0.3], [0.53, 0.72], [0.76, 0.8]], // keep clear of the crossing
-    gaps: [[0.235, 0.243], [0.735, 0.743]],
-    boosts: [0.2, 0.33, 0.7, 0.83],
-    items: [0.12, 0.38, 0.62, 0.88],
-  }),
+  trefoilTrack(),
 );
 
 export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';

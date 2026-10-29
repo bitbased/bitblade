@@ -1002,7 +1002,8 @@ export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | 
   const hl = Math.hypot(hx, hz) || 1;
   hx /= hl; hz /= hl;
   const sp = Math.hypot(lead.vx, lead.vz);
-  if (sp > 4 && lead.alive) {
+  if (lead.off > 0 && sp > 1) { hx = lead.vx / sp; hz = lead.vz / sp; }
+  else if (sp > 4 && lead.alive) {
     const vx = lead.vx / sp, vz = lead.vz / sp;
     if (vx * hx + vz * hz > 0) { const w = Math.min(0.35, (sp - 4) / 30); hx = hx * (1 - w) + vx * w; hz = hz * (1 - w) + vz * w; }
   }

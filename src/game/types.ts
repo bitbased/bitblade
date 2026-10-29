@@ -14,7 +14,7 @@ export const MODES: ModeInfo[] = [
   { id: 'ctf', name: 'Capture the Flag', tag: 'Teams', desc: 'Grab the enemy core and bring it home. Hard hits make carriers drop it.', minPlayers: 2, maxPlayers: 8, teams: 2, rounds: false, target: 3, time: 240, arenas: ['twin-forts', 'twin-forts-xl', 'ramp-park', 'ramp-park-xl', 'crater'] },
   { id: 'rush', name: 'Crystal Rush', tag: 'Items', desc: 'Collect crystals, smash rivals to make them spill. Item boxes everywhere.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 0, time: 150, arenas: ['ramp-park', 'ramp-park-xl', 'crater', 'mega-bowl', 'kidney-pool', 'twin-forts'] },
   { id: 'koth', name: 'King of the Hill', tag: 'Zone', desc: 'Hold the zone alone to score. The zone moves!', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: false, target: 45, time: 180, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'ramp-park', 'titan-colosseum', 'mega-bowl'] },
-  { id: 'race', name: 'Grand Prix', tag: 'Race', desc: 'F-Zero style laps on floating sky tracks. Boost strips, jumps, items. Fall off and you respawn behind.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 3, time: 300, arenas: ['neon-circuit', 'sky-serpent', 'crystal-canyon', 'inferno-gauntlet', 'frost-byte', 'hyper-tube', 'crossfire-8', 'twin-clash'] },
+  { id: 'race', name: 'Grand Prix', tag: 'Race', desc: 'F-Zero style laps on floating sky tracks. Boost strips, jumps, items. Fall off and you respawn behind.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 3, time: 300, arenas: ['neon-circuit', 'sky-serpent', 'crystal-canyon', 'inferno-gauntlet', 'frost-byte', 'hyper-tube', 'crossfire-8', 'trefoil'] },
   { id: 'gauntlet', name: 'Gauntlet', tag: 'Solo / Co-op', desc: 'Collect 15 gems through automated hazards and drones before your spin dies.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 15, time: 300, arenas: ['gauntlet-works', 'gauntlet-mega', 'ramp-park', 'kidney-pool'] },
 ];
 
@@ -72,6 +72,8 @@ export interface TopState {
   launch: number; launchLocked: boolean;
   drone?: boolean; scale: number;
   lap: number; prog: number; cp: number; place: number; finishT: number;
+  /** race: seconds spent on the wrong segment of the track (took a crossing); 0 = on course */
+  off: number;
 }
 
 export interface Crystal { id: number; x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number }

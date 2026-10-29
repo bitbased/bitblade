@@ -127,7 +127,7 @@ export class Sim {
       fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0 },
       flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : 99,
       respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
-      lap: 0, prog: 0, cp: 0, place: 0, finishT: -1,
+      lap: 0, prog: 0, cp: 0, place: 0, finishT: -1, off: 0,
     };
     this.s.tops.push(t);
     this.st.push(st);
@@ -638,7 +638,7 @@ export class Sim {
   }
 
   respawn(t: TopState, i: number) {
-    t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1;
+    t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1; t.off = 0;
     const TS = this.terrain.track;
     if (TS) {
       // back on the ribbon a little behind where we fell off, facing forward
@@ -991,7 +991,25 @@ export class Sim {
       if (t.finishT >= 0 || !t.alive) continue;
       const prev = t.prog;
       const ns = nearestSample(S, t.x, t.z, t.prog);
-      if (ns.d > S.width) continue;
+      const halfW = S.width / 2 + 1;
+      if (ns.d > halfW) {
+        // left our own stretch of road: are we on a DIFFERENT segment (took a crossing / cut across)?
+        const g = globalNearest(S, t.x, t.z);
+        const gd = Math.hypot(S.x[g] - t.x, S.z[g] - t.z);
+        const sep = Math.min(Math.abs(g - t.prog), S.n - Math.abs(g - t.prog));
+        if (gd <= halfW && sep > 40) {
+          if (t.off === 0) this.ev({ k: 'announce', text: 'OFF COURSE', sub: `${t.name} — turn back!`, color: '#ff2244' });
+          t.off += 1 / 120;
+          if (t.off > 5) {
+            // gave up finding the way back: reset onto our own line (time penalty is the respawn)
+            t.off = 0;
+            this.respawn(t, t.id);
+            this.ev({ k: 'announce', text: 'BACK ON TRACK', sub: t.name });
+          }
+        }
+        continue;
+      }
+      if (t.off > 0) t.off = 0;
       t.prog = ns.i;
       const q = Math.floor((t.prog / S.n) * 4);
       if (q === t.cp + 1) t.cp = q;

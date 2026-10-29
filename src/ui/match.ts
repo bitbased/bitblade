@@ -198,15 +198,16 @@ export class MatchScreen implements Screen {
     this.hud.update(renderState, dt);
     const TS = this.view.terrain.track;
     if (TS && renderState.phase === 'battle') {
-      let wrong = false;
+      let wrong = false, off = 0;
       for (const i of this.view.focus) {
         const t = renderState.tops[i];
         if (!t?.alive) continue;
+        if (t.off > 0) { off = Math.max(off, t.off); continue; }
         const along = t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog];
         if (along < -2.5) wrong = true;
       }
       this.wrongT = wrong ? this.wrongT + dt : 0;
-      this.hud.wrongWay(this.wrongT > 0.8);
+      this.hud.wrongWay(this.wrongT > 0.8, off);
     }
     // hum from the fastest local top
     let hum = 0;

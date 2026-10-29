@@ -68,7 +68,11 @@ export class Hud {
     if (this.annQueue.length > 3) this.annQueue.splice(0, this.annQueue.length - 3);
   }
 
-  wrongWay(on: boolean) { this.wrong.classList.toggle('on', on); }
+  wrongWay(on: boolean, off = 0) {
+    this.wrong.classList.toggle('on', on || off > 0);
+    const txt = off > 0 ? `OFF COURSE — TURN BACK ${Math.max(0, Math.ceil(5 - off))}` : 'WRONG WAY';
+    if (this.wrong.textContent !== txt) this.wrong.textContent = txt;
+  }
 
   count(n: number) {
     const el = h('div.count', null, String(n));
