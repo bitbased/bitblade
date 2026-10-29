@@ -15,7 +15,7 @@ export interface AIState {
   /** stuck watch: where we were a moment ago, and a short break-out manoeuvre (side alternates per try) */
   sx?: number; sz?: number; st?: number; unstuck?: number; unSide?: number;
   /** pinball: how long the plunger has been held */
-  plungeT?: number;
+  plungeT?: number; aimGoal?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
@@ -136,6 +136,31 @@ function pinballControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Contr
     return c;
   }
   ai.plungeT = 0;
+  // an aim lock: swing toward a drone (or the lock's own line, give or take) and fire when lined up
+  if (t.held !== undefined && sim.markers[t.held]?.aim) {
+    const m = sim.markers[t.held];
+    if (ai.aimGoal === undefined) {
+      const dr = sim.s.pin?.swarm.find((d) => d.hp > 0);
+      ai.aimGoal = dr ? Math.atan2(dr.z - m.z, dr.x - m.x) : (m.rot ?? 0) + (sim.rnd() - 0.5) * (m.aim ?? 0);
+      ai.aimGoal = Math.max((m.rot ?? 0) - m.aim!, Math.min((m.rot ?? 0) + m.aim!, ai.aimGoal));
+    }
+    const a = t.aimA ?? m.rot ?? 0, diff = ai.aimGoal - a;
+    if (Math.abs(diff) < 0.06) { c.dash = true; ai.aimGoal = undefined; return c; }
+    const turn = Math.sign(diff) * (Math.sin(a) >= 0 ? 1 : -1);
+    c.flipL = turn > 0; c.flipR = turn < 0;
+    return c;
+  }
+  ai.aimGoal = undefined;
+  // an arena duel: battle like a blade — go at the guardian, dash when close
+  if (t.duel) {
+    const f = sim.s.tops[sim.s.pin?.foe ?? -1];
+    if (f?.alive) {
+      const dx = f.x - t.x, dz = f.z - t.z, d = Math.hypot(dx, dz) || 1;
+      c.mx = dx / d; c.mz = dz / d;
+      if (d < 2.6 && t.dashCd <= 0 && sim.rnd() < 0.05 * ai.level) c.dash = true;
+    }
+    return c;
+  }
   const look = [0, 0.03, 0.06, 0.09][ai.level];
   let wantL = false, wantR = false;
   for (const m of sim.markers) {

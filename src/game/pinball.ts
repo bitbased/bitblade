@@ -17,6 +17,12 @@ export interface Rail {
   kickSide?: 1 | -1;
   /** a one-way gate: balls moving toward this side (1 / -1 = left / right of the drawing direction) pass through */
   oneWay?: 1 | -1;
+  /** (built, not saved) a flyover ramp's side wall: it stands on that ramp's deck, not the floor */
+  deck?: PinRamp;
+  /** (built, not saved) an arena gate: open while that arena marker is lit */
+  gate?: number;
+  /** (built, not saved) a flyover's underside skirt: stops balls rolling in under the low end (not balls on it) */
+  below?: boolean;
 }
 
 const RAIL_STEP = 0.35;
@@ -45,7 +51,7 @@ export function railPolyline(r: Rail): [number, number][] {
 
 /** a rail baked for fast distance queries */
 /** (kx, kz): unit normal of the face that kicks (slingshots only kick from their front, like the rubber on a real one) */
-export interface RailSeg { ax: number; az: number; bx: number; bz: number; h: number; half: number; kick: number; kx: number; kz: number; /** one-way gate: the direction balls may pass (0,0 = a normal wall) */ ox: number; oz: number }
+export interface RailSeg { ax: number; az: number; bx: number; bz: number; h: number; half: number; kick: number; kx: number; kz: number; /** one-way gate: the direction balls may pass (0,0 = a normal wall) */ ox: number; oz: number; deck?: PinRamp; gate?: number; below?: boolean }
 export function railSegments(rails: Rail[] | undefined): RailSeg[] {
   const out: RailSeg[] = [];
   for (const r of rails ?? []) {
@@ -59,7 +65,7 @@ export function railSegments(rails: Rail[] | undefined): RailSeg[] {
     for (let i = 0; i + 1 < pl.length; i++) {
       let ox = 0, oz = 0;
       if (r.oneWay) { const dx = pl[i + 1][0] - pl[i][0], dz = pl[i + 1][1] - pl[i][1], l = Math.hypot(dx, dz) || 1; ox = (-dz / l) * r.oneWay; oz = (dx / l) * r.oneWay; }
-      out.push({ ax: pl[i][0], az: pl[i][1], bx: pl[i + 1][0], bz: pl[i + 1][1], h: r.h ?? 1.3, half: (r.t ?? 0.45) / 2, kick: r.kick ?? 0, kx: nx, kz: nz, ox, oz });
+      out.push({ ax: pl[i][0], az: pl[i][1], bx: pl[i + 1][0], bz: pl[i + 1][1], h: r.h ?? 1.3, half: (r.t ?? 0.45) / 2, kick: r.kick ?? 0, kx: nx, kz: nz, ox, oz, deck: r.deck, gate: r.gate, below: r.below });
     }
   }
   return out;
@@ -99,22 +105,83 @@ export function tiltLift(def: ArenaDef, z: number) {
  * walls generated along both sides and round the pad (open only at the bottom). Lives in the floor itself (no
  * overlap needed): ride it up with enough speed, and whatever sits on the pad (a kickout, a rollover) is the prize.
  */
-export interface PinRamp { pts: [number, number][]; w?: number; rise?: number }
+export interface PinRamp {
+  pts: [number, number][]; w?: number; rise?: number;
+  /**
+   * a FLYOVER: an elevated deck on posts instead of a raised floor — balls roll underneath it (and under each
+   * other: give crossing flyovers rises ≥1.8m apart). It climbs from the floor to `rise` over its first ~9m and
+   * eases down to `end` over its last ~8m, then the ball drops off the end (aim the end over an inlane).
+   */
+  fly?: boolean;
+  /** flyover: how high its far end is (default 1.8: high enough that balls pass under it) */
+  end?: number;
+  /** flyover: the speed it hands the ball off at its end, like a wire ramp's exit curve (default 7 m/s) */
+  exit?: number;
+}
 
-const rampCache = new WeakMap<PinRamp, { pl: [number, number][]; cum: number[]; total: number }>();
+type RampGeo = { pl: [number, number][]; cum: number[]; total: number; x0: number; x1: number; z0: number; z1: number };
+const rampCache = new WeakMap<PinRamp, RampGeo>();
+function rampGeo(r: PinRamp): RampGeo {
+  let c = rampCache.get(r);
+  if (!c) {
+    const pl = railPolyline({ pts: r.pts });
+    let total = 0;
+    const cum = [0];
+    for (let i = 1; i < pl.length; i++) { total += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]); cum.push(total); }
+    const xs = pl.map((p) => p[0]), zs = pl.map((p) => p[1]);
+    c = { pl, cum, total, x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) };
+    rampCache.set(r, c);
+  }
+  return c;
+}
+/** nearest point on a ramp's path: distance from it and how far along (m) */
+function rampNear(c: RampGeo, x: number, z: number) {
+  let bd = Infinity, bs = 0;
+  for (let i = 0; i + 1 < c.pl.length; i++) {
+    const sg = { ax: c.pl[i][0], az: c.pl[i][1], bx: c.pl[i + 1][0], bz: c.pl[i + 1][1] };
+    const { d, cx, cz } = segDist(sg, x, z);
+    if (d < bd) { bd = d; bs = c.cum[i] + Math.hypot(cx - sg.ax, cz - sg.az); }
+  }
+  return { d: bd, s: bs };
+}
+/** a flyover's height above the floor `s` metres along it */
+export function flyProfile(r: PinRamp, s: number, total: number) {
+  const rise = r.rise ?? 3, end = r.end ?? 1.8;
+  const up = Math.min(9, total * 0.3), dn = Math.min(8, total * 0.25);
+  if (s < up) return rise * smooth(s / up);
+  if (s > total - dn) return rise + (end - rise) * smooth((s - (total - dn)) / dn);
+  return rise;
+}
+/** a flyover's deck height above the floor at (x, z), or -1 when (x, z) isn't on its deck */
+export function flyLift(r: PinRamp, x: number, z: number, slack = 0.45) {
+  const c = rampGeo(r), half = (r.w ?? 3) / 2 + slack;
+  if (x < c.x0 - half || x > c.x1 + half || z < c.z0 - half || z > c.z1 + half) return -1;
+  const { d, s } = rampNear(c, x, z);
+  return d <= half ? flyProfile(r, s, c.total) : -1;
+}
+/** a flyover's deck height at the point of its path nearest (x, z) (for its walls) */
+export function flyLiftAlong(r: PinRamp, x: number, z: number) {
+  const c = rampGeo(r);
+  return flyProfile(r, rampNear(c, x, z).s, c.total);
+}
+/** a flyover's end: where it is, which way it points, and how long the ramp is */
+export function flyEnd(r: PinRamp) {
+  const c = rampGeo(r), b = c.pl[c.pl.length - 1], a = c.pl[Math.max(0, c.pl.length - 4)];
+  const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  return { x: b[0], z: b[1], dx: (b[0] - a[0]) / l, dz: (b[1] - a[1]) / l, total: c.total };
+}
+
+/** how far along a flyover (0..1) the point nearest (x, z) is */
+export function flyAlong(r: PinRamp, x: number, z: number) {
+  const c = rampGeo(r);
+  return rampNear(c, x, z).s / (c.total || 1);
+}
 /** how much the ramps raise the floor at (x, z) */
 export function rampLiftAt(ramps: PinRamp[] | undefined, x: number, z: number) {
   let best = 0;
   for (const r of ramps ?? []) {
-    let c = rampCache.get(r);
-    if (!c) {
-      const pl = railPolyline({ pts: r.pts });
-      let total = 0;
-      const cum = [0];
-      for (let i = 1; i < pl.length; i++) { total += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]); cum.push(total); }
-      c = { pl, cum, total };
-      rampCache.set(r, c);
-    }
+    if (r.fly) continue; // (flyovers aren't part of the floor)
+    const c = rampGeo(r);
     const { pl, cum, total } = c;
     const half = (r.w ?? 3) / 2, rise = r.rise ?? 1.8;
     // quick reject: nowhere near this ramp
@@ -135,7 +202,7 @@ export function rampLiftAt(ramps: PinRamp[] | undefined, x: number, z: number) {
 /** the walls along a ramp's sides and round its pad (tall enough to stand above the raised floor) */
 export function rampRails(r: PinRamp): Rail[] {
   const pl = railPolyline({ pts: r.pts });
-  const half = (r.w ?? 3) / 2 + 0.3, h = (r.rise ?? 1.8) + 1.3;
+  const half = (r.w ?? 3) / 2 + 0.3, h = r.fly ? 1.3 : (r.rise ?? 1.8) + 1.3;
   const side = (sd: 1 | -1) => {
     const out: [number, number][] = [];
     for (let i = 0; i < pl.length; i += 3) {
@@ -147,12 +214,48 @@ export function rampRails(r: PinRamp): Rail[] {
     return out;
   };
   const L = side(1), R = side(-1);
+  // a flyover: two walls standing on the deck, open at both ends (the ball drops off the far end)
+  if (r.fly) {
+    // where the climb reaches ball-clearance height, a skirt closes the underside (a ball rolling under the deck
+    // would otherwise wedge into the low end)
+    const c = rampGeo(r);
+    let s = 0;
+    while (s < c.total && flyProfile(r, s, c.total) < 1.9) s += 0.1;
+    let i = c.cum.findIndex((v) => v >= s);
+    if (i < 1) i = 1;
+    const sk = [pl[i - 1], pl[Math.min(pl.length - 1, i + 1)]];
+    let tx = sk[1][0] - sk[0][0], tz = sk[1][1] - sk[0][1];
+    const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+    const p = pl[i], skirt: Rail = { pts: [[p[0] - tz * half, p[1] + tx * half], [p[0] + tz * half, p[1] - tx * half]], t: 0.3, deck: r, below: true };
+    return [{ pts: [...L, edgeAt(pl, half, 1)], h, t: 0.35, deck: r }, { pts: [...R, edgeAt(pl, half, -1)], h, t: 0.35, deck: r }, skirt];
+  }
   // close round the pad: a half circle from the left wall's end to the right wall's end, beyond the end point
   const end = pl[pl.length - 1], prev = pl[Math.max(0, pl.length - 4)];
   const ang = Math.atan2(end[1] - prev[1], end[0] - prev[0]), rad = half + 0.6;
   const cap: [number, number][] = [];
   for (let k = 0; k <= 6; k++) { const a = ang + Math.PI / 2 - (k / 6) * Math.PI; cap.push([end[0] + Math.cos(a) * rad, end[1] + Math.sin(a) * rad]); }
   return [{ pts: [...L, ...cap, ...R.reverse()], h, t: 0.4 }];
+}
+
+/**
+ * An arena bowl's wall: a ring round the dish with an opening facing `rot` (default: down-table, toward the
+ * flippers), closed by a gate that opens when the arena is unlocked. Light its drop bank (team) to open it; roll in
+ * and a guardian blade drops in for a 1v1 battle.
+ */
+export function arenaRails(m: Marker, mi: number): Rail[] {
+  const R = (m.r ?? 2.6) + 0.3, g = m.rot ?? Math.PI / 2, gap = 1.4 / R;
+  const ring: [number, number][] = [];
+  for (let k = 0; k <= 16; k++) { const a = g + gap + (k / 16) * (Math.PI * 2 - 2 * gap); ring.push([m.x + Math.cos(a) * R, m.z + Math.sin(a) * R]); }
+  const e = (a: number): [number, number] => [m.x + Math.cos(a) * R, m.z + Math.sin(a) * R];
+  return [{ pts: ring, h: 1.6, t: 0.45 }, { pts: [e(g - gap), e(g + gap)], h: 1.6, t: 0.3, gate: mi }];
+}
+
+/** the point `half` to one side of a polyline's last point */
+function edgeAt(pl: [number, number][], half: number, sd: 1 | -1): [number, number] {
+  const b = pl[pl.length - 1], a = pl[pl.length - 2];
+  let tx = b[0] - a[0], tz = b[1] - a[1];
+  const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+  return [b[0] - tz * half * sd, b[1] + tx * half * sd];
 }
 
 // ------------------------------------------------------------------ flippers
@@ -397,5 +500,74 @@ function starCadet(): ArenaDef {
   } as ArenaDef;
 }
 
-export function pinballTables(): ArenaDef[] { return [starCadet(), neonClassic(), synthCathedral()]; }
-export const PINBALL_IDS = ['pin-star-cadet', 'pin-neon-classic', 'pin-synth-cathedral'];
+const CYBER = { floor: '#03120e', wall: '#0b3a2c', glow: '#39ff9c', sky1: '#010605', sky2: '#04221a', grid: '#00e08f' };
+
+/**
+ * Swarm Protocol — a cyber table built round two CROSSING FLYOVER ramps (the general shape of the big 90s ramp
+ * tables, in its own skin):
+ *  · UPLINK (left entry, high) climbs over the top and drops the ball into the right inlane; DOWNLINK (right entry,
+ *    lower) passes underneath it and drops into the left inlane. A deck rollover on each lights the DRONE BAY —
+ *    make both and the swarm launches: flying drones hunt your ball round the top (smash them fast; slow balls get
+ *    zapped and lose spin)
+ *  · the CORE: an arena bowl in the middle behind a firewall gate. Knock down the FIREWALL drop bank to unlock it,
+ *    roll in, and a guardian blade drops in for a 1v1 battle
+ *  · TARGET LOCK top left: an aimable lock — swing the shot with the flippers, fire with SPACE
+ *  · re-entry ports across the top, three pop bumpers (server nodes), flag rollovers, kickback, center post
+ */
+function swarmProtocol(): ArenaDef {
+  const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
+  const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0, outlanes: 'L', kickback: 'L' });
+  const xc = low.xc;
+  const lane = (x: number): Rail => ({ pts: [[x, -22.0], [x, -18.4]], t: 0.3, h: 1.1 });
+  return {
+    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table: two crossing flyover ramps, a drone swarm to smash, an arena core with a guardian duel, and an aimable target lock.',
+    theme: CYBER, custom: false, pinball: true, tilt: 0.15,
+    course: flat(5, 8),
+    rails: [
+      { pts: outer, h: 3, t: 0.7 },
+      { pts: [[12.3, 23.8], [12.3, 4], [12.3, -10], [11.6, -15.2]], h: 1.6 },
+      { pts: [[12.3, 23.4], [14.5, 23.4]], h: 1.6 },
+      { pts: [[11.6, -15.2], [12.5, -19.6]], h: 1.0, t: 0.3, oneWay: -1 },
+      lane(xc - 3.3), lane(xc - 1.1), lane(xc + 1.1), lane(xc + 3.3),
+      ...low.rails,
+    ],
+    ramps: [
+      // UPLINK: high, enters left of the core, sweeps over the top, comes down the right side into the right inlane
+      { pts: [[-6.6, 4], [-7.2, -3], [-5.8, -9], [-1.5, -13.4], [4, -13.4], [8.4, -9.6], [10.3, -3], [10.6, 3], [10.7, 8]], w: 2.2, rise: 4.0, fly: true, end: 1.8 },
+      // DOWNLINK: lower, enters right of the core, crosses UNDER the uplink, comes down the left into the left inlane
+      { pts: [[4.6, 3], [5.0, -3.5], [1.5, -9.5], [-4, -12], [-9, -10.5], [-11.2, -4], [-11, 2.5], [-10.7, 7.5]], w: 2.2, rise: 2.2, fly: true, end: 1.8 },
+    ],
+    markers: [
+      { kind: 'spawn', x: 13.45, z: 21.6 },
+      { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 1.05 },
+      ...low.markers,
+      { kind: 'post', x: xc, z: 22.2, r: 0.45 },
+      // re-entry ports (group 1)
+      { kind: 'rollover', x: xc - 2.2, z: -19.7, r: 0.8, team: 1 },
+      { kind: 'rollover', x: xc, z: -19.7, r: 0.8, team: 1 },
+      { kind: 'rollover', x: xc + 2.2, z: -19.7, r: 0.8, team: 1 },
+      // server nodes: pop bumpers up the right
+      { kind: 'bumper', x: 4.6, z: -18.6, r: 1.0 },
+      { kind: 'bumper', x: 8.6, z: -17.6, r: 1.0 },
+      { kind: 'bumper', x: 6.4, z: -15.6, r: 0.95 },
+      // the ramps' deck rollovers (group 2) light the drone bay: both made = the swarm launches
+      { kind: 'rollover', x: 1.2, z: -13.45, r: 1.2, team: 2, fly: true }, // (as wide as the deck)
+      { kind: 'rollover', x: -6.5, z: -11.25, r: 1.2, team: 2, fly: true },
+      { kind: 'hive', x: xc + 0.2, z: -16.6, r: 10, len: 5, team: 2 }, // (the drone bay, between the ports and the uplink)
+      // the core: arena bowl (unlocked by the firewall bank, team 1)
+      { kind: 'arena', x: xc - 0.9, z: -5.4, r: 3.0, rot: Math.PI / 2, team: 1 }, // (the flyovers arch over it; its gate faces the flippers)
+      { kind: 'drop', x: 7.2, z: -4.6, r: 0.75, rot: 2.91, team: 1 },
+      { kind: 'drop', x: 7.6, z: -2.9, r: 0.75, rot: 2.91, team: 1 },
+      { kind: 'drop', x: 8.0, z: -1.2, r: 0.75, rot: 2.91, team: 1 },
+      // target lock: aim it with the flippers, fire with SPACE (fires itself after 7s)
+      { kind: 'saucer', x: -10.2, z: -15.5, r: 1.0, rot: 0.85, len: 22, aim: 0.7, hold: 7 },
+      // flag rollovers above the drain (group 4)
+      { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
+      { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },
+      { kind: 'rollover', x: xc + 2.0, z: 11.0, r: 0.75, team: 4 },
+    ],
+  } as ArenaDef;
+}
+
+export function pinballTables(): ArenaDef[] { return [starCadet(), swarmProtocol(), neonClassic(), synthCathedral()]; }
+export const PINBALL_IDS = ['pin-star-cadet', 'pin-swarm-protocol', 'pin-neon-classic', 'pin-synth-cathedral'];

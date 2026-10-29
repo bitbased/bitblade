@@ -1,6 +1,6 @@
 import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
-import { pinballTables, rampLiftAt, tiltLift, type PinRamp, type Rail } from './pinball';
+import { pinballTables, flyLift, rampLiftAt, tiltLift, type PinRamp, type Rail } from './pinball';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -30,8 +30,11 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
-export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal' | 'saucer' | 'rollover' | 'kickback' | 'drop' | 'post';
-export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number }
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive' | 'flipper' | 'target' | 'plunger' | 'portal' | 'saucer' | 'rollover' | 'kickback' | 'drop' | 'post' | 'arena';
+export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number;
+  /** pinball: sits on the flyover deck above it, not the floor */ fly?: boolean;
+  /** pinball saucer: an aimable lock — the half-arc (rad) you can swing the shot through around `rot` */ aim?: number;
+  /** pinball aim lock: seconds before it fires by itself */ hold?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
 
@@ -75,6 +78,8 @@ export class Terrain {
    */
   layered = false;
   hintY: number | undefined = undefined;
+  /** pinball flyovers: elevated decks over the floor (height() picks the one a ball is riding, by hintY) */
+  fly: PinRamp[] = [];
   private grid: SampleGrid | null = null;
   private sctx: SurfaceCtx | null = null;
   constructor(def: ArenaDef) {
@@ -120,6 +125,7 @@ export class Terrain {
       }
     // a tilted playfield (pinball): the floor rises toward the top. (Rails are real vertical walls handled by the sim
     // and drawn by the renderer — as bumps in the floor, fast balls bounced up off them and hopped over.)
+    this.fly = def.ramps?.filter((r) => r.fly) ?? [];
     if (def.tilt || def.ramps?.length) {
       for (let j = 0; j < this.nz; j++) {
         const z = this.minZ + j * this.cell, lift = tiltLift(def, z);
@@ -128,6 +134,19 @@ export class Terrain {
           if (this.h[k] > VOID) this.h[k] += lift + (def.ramps?.length ? rampLiftAt(def.ramps, this.minX + i * this.cell, z) : 0);
         }
       }
+    }
+    // arena bowls (pinball): a level battle dish sunk into the playfield, its rim at the floor height of its centre
+    for (const m of def.markers) {
+      if (m.kind !== 'arena') continue;
+      const r = m.r ?? 2.6, depth = 1.4;
+      const c = courseHeight(def.course!, m.x, m.z) + tiltLift(def, m.z);
+      for (let j = 0; j < this.nz; j++)
+        for (let i = 0; i < this.nx; i++) {
+          const x = this.minX + i * this.cell, z = this.minZ + j * this.cell, d = Math.hypot(x - m.x, z - m.z);
+          if (d >= r + 0.05) continue;
+          const k = j * this.nx + i, u = Math.min(1, d / r);
+          if (this.h[k] > VOID) this.h[k] = Math.min(this.h[k], c - depth * (1 - u * u));
+        }
     }
   }
 
@@ -139,6 +158,46 @@ export class Terrain {
   /** Bilinear height; returns VOID if any corner is void. */
   height(x: number, z: number, hint = this.hintY): number {
     if (this.layered) return this.layeredHeight(x, z, hint);
+    if (this.fly.length) {
+      // flyovers: a ball rides the highest deck it's level with (within a small step up); under a deck it rides
+      // the floor. With no hint (scenery, markers), the floor.
+      const base = this.floorHeight(x, z);
+      if (hint === undefined || base <= VOID) return base;
+      let best = base;
+      for (const r of this.fly) {
+        const L = flyLift(r, x, z);
+        if (L < 0) continue;
+        const y = base + L;
+        if (y <= hint - 0.15 && y > best) best = y;
+      }
+      return best;
+    }
+    return this.floorHeight(x, z);
+  }
+
+  /** the deck nearest above height y at (x, z) (a flyover a ball is passing under), if any */
+  deckAbove(x: number, z: number, y: number) {
+    let best: number | undefined;
+    if (!this.fly.length) return best;
+    const base = this.floorHeight(x, z);
+    for (const r of this.fly) {
+      const L = flyLift(r, x, z, 1.4); // (its walls too, plus a ball radius: a ball below never touches their band)
+      if (L < 1.7) continue; // (the sealed low end has no "under")
+      const d = base + L;
+      if (d > y + 0.35 && (best === undefined || d < best)) best = d;
+    }
+    return best;
+  }
+
+  /** the topmost surface at (x, z): the highest flyover deck there, else the floor */
+  topHeight(x: number, z: number) {
+    const base = this.floorHeight(x, z);
+    let top = base;
+    for (const r of this.fly) { const L = flyLift(r, x, z, 0); if (L >= 0) top = Math.max(top, base + L); }
+    return top;
+  }
+
+  private floorHeight(x: number, z: number) {
     const fx = (x - this.minX) / this.cell, fz = (z - this.minZ) / this.cell;
     const i = Math.floor(fx), j = Math.floor(fz);
     const tx = fx - i, tz = fz - j;

@@ -17,7 +17,7 @@ export const MODES: ModeInfo[] = [
   { id: 'race', name: 'Grand Prix', tag: 'Race', desc: 'F-Zero style laps on floating sky tracks. Boost strips, jumps, items. Fall off and you respawn behind.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 3, time: 300, arenas: ['neon-circuit', 'sky-serpent', 'crystal-canyon', 'inferno-gauntlet', 'frost-byte', 'hyper-tube', 'crossfire-8', 'trefoil'] },
   { id: 'gauntlet', name: 'Gauntlet', tag: 'Solo / Co-op', desc: 'Collect 15 gems through automated hazards and drones before your spin dies.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 15, time: 300, arenas: ['gauntlet-works', 'gauntlet-mega', 'ramp-park', 'kidney-pool'] },
   { id: 'quest', name: 'Blade Quest', tag: 'Adventure', desc: 'Platforming adventure: jump gaps, climb levels, dodge drone hives, grab gems and reach the goal. Checkpoints respawn you and refill your spin.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 0, time: 600, arenas: ['quest-neon-run', 'quest-coaster', 'quest-sky-steps', 'quest-glacier', 'quest-hive-valley', 'quest-gauntlet-peak'] },
-  { id: 'pinball', name: 'Pinball', tag: 'Table', desc: 'Your blade is the ball. Flippers: Left / Right Shift, Ctrl, Tab / Enter, Z / slash, or LB / RB. Hold ↓ to pull the plunger. Steering nudges the table — overdo it and it TILTs. Pop bumpers, slingshots, spin pads; light every target for MULTIBALL. 3 balls.', minPlayers: 1, maxPlayers: 1, teams: 1, rounds: false, target: 0, time: 3600, arenas: ['pin-star-cadet', 'pin-neon-classic', 'pin-synth-cathedral'] },
+  { id: 'pinball', name: 'Pinball', tag: 'Table', desc: 'Your blade is the ball. Flippers: Left / Right Shift, Ctrl, Tab / Enter, Z / slash, or LB / RB. Hold ↓ to pull the plunger. Steering nudges the table — overdo it and it TILTs. Pop bumpers, slingshots, spin pads; light every target for MULTIBALL. 3 balls.', minPlayers: 1, maxPlayers: 1, teams: 1, rounds: false, target: 0, time: 3600, arenas: ['pin-star-cadet', 'pin-swarm-protocol', 'pin-neon-classic', 'pin-synth-cathedral'] },
 ];
 
 export const ITEMS: Record<ItemKind, { name: string; icon: string; color: string }> = {
@@ -77,6 +77,8 @@ export interface TopState {
   graceT?: number;
   /** overdrive: dash held past the burst — faster (and climbs harder) at the cost of spin, steers wider */
   od?: boolean; holdT?: number;
+  /** pinball: aim of the lock this ball sits in · battling in an arena bowl (normal top physics there) */
+  aimA?: number; duel?: boolean;
   launch: number; launchLocked: boolean;
   drone?: boolean; scale: number;
   /** quest: index (into the arena's markers) of the last checkpoint touched, -1 = start; drones: their hive marker */
@@ -115,7 +117,7 @@ export type GameEvent =
   | { k: 'hazard'; x: number; y: number; z: number; id: number }
   | { k: 'announce'; text: string; sub?: string; color?: string }
   | { k: 'go' }
-  | { k: 'pin'; what: 'flip' | 'bumper' | 'sling' | 'target' | 'plunge' | 'portal' | 'tilt' | 'danger' | 'multiball' | 'capture' | 'kickout' | 'rollover' | 'drop' | 'bank' | 'kickback' | 'post' | 'group' | 'wormhole'; x: number; y: number; z: number; pts?: number }
+  | { k: 'pin'; what: 'flip' | 'bumper' | 'sling' | 'target' | 'plunge' | 'portal' | 'tilt' | 'danger' | 'multiball' | 'capture' | 'kickout' | 'rollover' | 'drop' | 'bank' | 'kickback' | 'post' | 'group' | 'wormhole' | 'lock' | 'fire' | 'swarm' | 'drone' | 'zap' | 'unlock' | 'duel' | 'duelwin' | 'duellose'; x: number; y: number; z: number; pts?: number }
   | { k: 'count'; n: number };
 
 export interface GameState {
@@ -143,5 +145,9 @@ export interface GameState {
   /** pinball table state: flipper angles (by marker index), lit targets, plunger charge, multiball count */
   pin?: { flip: number[]; lit: boolean[]; charge: number; mult: number; litT: number; /** tilt meter 0..1 (steering fills it) */ tilt: number; tilted: boolean; warned: boolean;
     /** per-marker timers (kickback recharge, drop-target / group reset) and the ball-save time left (center post up) */
-    tm: number[]; save: number };
+    tm: number[]; save: number;
+    /** a drone swarm out of a hive (flying drones: smash them fast — slow balls get zapped) */
+    swarm: { x: number; z: number; vx: number; vz: number; hp: number; zap: number; ph: number }[]; swarmT: number; swarmHive: number;
+    /** an arena duel under way (marker, ball, time left) and the guardian blade's top id (-1 = none yet) */
+    duel: { mi: number; ball: number; t: number } | null; foe: number };
 }
