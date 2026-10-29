@@ -85,6 +85,9 @@
 .bd-mini:hover, .bd-mini.focus { background: rgba(60, 242, 255, 0.3); }
 .bd-mini.bd-on { background: var(--accent, #3cf2ff); color: #001; }
 .bd-center { display: flex; flex-direction: column; min-height: 0; pointer-events: none; }
+/* the column itself lets clicks through its empty space, but everything IN it is clickable (the randomizer bar
+   was missed and couldn't be tapped or clicked) */
+.bd-center > * { pointer-events: auto; }
 .bd-stage { flex: 1; pointer-events: auto; cursor: grab; position: relative; min-height: 200px; }
 .bd-stage:active { cursor: grabbing; }
 .bd-stage.bd-placing { cursor: crosshair; }
