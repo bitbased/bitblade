@@ -185,16 +185,37 @@ export class OnlineScreen implements Screen {
       const mode = MODES.find((m) => m.id === r.mode);
       // already open (e.g. in another tab): join it instead of trying to host it twice
       const live = this.rooms.find((x) => x.code === r.code);
+      const nameEl = h('span.rr-name', null, r.name);
       el.append(h('div.room-row', null,
         h('div.rr-icon', null, icon(MODE_ICON[r.mode as ModeId] ?? 'users')),
-        h('div.rr-main', null, h('b', null, r.name, live ? h('span.rr-tag.live', null, 'LIVE') : r.public ? h('span.rr-tag', null, 'PUBLIC') : null), h('span', null, live ? `CODE ${r.code} · open now · ${live.players}/${live.max} players` : `CODE ${r.code} · ${mode?.name ?? r.mode}`)),
+        h('div.rr-main', null, h('b', null, nameEl, live ? h('span.rr-tag.live', null, 'LIVE') : r.public ? h('span.rr-tag', null, 'PUBLIC') : null), h('span', null, live ? `CODE ${r.code} · open now · ${live.players}/${live.max} players` : `CODE ${r.code} · ${mode?.name ?? r.mode}`)),
         h('div.rr-side.row', null,
           live
             ? h('button.btn.small.primary.nav', { title: 'This room is already open — join it', onclick: () => this.join(publicJoinInput(r.code)) }, 'JOIN')
             : h('button.btn.small.primary.nav', { onclick: () => this.openSaved(r) }, 'OPEN'),
+          h('button.btn.small.nav', { title: 'Rename this room', onclick: () => this.renameSaved(r, nameEl) }, 'RENAME'),
           h('button.btn.small.nav', { title: 'Copy invite link', onclick: () => { navigator.clipboard?.writeText(publicJoinInput(r.code)); this.app.toast('Invite link copied'); } }, icon('link')),
           h('button.btn.small.nav', { title: 'Forget this room', onclick: () => { if (!confirmTwice(this.app, 'del-room-' + r.code, `Press again to forget ${r.name} (its code is released only on this device)`)) return; deleteMyRoom(r.code); this.renderMyRooms(); } }, icon('close')))));
     }
+  }
+
+  /** inline rename: Enter / click away saves, Esc cancels. A live room picks up the new name next time it's opened. */
+  renameSaved(r: SavedRoom, nameEl: HTMLElement) {
+    const inp = h<HTMLInputElement>('input.rr-rename', { type: 'text', value: r.name, maxLength: 32 });
+    let done = false;
+    const finish = (save: boolean) => {
+      if (done) return;
+      done = true;
+      const v = inp.value.trim();
+      if (save && v && v !== r.name) { saveMyRoom({ ...r, name: v }); this.app.toast(`Renamed to ${v}`); }
+      this.renderMyRooms();
+    };
+    inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); });
+    inp.addEventListener('blur', () => finish(true));
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    nameEl.replaceWith(inp);
+    inp.focus();
+    inp.select();
   }
 
   openSaved(r: SavedRoom) {

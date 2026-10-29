@@ -459,7 +459,8 @@ export class LobbyScreen implements Screen {
       ctl.addEventListener('click', () => this.pushSummary());
       const info = hostRoom.info;
       const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'Host'}'s room` });
-      rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; });
+      rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; this.app.toast(`Room renamed to ${rname.value.trim() || rname.placeholder}`); });
+      rname.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') rname.blur(); });
       const pub = h('div.toggle.panel.nav', { title: t.listable ? 'List this room in Public Rooms' : 'Desktop LAN / tunnel rooms can\'t be listed — host a Cloud room to go public', onclick: () => { if (!t.listable) { this.app.toast('Host a Cloud room to list it publicly'); return; } hostRoom.setInfo({ public: !info.public }); this.app.toast(hostRoom.info.public ? 'Room is now PUBLIC — listed for everyone' : 'Room is now private (invite only)'); this.pushSummary(); this.renderOnline(); } }, h('span.dot'), 'PUBLIC');
       pub.classList.toggle('on', info.public);
       const keep = info.persistent
@@ -472,6 +473,7 @@ export class LobbyScreen implements Screen {
           } }, 'KEEP ROOM');
       el.append(
         h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'TUNNEL ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
+        h('label.room-name-lbl', null, 'ROOM NAME — type to rename'),
         rname,
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),

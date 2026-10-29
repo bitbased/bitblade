@@ -293,3 +293,5 @@ input[type=color]::-webkit-color-swatch { border: none; }
 .online-box .room-name:focus { border-color: var(--accent); }
 .rr-tag.yours { border-color: var(--accent); color: var(--accent); }
 .rr-tag.live { border-color: #38ff7a; color: #38ff7a; animation: blink 1.2s infinite; }
+.rr-rename { background: rgba(0,0,0,0.5); border: 1px solid var(--accent); color: var(--text); padding: 3px 8px; font-family: var(--font-h); font-size: 13px; outline: none; width: 100%; }
+.room-name-lbl { font-family: var(--font-h); font-size: 9px; letter-spacing: 0.22em; color: var(--muted); }
