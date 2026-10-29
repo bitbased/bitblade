@@ -1433,21 +1433,25 @@ export class GameView {
     const T = this.terrain.track;
     if (!T) return null;
     const k = Math.max(2, Math.round(len / 0.5));
+    // across the road too (every ~0.5m): the road curls up at its edges and banks, so a decal made of just its two
+    // edge points would hang flat above the middle
+    const cols = Math.max(1, Math.ceil((halfW * 2) / 0.5));
     const pos: number[] = [], uv: number[] = [], idx: number[] = [];
     for (let s = 0; s <= k; s++) {
       let j = i - Math.floor(k / 2) + s;
       j = T.open ? Math.max(0, Math.min(T.n - 1, j)) : ((j % T.n) + T.n) % T.n;
-      for (const side of [-1, 1]) {
+      for (let c = 0; c <= cols; c++) {
+        const side = 1 - (2 * c) / cols; // 1 = left edge … -1 = right edge
         // left of travel is (-tz, tx)
-        const x = T.x[j] - T.tz[j] * halfW * side * -1 + ox, z = T.z[j] + T.tx[j] * halfW * side * -1 + oz;
-        // the exact road formula at this sample (what the road mesh is built from): flush right to the edges, and the
-        // right level of a bridge
+        const x = T.x[j] - T.tz[j] * halfW * side + ox, z = T.z[j] + T.tx[j] * halfW * side + oz;
+        // the exact road formula at this sample (what the road mesh is built from): flush across the whole width, and
+        // the right level of a bridge
         const h = trackSurface(this.terrain.def.track!, T, j, x, z, (this.sctx ??= surfaceCtx(this.terrain.def.track!, T)));
         if (h <= VOID) return null; // overlaps a gap or the edge: no decal hanging in the air
         pos.push(x, h + lift, z);
-        uv.push(side < 0 ? 1 : 0, s / k);
+        uv.push(1 - c / cols, s / k);
       }
-      if (s > 0) { const a = (s - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+      if (s > 0) for (let c = 0; c < cols; c++) { const a = (s - 1) * (cols + 1) + c, b = a + cols + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

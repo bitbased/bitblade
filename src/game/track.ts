@@ -121,12 +121,42 @@ export function sampleTrack(def: TrackDef): TrackSamples {
 const inRanges = (f: number, r: [number, number][]) => r.some(([a, b]) => (a <= b ? f >= a && f <= b : f >= a || f <= b));
 
 /** per-track precomputed bits for surface queries */
-export interface SurfaceCtx { gapStarts: number[]; ramps: { end: number; len: number; h: number }[] }
+/** (flat: per sample, 1 = the normal road, fading to 0 at a level crossing — where it's flat and edge-to-edge) */
+export interface SurfaceCtx { gapStarts: number[]; ramps: { end: number; len: number; h: number }[]; flat: Float32Array }
 export function surfaceCtx(def: TrackDef, S: TrackSamples): SurfaceCtx {
   return {
     gapStarts: def.autoKick === false ? [] : def.gaps.map(([a]) => a * S.total),
     ramps: (def.ramps ?? []).map((r) => ({ end: r.f * S.total, len: r.len, h: r.h })),
+    flat: crossingFlat(S),
   };
+}
+
+const flatCache = new WeakMap<TrackSamples, Float32Array>();
+/**
+ * Level crossings (a figure-8's X, a knot's crossings): where another stretch of road passes through at the same
+ * height, both roads must be one flat surface — no raised edge lip and no curve banking, or each road's edges are
+ * ramps across the other. Returns, per sample, 1 = normal, easing to 0 over the crossing and ~5m either side.
+ */
+function crossingFlat(S: TrackSamples) {
+  let f = flatCache.get(S);
+  if (f) return f;
+  f = new Float32Array(S.n).fill(1);
+  const near = new Float32Array(S.n).fill(1e9); // distance (m along the road) to the nearest crossing
+  for (let i = 0; i < S.n; i += 2) for (let j = i + 40; j < S.n; j += 2) {
+    if (!S.open && S.n - (j - i) < 40) continue;
+    const reach = (S.w[i] + S.w[j]) / 2; // (the roads actually overlap)
+    if (Math.abs(S.x[i] - S.x[j]) > reach || Math.abs(S.z[i] - S.z[j]) > reach) continue;
+    if (Math.hypot(S.x[i] - S.x[j], S.z[i] - S.z[j]) < reach && Math.abs(S.y[i] - S.y[j]) < 1.5) { near[i] = 0; near[j] = 0; }
+  }
+  // spread: distance along the road from each sample to the nearest crossing sample
+  for (let pass = 0; pass < 2; pass++) for (let k = 0; k < 2 * S.n; k++) {
+    const i = pass ? S.n - 1 - (k % S.n) : k % S.n, prev = pass ? (i + 1) % S.n : (i - 1 + S.n) % S.n;
+    if (S.open && (pass ? i === S.n - 1 : i === 0)) continue;
+    near[i] = Math.min(near[i], near[prev] + STEP);
+  }
+  for (let i = 0; i < S.n; i++) { const u = Math.min(1, near[i] / 5); f[i] = u * u * (3 - 2 * u); }
+  flatCache.set(S, f);
+  return f;
 }
 
 /**
@@ -169,9 +199,9 @@ export function trackSurface(def: TrackDef, S: TrackSamples, best: number, x: nu
   const side = (x - cx) * -ttz + (z - cz) * ttx;
   const cum = S.cum[a] + w * STEP; // (a loop's last→first segment wraps; f below is only used for range tests)
   const f = cum / S.total;
-  const curv = L(S.curv), y0c = L(S.y);
-  // curvature banking + any explicit tilt (positive raises the left edge)
-  const base = y0c + Math.max(-1.2, Math.min(1.2, -curv * side * 6)) * 0.5 + L(S.bank) * side;
+  const curv = L(S.curv), y0c = L(S.y), fl = ctx.flat[a] + (ctx.flat[b] - ctx.flat[a]) * w;
+  // curvature banking + any explicit tilt (positive raises the left edge) — none at a level crossing
+  const base = y0c + (Math.max(-1.2, Math.min(1.2, -curv * side * 6)) * 0.5 + L(S.bank) * side) * fl;
   let kick = 0;
   for (const g of ctx.gapStarts) {
     let ds = g - cum;
@@ -192,7 +222,7 @@ export function trackSurface(def: TrackDef, S: TrackSamples, best: number, x: nu
     if (d <= half + 0.7 && !inRanges(f, def.gaps)) return y0 + D * 0.8 + bank * side; // the rim: go over it and you're out
     return VOID;
   }
-  if (d <= half) return inRanges(f, def.gaps) ? VOID : base + Math.pow(d / half, 4) * 0.9 + kick;
+  if (d <= half) return inRanges(f, def.gaps) ? VOID : base + Math.pow(d / half, 4) * 0.9 * fl + kick; // (the edge lip, flat at a crossing)
   if (d <= half + 0.8 && inRanges(f, def.rails) && !inRanges(f, def.gaps)) {
     const t = (d - half) / 0.5;
     return base + 0.9 + 1.1 * Math.min(1, t * t * (3 - 2 * t));
