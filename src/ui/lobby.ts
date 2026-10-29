@@ -17,6 +17,8 @@ import { hostRoom } from '../net/room';
 import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
+import { acceptSong, roomMusicRow } from './roomMusic';
+import type { Song } from '../game/music';
 
 interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
 
@@ -41,6 +43,9 @@ const L = {
   slots: [] as Slot[],
   /** set once the lobby has been visited: the menu offers CONTINUE back into it */
   active: false,
+  /** online room music (null = each track's own song) and who picked it */
+  song: null as Song | null,
+  songBy: '',
 };
 
 /** the lobby you'll return to (players, mode, arena all kept), or null if there isn't one yet */
@@ -116,7 +121,8 @@ export class LobbyScreen implements Screen {
 
   mount(app: App, arg?: unknown) {
     this.app = app;
-    app.sfx.useMusic('menu');
+    // an online room keeps its chosen song between matches; otherwise menu music
+    if (hostRoom.t && L.song) app.sfx.playSong(L.song, app.sfx.player?.song?.id !== L.song.id); else app.sfx.useMusic('menu');
     setBackdropVisible(true, app.canvas);
     // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
     // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)
@@ -424,10 +430,20 @@ export class LobbyScreen implements Screen {
       case 'arena': this.stepArena(d); break;
       case 'size': this.stepSize(d); break;
       case 'items': this.toggleItems(); break;
+      case 'song': { const s = m.song === null ? null : acceptSong(m.song); if (m.song !== null && !s) return; this.setRoomSong(s, who); return; }
       case 'start': this.app.toast(`${who} started the match`); this.start(); return;
       default: return;
     }
     this.app.toast(`${who} changed the room`);
+  }
+
+  /** online room music: everyone in the room hears it in the lobby and in matches */
+  setRoomSong(s: Song | null, by: string) {
+    L.song = s; L.songBy = s ? by : '';
+    if (s) this.app.sfx.playSong(s, this.app.sfx.player?.song?.id !== s.id); else this.app.sfx.useMusic('menu');
+    if (s) this.app.toast(`♪ ${s.name}${by ? ` — picked by ${by}` : ''}`);
+    this.dirty = true;
+    this.renderOnline();
   }
 
   /** mirror room membership into lobby slots */
@@ -610,6 +626,7 @@ export class LobbyScreen implements Screen {
         rname,
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
+        roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s) => this.setRoomSong(s, L.slots[0]?.name ?? 'Host'), onCopied: () => this.renderOnline() }),
         h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
           h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
@@ -661,7 +678,7 @@ export class LobbyScreen implements Screen {
     const arena = findArena(L.arenaId);
     return {
       t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
-      items: L.items, target: L.target, time: L.time, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host',
+      items: L.items, target: L.target, time: L.time, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy,
       slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i) })),
     };
   }
@@ -675,6 +692,7 @@ export class LobbyScreen implements Screen {
     const cfg: MatchConfig = {
       mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0, rubber: L.rubber,
       players: L.slots.slice(0, m.maxPlayers).map((s, i) => ({ slot: i, name: s.name, team: s.team, blade: this.bladeOf(s), ctrl: s.ctrl })),
+      song: hostRoom.t && L.song ? L.song : undefined,
     };
     // compact team indices (ffa etc.)
     const teams = [...new Set(cfg.players.map((p) => p.team))].sort((a, b) => a - b);

@@ -223,7 +223,7 @@ export function sanitizeSong(s: Partial<Song>): Song {
     ...base, ...s, lanes, patterns, arrange,
     bpm: Math.max(50, Math.min(220, s.bpm ?? 120)), swing: Math.max(0, Math.min(0.5, s.swing ?? 0)),
     root: Math.max(36, Math.min(60, s.root ?? 45)), scale: s.scale && SCALES[s.scale] ? s.scale : 'minor', crunch: Math.max(0, Math.min(1, s.crunch ?? 0)),
-    id: s.id ?? base.id, name: s.name ?? base.name,
+    id: s.id ?? base.id, name: s.name ?? base.name, custom: !!s.custom, // (presets arriving over the network stay presets)
   };
 }
 

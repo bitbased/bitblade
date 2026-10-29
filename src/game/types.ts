@@ -51,6 +51,8 @@ export interface MatchConfig {
   seed: number;
   /** race only: CPU catch-up (0 off, 1 normal, 2 strong) */
   rubber?: number;
+  /** online rooms: the room's chosen song (whole song, so guests without it hear it too) */
+  song?: import('./music').Song;
 }
 
 export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean; /** dash button held down (overdrive) */ hold?: boolean }
