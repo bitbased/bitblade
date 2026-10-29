@@ -883,10 +883,42 @@ function titanPeak(): ArenaDef {
   markers.push({ kind: 'spawn', x: tx(2), z: tz(n - 2) }, { kind: 'spawn', x: tx(3), z: tz(n - 2) }, { kind: 'spawn', x: tx(2), z: tz(n - 3) }, { kind: 'spawn', x: tx(4), z: tz(n - 2) });
   rampTops.forEach(([i, j]) => markers.push({ kind: 'checkpoint', x: tx(i), z: tz(j), r: 2.2 }));
   markers.push({ kind: 'hive', x: tx(3), z: tz(3), r: 9, len: 2 }, { kind: 'hive', x: tx(n - 6), z: tz(n - 6), r: 8, len: 2 });
-  for (const [i, j] of [[n - 2, 1], [1, 1], [n - 2, n - 2], [5, 10], [14, 7], [7, 14], [9, 6], [11, 11], [10, 9]] as [number, number][]) markers.push({ kind: 'gem', x: tx(i), z: tz(j) });
-  markers.push({ kind: 'item', x: tx(10), z: tz(1) }, { kind: 'item', x: tx(1), z: tz(10) }, { kind: 'item', x: tx(13), z: tz(13) }, { kind: 'spinpad', x: tx(n - 3), z: tz(10), r: 1.3 }, { kind: 'spinpad', x: tx(6), z: tz(6), r: 1.3 });
+  markers.push({ kind: 'item', x: tx(10), z: tz(1) }, { kind: 'item', x: tx(1), z: tz(10) }, { kind: 'item', x: tx(13), z: tz(13) });
   markers.push({ kind: 'goal', x: 0, z: 0, r: 2.6 });
-  return { id: 'quest-titan-peak', name: 'Titan Peak', desc: 'Huge open mountain: six tiers, spiral up to the summit (about 8m). Each ramp is on the next side round; holes block the short way on two tiers, and two drone hives patrol.', theme: THEMES.royal, course, markers };
+  // ---- the gauntlet: every side of every tier gets an obstacle set (no long empty runs)
+  // ring r's middle line runs 2r tiles out from the centre; `u` runs along a side
+  const onSide = (r: number, side: number, u: number, across = 0) => {
+    const s = sideOf[side], D = 2 * r * T + across;
+    return s[0] ? { x: s[0] * D, z: u } : { x: u, z: s[1] * D };
+  };
+  const rampSide = (r: number) => (5 - r) % 4;
+  const holeSide = (r: number) => (r === 4 || r === 2 ? (5 - r + 2) % 4 : -1);
+  const sets = ['arm', 'saw', 'slalom', 'bumpers', 'arm2', 'saw'] as const;
+  let k = 0;
+  for (let r = 5; r >= 1; r--) {
+    const half = 2 * r * T; // half the side length (corner to corner)
+    for (let side = 0; side < 4; side++) {
+      // stay clear of the ramp (mid-side) and the holes; use the quarter points of each side
+      for (const f of r >= 3 ? [-0.55, 0.55] : [-0.5, 0.5]) {
+        const u = f * half;
+        if (side === rampSide(r) && Math.abs(u) < 2 * T) continue;
+        if (side === holeSide(r) && Math.abs(u - 2.5 * T) < 2 * T) continue;
+        const kind = sets[k++ % sets.length];
+        const p = onSide(r, side, u);
+        const along = sideOf[side][0] ? [0, 1] : [1, 0]; // direction along this side
+        if (kind === 'arm' || kind === 'arm2') markers.push({ kind: 'arm', ...p, len: 4.6, speed: (kind === 'arm' ? 1.1 : -1.4) * (r % 2 ? 1 : -1), rot: k });
+        else if (kind === 'saw') markers.push({ kind: 'saw', ...p, r: 3.2, speed: 0.9 + r * 0.05, rot: k });
+        else if (kind === 'bumpers') markers.push({ kind: 'bumper', ...onSide(r, side, u - 2.5, -2.6), r: 0.9 }, { kind: 'bumper', ...onSide(r, side, u + 2.5, 2.6), r: 0.9 });
+        else for (const [du, dx] of [[-5, -2.8], [0, 2.8], [5, -2.8]]) { const q = onSide(r, side, u + du, dx); markers.push({ kind: 'pillar', x: q.x, z: q.z, r: 0.75 }); }
+        void along;
+        // a gem tucked just past each obstacle rewards going through instead of hugging the wall
+        if (k % 2 === 0) { const g = onSide(r, side, u + (u > 0 ? -6 : 6)); markers.push({ kind: 'gem', ...g }); }
+      }
+      // corner spin pads on the outer tiers (spin drains on a long climb)
+      if (r >= 3 && side % 2 === 0) markers.push({ kind: 'spinpad', ...onSide(r, side, half - 3, 0), r: 1.2 });
+    }
+  }
+  return { id: 'quest-gauntlet-peak', name: 'Gauntlet Peak', desc: 'Spiral up a six-tier mountain through the gauntlet: sweeper arms, orbiting saws, bumpers and pillar slaloms on every side, two drone hives, summit goal.', theme: THEMES.royal, course, markers };
 }
 
 const R0 = '0', LV = (s: string) => s; // readability helpers for level grids

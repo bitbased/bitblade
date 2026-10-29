@@ -314,6 +314,24 @@ function questControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control
   if (t.grounded && wallAt > 0 && wallAt < 1.6 && along > 2) c.jump = true;
   if (t.dashCd <= 0 && along > 2 && (gapAt > 0 && land && gapAt < 4 + speed * 0.3) && t.spin > 0.2) c.dash = true;
   if (t.dashCd <= 0 && gapAt < 0 && dist > 14 && along > 3 && along < 8 && t.spin > 0.5 && Math.random() < dt * 1.5) c.dash = true;
+  // the gauntlet: steer around sweepers / saws / pillars / bumpers, hop arms that are about to hit
+  for (const m of sim.markers) {
+    const hp = hazardPose(m, sim.s.t + 0.25);
+    if (!hp) continue;
+    const solid = hp.kind === 'pillar' || hp.kind === 'bumper';
+    const hx = hp.kind === 'arm' ? (hp.ax + hp.bx) / 2 : hp.ax, hz = hp.kind === 'arm' ? (hp.az + hp.bz) / 2 : hp.az;
+    const rr = hp.kind === 'arm' ? (m.len ?? 4) * 0.55 : solid ? (m.r ?? 0.8) + 0.6 : 1.8;
+    const ex = t.x - hx, ez = t.z - hz, ed = Math.hypot(ex, ez);
+    if (ed < rr + 1.4 && ed > 0.01) {
+      const push = ((rr + 1.4 - ed) / (rr + 1.4)) * (solid ? 0.9 : 1.4);
+      c.mx += (ex / ed) * push; c.mz += (ez / ed) * push;
+      if (!solid && t.grounded && ed < rr && t.jumpCd <= 0) c.jump = true;
+    }
+  }
+  {
+    const l = Math.hypot(c.mx, c.mz);
+    if (l > 1) { c.mx /= l; c.mz /= l; }
+  }
   // fight drones that get close
   const drone = sim.s.tops.find((o) => o.drone && o.alive && Math.hypot(o.x - t.x, o.z - t.z) < 3);
   if (drone && t.dashCd <= 0 && Math.random() < dt * 3) { const ex = drone.x - t.x, ez = drone.z - t.z, el = Math.hypot(ex, ez) || 1; c.mx = ex / el; c.mz = ez / el; c.dash = true; }
