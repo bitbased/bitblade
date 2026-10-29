@@ -20,6 +20,9 @@ export class Hud {
   annQueue: { text: string; sub?: string; color?: string }[] = [];
   annT = 0;
   cfg: MatchConfig;
+  /** split-screen: one HUD box per viewport */
+  vps: { id: number; tag: HTMLElement; wrong: HTMLElement }[] = [];
+  standings: HTMLElement | null = null;
 
   constructor(parent: HTMLElement, cfg: MatchConfig) {
     this.cfg = cfg;
@@ -53,6 +56,38 @@ export class Hud {
       this.cards.append(el);
       this.cardEls.push({ el, spin, burst, sp: spI, spBar, item, meta, rpm });
     });
+  }
+
+  /** split-screen: each local racer's tag, card and warnings live inside their own viewport; other cards fold into a standings list */
+  split(ids: number[]) {
+    const n = Math.min(4, ids.length);
+    const pos = n === 2 ? ['top', 'bottom'] : ['tl', 'tr', 'bl', 'br'];
+    this.root.classList.add('split');
+    this.root.prepend(h('div.split-lines' + (n > 2 ? '.quad' : '')));
+    this.vps = ids.slice(0, 4).map((id, k) => {
+      const tag = h('div.split-tag'), wrong = h('div.vp-wrong');
+      const el = h('div.split-vp.vp-' + pos[k], null, tag, wrong);
+      el.style.setProperty('--c', this.cfg.players[id].blade.glow);
+      const card = this.cardEls[id]?.el;
+      if (card) el.append(card);
+      this.root.append(el);
+      return { id, tag, wrong };
+    });
+    this.cards.style.display = 'none';
+    if (n === 3) {
+      // the spare quadrant shows the overhead map: put the full standings there
+      this.standings = h('div.split-standings');
+      this.root.append(h('div.split-vp.vp-br', null, this.standings));
+    }
+  }
+
+  /** split-screen per-viewport text: tag line + warning (empty = hidden) */
+  vpText(k: number, tag: string, warn: string) {
+    const v = this.vps[k];
+    if (!v) return;
+    if (v.tag.textContent !== tag) v.tag.textContent = tag;
+    if (v.wrong.textContent !== warn) v.wrong.textContent = warn;
+    v.wrong.classList.toggle('on', !!warn);
   }
 
   teamColor(t: number) {
@@ -100,6 +135,11 @@ export class Hud {
     if (this.cfg.mode === 'gauntlet') this.obj.textContent = `GEMS ${s.teamScores[0] ?? 0} / ${this.cfg.target} · ${Math.ceil(tl)}s`;
     this.hint.style.display = s.phase === 'launch' ? '' : 'none';
     if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? 'PRESS DASH WHEN THE RING IS GREEN!' : '';
+    if (this.standings) {
+      const order = s.tops.map((t, i) => ({ t, i })).sort((a, b) => (a.t.place || 99) - (b.t.place || 99));
+      const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${this.cfg.players[i].name}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
+      if (this.standings.dataset.h !== html) { this.standings.dataset.h = html; this.standings.innerHTML = html; }
+    }
     s.tops.forEach((t, i) => {
       const c = this.cardEls[i];
       if (!c) return;
