@@ -385,9 +385,9 @@ function starCadet(): ArenaDef {
       { kind: 'drop', x: 5.8, z: -3.4, r: 0.8, rot: 2.55, team: 0 },
       // wormholes: in one, out of the other
       { kind: 'saucer', x: 5.6, z: -9.6, r: 1.0, rot: 2.4, len: 15, team: 1 },
-      { kind: 'saucer', x: xc + 2.6, z: 6.6, r: 1.0, rot: -2.2, len: 15, team: 1 },
+      { kind: 'saucer', x: xc + 2.6, z: 6.6, r: 1.0, rot: -1.62, len: 15, team: 1 }, // (straight up the middle, clear of the ramp)
       // black hole kickout on the left
-      { kind: 'saucer', x: -8.2, z: 2.6, r: 1.0, rot: 0.35, len: 16 },
+      { kind: 'saucer', x: -8.2, z: 2.6, r: 1.0, rot: 1.05, len: 14 }, // (down toward the flippers, clear of the ramp wall)
       // flag rollovers above the drain (group 4)
       { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
       { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },

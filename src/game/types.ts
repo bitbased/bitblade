@@ -85,7 +85,9 @@ export interface TopState {
   /** pinball: a multiball ball (no lives, no respawn) / portal cooldown */
   extra?: boolean; portalT?: number;
   /** pinball: held in a capture saucer (marker index) and for how much longer */
-  held?: number; heldT?: number; rollT?: number; prog: number; cp: number; place: number; finishT: number;
+  held?: number; heldT?: number; rollT?: number;
+  /** saucer catches in a row without touching a flipper, and how long saucers ignore this ball (loop breaker) */
+  capN?: number; noCapT?: number; prog: number; cp: number; place: number; finishT: number;
   /** race: seconds spent on the wrong segment of the track (took a crossing); 0 = on course */
   off: number;
 }

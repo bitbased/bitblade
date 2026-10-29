@@ -850,6 +850,29 @@ export class Sim {
     if (t.z < -hh) { t.z = -hh; t.vz = Math.abs(t.vz) * 0.4; }
   }
 
+  /** how far a ball can travel from (x, z) along angle a before meeting a wall, bumper, post or target (max 6m) */
+  kickClearance(x: number, z: number, a: number, start: number) {
+    const cx = Math.cos(a), cz = Math.sin(a), br = 0.75;
+    for (let d = start; d <= 6; d += 0.2) {
+      const px = x + cx * d, pz = z + cz * d;
+      if (this.railSegs.some((sg) => !(sg.ox || sg.oz) && segDist(sg, px, pz).d < sg.half + br)) return d;
+      if (this.markers.some((m) => (m.kind === 'bumper' || m.kind === 'pillar' || m.kind === 'target' || m.kind === 'post') && Math.hypot(px - m.x, pz - m.z) < (m.r ?? 0.8) + br)) return d;
+    }
+    return 6;
+  }
+
+  /** the kick angle nearest `a` that has at least 4m of clear path (or the clearest one if none does) */
+  clearKick(x: number, z: number, a: number, start: number) {
+    let best = a, bestClear = -1;
+    for (let k = 0; k <= 16; k++) {
+      const off = (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 0.12;
+      const c = this.kickClearance(x, z, a + off, start);
+      if (c >= 4) return a + off;
+      if (c > bestClear) { bestClear = c; best = a + off; }
+    }
+    return best;
+  }
+
   /** is this ball sitting in the plunger lane? */
   inPlunger(t: TopState) {
     const pl = this.markers.find((m) => m.kind === 'plunger');
@@ -936,6 +959,7 @@ export class Sim {
         const fvx = -w * (cz - P.az), fvz = w * (cx - P.ax);
         const rvn = (t.vx - fvx) * nx + (t.vz - fvz) * nz;
         if (rvn < 0) { t.vx -= 1.35 * rvn * nx; t.vz -= 1.35 * rvn * nz; }
+        t.capN = 0;
       }
     });
     // plunger: hold down to pull it back, let go to fire (dash = a full shot)
@@ -1054,15 +1078,21 @@ export class Sim {
           const partner = m.team !== undefined ? ms.find((q) => q !== m && q.kind === 'saucer' && q.team === m.team) : undefined;
           if (partner) { t.x = partner.x; t.z = partner.z; t.y = this.ground(partner.x, partner.z) + 0.2; this.addScore(t, 1500); this.ev({ k: 'pin', what: 'wormhole', x: partner.x, y: t.y, z: partner.z, pts: 1500 }); }
           const out = partner ?? m;
-          const a = out.rot ?? -Math.PI / 2, v = out.len ?? 18;
+          // a little variety every time, and never straight into a wall or bumper (turn to the nearest clear way)
+          const a = this.clearKick(out.x, out.z, (out.rot ?? -Math.PI / 2) + (this.rnd() - 0.5) * 0.5, (out.r ?? 1) + 0.3);
+          const v = (out.len ?? 18) * (0.85 + this.rnd() * 0.3);
           t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
           t.x += Math.cos(a) * ((out.r ?? 1) + 0.3); t.z += Math.sin(a) * ((out.r ?? 1) + 0.3);
-          t.held = undefined; t.portalT = 0.6;
+          t.held = undefined; t.portalT = 1.6; // (no saucer or portal can catch it straight back)
+          // loop breaker: after two catches in a row without a flipper touching it, saucers let this ball go by
+          t.capN = (t.capN ?? 0) + 1;
+          if (t.capN >= 2) { t.noCapT = 6; t.capN = 0; }
           this.ev({ k: 'pin', what: 'kickout', x: out.x, y: t.y, z: out.z });
         }
         continue;
       }
-      if (t.portalT) continue;
+      if (t.noCapT) t.noCapT = Math.max(0, t.noCapT - dt);
+      if (t.portalT || t.noCapT) continue;
       const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8);
       if (mi < 0) continue;
       t.held = mi; t.heldT = 1.6;
