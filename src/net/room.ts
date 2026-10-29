@@ -26,7 +26,7 @@ class HostRoom {
   publish(force = false) {
     const t = this.t;
     if (!t || !t.listable) return;
-    const m: RoomListing = { ...this.summary, name: this.info.name || `${this.summary.host}'s room`, public: this.info.public, persistent: this.info.persistent, inMatch: this._inMatch };
+    const m: RoomListing = { ...this.summary, name: this.info.name || `${this.summary.host}'s room`, public: this.info.public, persistent: this.info.persistent, inMatch: this._inMatch, openControl: this.openControl };
     const k = JSON.stringify(m);
     if (!force && k === this.lastSent) return;
     if (!m.public && !this.lastSent.includes('"public":true') && !force) { this.lastSent = k; return; }

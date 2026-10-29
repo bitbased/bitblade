@@ -18,10 +18,12 @@ import type { MatchArg } from './match';
 export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean }
 
 const PREF_KEY = 'bitblade.roomPrefs';
-function loadPrefs(): { name: string; public: boolean; keep: boolean } {
-  try { return { name: '', public: false, keep: false, ...JSON.parse(localStorage.getItem(PREF_KEY) || '{}') }; } catch { return { name: '', public: false, keep: false }; }
+type Prefs = { name: string; public: boolean; keep: boolean; open: boolean };
+function loadPrefs(): Prefs {
+  const d: Prefs = { name: '', public: false, keep: false, open: false };
+  try { return { ...d, ...JSON.parse(localStorage.getItem(PREF_KEY) || '{}') }; } catch { return d; }
 }
-function savePrefs(p: { name: string; public: boolean; keep: boolean }) { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* ignore */ } }
+function savePrefs(p: Prefs) { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* ignore */ } }
 
 export class OnlineScreen implements Screen {
   app!: App;
@@ -70,17 +72,18 @@ export class OnlineScreen implements Screen {
     custom.addEventListener('input', () => { custom.value = cleanCode(custom.value); });
     const pub = this.toggle('PUBLIC', 'List this room in Public Rooms so anyone can find and join it', prefs.public, () => persist());
     const keep = this.toggle('KEEP ROOM', 'Save it to My Rooms with a fixed code and invite link you can reopen any time', prefs.keep, () => { persist(); customRow.style.display = keep.classList.contains('on') ? '' : 'none'; });
+    const openCtl = this.toggle('OPEN CONTROL', 'Let everyone in the room change mode / arena and start matches (you can change this any time in the lobby)', prefs.open, () => persist());
     const customRow = h('div.field', { style: { display: prefs.keep ? '' : 'none' } }, h('label', null, 'ROOM CODE (4-10 LETTERS / DIGITS)'), custom);
-    const persist = () => savePrefs({ name: roomName.value, public: pub.classList.contains('on'), keep: keep.classList.contains('on') });
+    const persist = () => savePrefs({ name: roomName.value, public: pub.classList.contains('on'), keep: keep.classList.contains('on'), open: openCtl.classList.contains('on') });
     roomName.addEventListener('change', persist);
     const create = (mode: ModeId) => {
       const isKeep = keep.classList.contains('on');
-      const opts: RoomOpts = { name: roomName.value.trim(), public: pub.classList.contains('on'), persistent: isKeep };
+      const opts: RoomOpts = { name: roomName.value.trim(), public: pub.classList.contains('on'), persistent: isKeep, openControl: openCtl.classList.contains('on') };
       if (isKeep) {
         const c = custom.value || newRoomCode();
         if (c.length < 4) { this.app.toast('Room codes need at least 4 letters / digits'); return; }
         opts.code = c; opts.key = newOwnerKey();
-        saveMyRoom({ code: c, key: opts.key, name: opts.name || `${settings.playerName || 'My'}'s room`, public: opts.public, openControl: false, mode, arenaId: '', lastUsed: Date.now() });
+        saveMyRoom({ code: c, key: opts.key, name: opts.name || `${settings.playerName || 'My'}'s room`, public: opts.public, openControl: !!opts.openControl, mode, arenaId: '', lastUsed: Date.now() });
       }
       this.app.go('lobby', { mode, online: true, room: opts });
     };
@@ -110,7 +113,7 @@ export class OnlineScreen implements Screen {
         col('min(420px, 100%)',
           h('h3', null, 'HOST A ROOM'),
           h('div.field', null, h('label', null, 'ROOM NAME'), roomName),
-          h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, pub, keep),
+          h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, pub, openCtl, keep),
           customRow,
           h('div.hint', null, 'Pick a mode to open the room. You lead: switch modes and arenas between matches and everyone follows.'),
           h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
@@ -157,7 +160,7 @@ export class OnlineScreen implements Screen {
         h('div.rr-icon', null, icon(MODE_ICON[r.mode as ModeId] ?? 'users')),
         h('div.rr-main', null,
           h('b', null, r.name || `${r.host}'s room`, mine.has(r.code) ? h('span.rr-tag.yours', null, 'YOURS') : r.persistent ? h('span.rr-tag', null, 'SAVED') : null),
-          h('span', null, `${r.modeName || r.mode} · ${r.arena} · host ${r.host}`)),
+          h('span', null, `${r.modeName || r.mode} · ${r.arena} · ${r.openControl ? 'OPEN CONTROL — anyone can drive' : `host ${r.host} leads`}`)),
         h('div.rr-side', null,
           h('b', { style: { color: full ? 'var(--red)' : 'var(--accent)' } }, `${r.players}/${r.max}`),
           h('span', null, r.inMatch ? 'IN MATCH' : full ? 'FULL' : 'IN LOBBY'))));
@@ -194,6 +197,7 @@ export class OnlineScreen implements Screen {
           live
             ? h('button.btn.small.primary.nav', { title: 'This room is already open — join it', onclick: () => this.join(publicJoinInput(r.code)) }, 'JOIN')
             : h('button.btn.small.primary.nav', { onclick: () => this.openSaved(r) }, 'OPEN'),
+          h('button.btn.small.nav' + (r.openControl ? '.on' : ''), { title: r.openControl ? 'Open Control: everyone can drive — click for leader only' : 'Leader only — click to let everyone drive (Open Control)', onclick: () => { saveMyRoom({ ...r, openControl: !r.openControl }); this.app.toast(r.openControl ? `${r.name}: leader only` : `${r.name}: Open Control on`); this.renderMyRooms(); } }, r.openControl ? 'CTRL: ALL' : 'CTRL: HOST'),
           h('button.btn.small.nav', { title: 'Rename this room', onclick: () => this.renameSaved(r, nameEl) }, 'RENAME'),
           h('button.btn.small.nav', { title: 'Copy invite link', onclick: () => { navigator.clipboard?.writeText(publicJoinInput(r.code)); this.app.toast('Invite link copied'); } }, icon('link')),
           h('button.btn.small.nav', { title: 'Forget this room', onclick: () => { if (!confirmTwice(this.app, 'del-room-' + r.code, `Press again to forget ${r.name} (its code is released only on this device)`)) return; deleteMyRoom(r.code); this.renderMyRooms(); } }, icon('close')))));

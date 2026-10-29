@@ -457,7 +457,7 @@ export class LobbyScreen implements Screen {
     el.innerHTML = '';
     if (hostRoom.t) {
       const t = hostRoom.t;
-      const ctl = h('div.toggle.panel.nav', { onclick: () => { hostRoom.openControl = !hostRoom.openControl; this.dirty = true; this.renderOnline(); }, title: 'Let everyone in the room change mode / arena and start matches' }, h('span.dot'), 'OPEN CONTROL');
+      const ctl = h('div.toggle.panel.nav', { onclick: () => { hostRoom.openControl = !hostRoom.openControl; this.dirty = true; this.app.toast(hostRoom.openControl ? 'OPEN CONTROL on — everyone in the room can change mode / arena and start' : 'Open Control off — only you can change the room'); this.renderOnline(); }, title: 'Let everyone in the room change mode / arena and start matches' }, h('span.dot'), 'OPEN CONTROL');
       ctl.classList.toggle('on', hostRoom.openControl);
       ctl.addEventListener('click', () => this.pushSummary());
       const info = hostRoom.info;

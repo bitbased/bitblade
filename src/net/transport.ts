@@ -26,6 +26,8 @@ export interface HostTransport {
 export interface RoomListing {
   public: boolean; name: string; host: string; mode: string; modeName: string; arena: string;
   players: number; max: number; inMatch: boolean; persistent: boolean;
+  /** anyone in the room can change mode / arena and start */
+  openControl?: boolean;
 }
 
 /** a public room as returned by the directory */
