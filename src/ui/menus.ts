@@ -83,7 +83,7 @@ export class MainMenu extends Base {
 }
 
 // ------------------------------------------------------------------ mode select
-export const MODE_ICON: Record<ModeId, string> = { duel: 'swords', tag: 'users', ffa: 'burst', ctf: 'hex', rush: 'gem', koth: 'crown', gauntlet: 'gear', race: 'finish' };
+export const MODE_ICON: Record<ModeId, string> = { duel: 'swords', tag: 'users', ffa: 'burst', ctf: 'hex', rush: 'gem', koth: 'crown', gauntlet: 'gear', race: 'finish', quest: 'trophy' };
 export class ModeSelect extends Base {
   initialFocus = 1;
   build() {
@@ -112,18 +112,18 @@ export class Results extends Base {
       clientRoom.closeHandler = (r) => { this.app.toast(`Room closed: ${r}`); this.app.go('menu'); };
     }
     const w = state.winner;
-    const isG = cfg.mode === 'gauntlet';
+    const isG = cfg.mode === 'gauntlet' || cfg.mode === 'quest';
     const teamName = (t: number) => {
       if (cfg.mode === 'tag' || cfg.mode === 'ctf') return t === 0 ? 'RED TEAM' : 'BLUE TEAM';
       return cfg.players.find((p) => p.team === t)?.name ?? `TEAM ${t + 1}`;
     };
     const wc = w >= 0 ? (cfg.mode === 'tag' || cfg.mode === 'ctf' ? TEAM_COLORS[w] : cfg.players.find((p) => p.team === w)?.blade.glow) : '#fff';
-    const banner = isG ? (w === 0 ? 'GAUNTLET CLEAR!' : 'GAUNTLET FAILED') : w === -2 ? 'DRAW!' : w >= 0 ? `${teamName(w)} WINS!` : 'MATCH OVER';
+    const banner = isG ? (w === 0 ? (cfg.mode === 'quest' ? 'QUEST CLEAR!' : 'GAUNTLET CLEAR!') : (cfg.mode === 'quest' ? 'QUEST FAILED' : 'GAUNTLET FAILED')) : w === -2 ? 'DRAW!' : w >= 0 ? `${teamName(w)} WINS!` : 'MATCH OVER';
     const banner2 = h('div.res-banner', null, banner);
     banner2.style.setProperty('--wc', wc ?? '#fff');
     if (w >= 0) this.app.sfx.play('win');
     const rows = state.tops.filter((t) => !t.drone).map((t, i) => {
-      const score = cfg.mode === 'rush' ? t.crystals : cfg.mode === 'gauntlet' ? t.score : cfg.mode === 'koth' ? Math.floor(state.teamScores[t.team]) : state.teamScores[t.team];
+      const score = cfg.mode === 'rush' ? t.crystals : cfg.mode === 'gauntlet' || cfg.mode === 'quest' ? t.score : cfg.mode === 'koth' ? Math.floor(state.teamScores[t.team]) : state.teamScores[t.team];
       const tr = h('tr', null,
         h('td', null, h('b', { style: { color: t.color } }, t.name)),
         h('td', null, String(score ?? 0)),

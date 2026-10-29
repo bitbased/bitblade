@@ -505,3 +505,7 @@ body.dev-touch .launch-hint { bottom: auto; top: calc(50% + 30px); }
   .menu-item.focus, .menu-item:hover { transform: translateX(8px); }
 }
 body.hints-on .menu-foot { bottom: 56px; }
+@media (max-width: 700px) {
+  .hud-obj { top: 56px; font-size: 9px; letter-spacing: 0.12em; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+  .hud-cards { top: 76px; }
+}

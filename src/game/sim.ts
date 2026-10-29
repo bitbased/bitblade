@@ -13,7 +13,7 @@ export const S_SURF = 7;
 const POINTS: Record<FinishType, number> = { spin: 1, over: 2, burst: 2, xtreme: 3 };
 export const FINISH_LABEL: Record<FinishType, string> = { spin: 'SPIN FINISH', over: 'OVER FINISH', burst: 'BURST FINISH', xtreme: 'XTREME FINISH' };
 const ITEM_POOL: ItemKind[] = ['turbo', 'shield', 'shock', 'surge', 'vortex', 'titan', 'comet', 'mine'];
-const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race']);
+const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race', 'quest']);
 
 function mulberry(seed: number) {
   let a = seed >>> 0;
@@ -59,7 +59,7 @@ export class Sim {
     this.buildSpawns();
     cfg.players.forEach((p, i) => this.addTop(p.name, p.team, p.blade, p.ctrl.type === 'cpu' ? p.ctrl.level : 0, i));
     // objects
-    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet') {
+    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest') {
       let items = this.markers.filter((m) => m.kind === 'item');
       if (items.length === 0) items = [0, 1, 2].map(() => ({ kind: 'item', ...this.terrain.randomSafePoint(this.rnd) }) as Marker);
       for (const m of items) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
@@ -83,6 +83,12 @@ export class Sim {
     if (cfg.mode === 'gauntlet') {
       this.s.gemsLeft = cfg.target || 15;
       for (let k = 0; k < 3; k++) this.spawnGem();
+    }
+    if (cfg.mode === 'quest') {
+      // every gem in the level is out from the start; the goal is the finish line
+      for (const m of this.markers) if (m.kind === 'gem') this.s.gems.push({ id: this.s.nextId++, x: m.x, y: this.ground(m.x, m.z) + 0.6, z: m.z });
+      this.s.gemsLeft = this.s.gems.length;
+      this.hiveCool = this.markers.map(() => 1.5);
     }
     this.startLaunch();
   }
@@ -125,7 +131,7 @@ export class Sim {
       grounded: false, air: 0, alive: true, out: '', outT: 0, burst: 0, special: 0, specialKind: best[0],
       dashCd: 0, jumpCd: 0, itemCd: 0, item: null, roll: 0,
       fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 },
-      flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : 99,
+      flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' ? 3 : this.cfg.mode === 'quest' ? 5 : 99, qcp: -1,
       respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
       lap: 0, prog: 0, cp: 0, place: 0, finishT: -1, off: 0,
     };
@@ -331,7 +337,7 @@ export class Sim {
     this.integrate(t, i, dt, canAct);
 
     // spin decay
-    const decay = st.spinDecay * (0.55 + 0.45 * t.spin) * (t.grounded ? 1 : 0.25) * (this.cfg.mode === 'gauntlet' ? 1.25 : this.cfg.mode === 'race' ? 0.3 : 1) + (t.spin < 0.25 ? 0.006 : 0);
+    const decay = st.spinDecay * (0.55 + 0.45 * t.spin) * (t.grounded ? 1 : 0.25) * (this.cfg.mode === 'gauntlet' ? 1.25 : this.cfg.mode === 'race' ? 0.3 : this.cfg.mode === 'quest' ? 0.45 : 1) + (t.spin < 0.25 ? 0.006 : 0);
     if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * (t.fx.surge > 0 ? 0.3 : 1) * dt + (t.spin > 1 && t.fx.surge <= 0 ? (t.spin - 1) * 0.6 * dt : 0);
     else t.spin = Math.max(t.spin, Math.min(1.1, t.spin + 0.12 * dt));
     t.angle += t.dir * (6 + t.spin * 34) * dt;
@@ -629,9 +635,9 @@ export class Sim {
       this.ev({ k: 'announce', text: FINISH_LABEL[type], sub: `${t.name}${RESPAWN_MODES.has(this.cfg.mode) ? ' respawning…' : ''}` });
     }
     if (RESPAWN_MODES.has(this.cfg.mode) && !t.drone) {
-      if (this.cfg.mode === 'gauntlet') {
+      if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') {
         t.lives--;
-        if (t.lives > 0) t.respawnT = 2.5;
+        if (t.lives > 0) t.respawnT = this.cfg.mode === 'quest' ? 1.4 : 2.5;
       } else t.respawnT = this.cfg.mode === 'race' ? 1.2 : 2.5;
     }
   }
@@ -653,6 +659,13 @@ export class Sim {
       this.placeTop(t, TS.x[k], TS.z[k], 1.5);
       t.prog = k < keep && keep - k < TS.n / 2 ? keep : k;
       t.vx = TS.tx[k] * 6; t.vz = TS.tz[k] * 6;
+      return;
+    }
+    if (this.cfg.mode === 'quest') {
+      // back at your last checkpoint (or the start), full spin
+      const cp = (t.qcp ?? -1) >= 0 ? this.markers[t.qcp!] : null;
+      const sp = cp ? { x: cp.x, z: cp.z } : this.spawnFor(t, i);
+      this.placeTop(t, sp.x, sp.z, 2.5);
       return;
     }
     const sp = this.cfg.mode === 'gauntlet' ? this.spawnFor(t, i) : this.terrain.randomSafePoint(this.rnd, { ...this.spawnFor(t, i), r: 3 });
@@ -957,6 +970,8 @@ export class Sim {
       if (z.t > 25) this.moveZone();
     } else if (mode === 'race') {
       return this.raceUpdate();
+    } else if (mode === 'quest') {
+      return this.questUpdate(dt);
     } else if (mode === 'gauntlet') {
       for (const g of s.gems) {
         for (const t of s.tops) {
@@ -1000,12 +1015,18 @@ export class Sim {
       const prev = t.prog;
       const ns = nearestSample(S, t.x, t.z, t.prog);
       const halfW = S.width / 2 + 1;
+      let idx = ns.i;
       if (ns.d > halfW) {
         // left our own stretch of road: are we on a DIFFERENT segment (took a crossing / cut across)?
         const g = globalNearest(S, t.x, t.z);
         const gd = Math.hypot(S.x[g] - t.x, S.z[g] - t.z);
         const sep = Math.min(Math.abs(g - t.prog), S.n - Math.abs(g - t.prog));
-        if (gd <= halfW && sep > 40) {
+        // a jumped corner / cut-across that lands a little further along, heading the right way, is a shortcut —
+        // that's progress, not off course (crossings land far away on the lap, so they still count as wrong turns)
+        const fwd = (g - t.prog + S.n) % S.n;
+        const along = t.vx * S.tx[g] + t.vz * S.tz[g];
+        if (gd <= halfW && fwd > 0 && fwd <= S.n * 0.2 && along > 1) idx = g;
+        else if (gd <= halfW && sep > 40 && t.grounded) {
           if (t.off === 0) this.ev({ k: 'announce', text: 'OFF COURSE', sub: `${t.name} — turn back!`, color: '#ff2244' });
           t.off += 1 / 120;
           if (t.off > 5) {
@@ -1014,11 +1035,11 @@ export class Sim {
             this.respawn(t, t.id);
             this.ev({ k: 'announce', text: 'BACK ON TRACK', sub: t.name });
           }
-        }
-        continue;
+          continue;
+        } else continue;
       }
       if (t.off > 0) t.off = 0;
-      t.prog = ns.i;
+      t.prog = idx;
       // edge riding: carving the outer lane / rail line at speed rips spin back up (sparks fly)
       {
         const sp = Math.hypot(t.vx, t.vz), edge = ns.d / (S.width / 2);
@@ -1084,6 +1105,67 @@ export class Sim {
     }
   }
 
+  hiveCool: number[] = [];
+
+  /** Blade Quest: gems, checkpoints, the goal, and drone hives that guard their zone */
+  questUpdate(dt: number) {
+    const s = this.s;
+    const players = s.tops.filter((t) => !t.drone);
+    // gems
+    for (const g of s.gems) {
+      for (const t of players) {
+        if (!t.alive) continue;
+        if (Math.hypot(t.x - g.x, t.z - g.z) < this.radius(t) + 0.7 && Math.abs(t.y - g.y) < 1.8) {
+          g.id = -1; t.score++; s.teamScores[0]++;
+          t.spin = Math.max(t.spin, Math.min(1.05, t.spin + 0.05));
+          this.ev({ k: 'pickup', id: t.id, what: 'gem', x: g.x, y: g.y, z: g.z });
+          break;
+        }
+      }
+    }
+    s.gems = s.gems.filter((g) => g.id >= 0);
+    this.markers.forEach((m, mi) => {
+      if (m.kind === 'checkpoint') {
+        for (const t of players) {
+          if (!t.alive || (t.qcp ?? -1) === mi) continue;
+          if (Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 2.2) + this.radius(t) && Math.abs(t.y - this.ground(m.x, m.z)) < 2.5) {
+            // only move forward through the level (array order = level order)
+            if ((t.qcp ?? -1) > mi) continue;
+            t.qcp = mi;
+            t.spin = Math.max(t.spin, 1);
+            const n = this.markers.slice(0, mi + 1).filter((x) => x.kind === 'checkpoint').length;
+            this.ev({ k: 'announce', text: 'CHECKPOINT', sub: `${t.name} · ${n}/${this.markers.filter((x) => x.kind === 'checkpoint').length} · spin refilled`, color: '#38ffb0' });
+            this.ev({ k: 'pickup', id: t.id, what: 'flag', x: m.x, y: t.y, z: m.z });
+          }
+        }
+      } else if (m.kind === 'goal') {
+        for (const t of players) {
+          if (t.alive && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 2.6) + this.radius(t) && Math.abs(t.y - this.ground(m.x, m.z)) < 3) {
+            const tm = (this.cfg.timeLimit - s.timeLeft).toFixed(1);
+            const total = this.markers.filter((x) => x.kind === 'gem').length;
+            return this.endMatch(0, `${t.name} reached the goal · ${tm}s · gems ${s.teamScores[0]}/${total}`);
+          }
+        }
+      } else if (m.kind === 'hive') {
+        // keep the hive stocked: up to `len` drones, one every few seconds
+        const mine = s.tops.filter((d) => d.drone && d.home === mi && d.alive).length;
+        this.hiveCool[mi] = (this.hiveCool[mi] ?? 0) - dt;
+        if (mine < (m.len ?? 2) && this.hiveCool[mi] <= 0) {
+          this.hiveCool[mi] = 7;
+          const blade = { ...this.cfg.players[0].blade, id: 'drone' + s.nextId++, name: 'Drone', primary: '#333', secondary: '#111', glow: '#ff2244', spinDir: -1 as const, tip: 'flat' as const };
+          const d = this.addTop('Drone', 9, blade, 2, 0, true);
+          d.home = mi;
+          d.spin = 0.85;
+          this.placeTop(d, m.x + (this.rnd() - 0.5) * 2, m.z + (this.rnd() - 0.5) * 2, 3);
+        }
+      }
+    });
+    if (s.phase !== 'battle') return;
+    const anyLeft = players.some((t) => t.alive || t.respawnT > 0);
+    if (!anyLeft) return this.endMatch(-2, 'OUT OF LIVES');
+    if (s.timeLeft <= 0) return this.endMatch(-2, 'TIME UP');
+  }
+
   spawnDrone() {
     const p = this.terrain.randomSafePoint(this.rnd);
     const blade = { ...this.cfg.players[0].blade, id: 'drone' + this.s.nextId++, name: 'Drone', primary: '#444', glow: '#ff2244', spinDir: -1 as const, tip: 'flat' as const };
@@ -1097,6 +1179,6 @@ export class Sim {
     this.s.phase = 'matchEnd';
     this.s.phaseT = 0;
     this.s.lastFinish = msg;
-    this.ev({ k: 'announce', text: winner === -2 ? (this.cfg.mode === 'gauntlet' ? 'FAILED' : 'DRAW') : winner >= 0 && this.cfg.mode === 'gauntlet' ? 'GAUNTLET CLEAR!' : 'MATCH OVER', sub: msg });
+    this.ev({ k: 'announce', text: winner === -2 ? (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest' ? 'FAILED' : 'DRAW') : winner >= 0 && this.cfg.mode === 'gauntlet' ? 'GAUNTLET CLEAR!' : winner >= 0 && this.cfg.mode === 'quest' ? 'QUEST CLEAR!' : 'MATCH OVER', sub: msg });
   }
 }

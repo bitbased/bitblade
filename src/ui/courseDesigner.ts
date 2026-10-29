@@ -14,7 +14,7 @@ import {
 } from '../game/terrain';
 
 const LEVEL_H = 1.6;
-const MAX_GRID = 12;
+const MAX_GRID = 40;
 const TEAM_COL = ['#ff3b4a', '#3b8bff'];
 
 type Tool = 'paint' | 'level' | 'erase' | 'place' | 'select' | 'pick';
@@ -39,7 +39,10 @@ const MARKERS: MarkerInfo[] = [
   { kind: 'spinpad', label: 'Spin Pad', color: '#38ffb0', icon: 'swirl', drag: 'radius', tip: 'Recharges spin — drag to size' },
   { kind: 'flag', label: 'Flag Base', color: '#ff3b4a', icon: 'finish', drag: 'none', tip: 'CTF core base (team)' },
   { kind: 'zone', label: 'Hill Zone', color: '#ffd23a', icon: 'crown', drag: 'radius', tip: 'King-of-the-Hill zone — drag to size' },
-  { kind: 'gem', label: 'Gem', color: '#ff5cf4', icon: 'gem', drag: 'none', tip: 'Gauntlet gem spot' },
+  { kind: 'gem', label: 'Gem', color: '#ff5cf4', icon: 'gem', drag: 'none', tip: 'Gem spot (Gauntlet) / collectible gem (Quest)' },
+  { kind: 'checkpoint', label: 'Checkpoint', color: '#38ffb0', icon: 'finish', drag: 'aim', tip: 'Quest checkpoint: respawn point + spin refill. Place them in level order; drag to turn the gate' },
+  { kind: 'goal', label: 'Goal', color: '#ffd23a', icon: 'trophy', drag: 'radius', tip: 'Quest finish: reaching it clears the level (adds the course to Blade Quest)' },
+  { kind: 'hive', label: 'Drone Hive', color: '#ff2244', icon: 'skull', drag: 'radius', tip: 'Spawns drones that guard this zone and chase anyone inside — drag sets the zone' },
 ];
 const MINFO = Object.fromEntries(MARKERS.map((m) => [m.kind, m])) as Record<MarkerKind, MarkerInfo>;
 
@@ -57,7 +60,7 @@ const PIECE_GROUPS: { label: string; kinds: PieceKind[] }[] = [
   { label: 'FEATURES', kinds: ['spine', 'dome', 'volcano', 'bumps', 'ramp', 'pit'] },
 ];
 
-type TemplateId = 'empty' | 'pool' | 'halfpipe' | 'bowls' | 'plaza' | 'ctf';
+type TemplateId = 'empty' | 'pool' | 'halfpipe' | 'bowls' | 'plaza' | 'ctf' | 'questrun' | 'questworld';
 const TEMPLATES: { id: TemplateId; label: string; w: number; h: number }[] = [
   { id: 'pool', label: 'Walled pool', w: 5, h: 4 },
   { id: 'empty', label: 'Empty deck (open edges)', w: 5, h: 5 },
@@ -65,10 +68,12 @@ const TEMPLATES: { id: TemplateId; label: string; w: number; h: number }[] = [
   { id: 'bowls', label: 'Bowl complex', w: 6, h: 5 },
   { id: 'plaza', label: 'Street plaza', w: 6, h: 5 },
   { id: 'ctf', label: 'CTF symmetric', w: 8, h: 4 },
+  { id: 'questrun', label: 'Quest: linear run', w: 20, h: 2 },
+  { id: 'questworld', label: 'Quest: open world', w: 12, h: 12 },
 ];
 
 const TEST_MODES: { id: string; label: string }[] = [
-  { id: 'rush', label: 'Crystal Rush' }, { id: 'ffa', label: 'Free-for-all' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Duel' },
+  { id: 'quest', label: 'Blade Quest' }, { id: 'rush', label: 'Crystal Rush' }, { id: 'ffa', label: 'Free-for-all' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Duel' },
 ];
 
 type SnapMode = 'grid' | 'tile' | 'off';
@@ -181,6 +186,30 @@ function templateCourse(id: TemplateId, w: number, hh: number): { course: Course
       }
       markers.push({ kind: 'item', x: tcx(1), z: tcz(2) }, { kind: 'item', x: tcx(w - 2), z: tcz(1) }, { kind: 'spinpad', x: 0, z: tcz(hh - 1), r: 1.1 });
       break;
+    case 'questrun': {
+      // a walled corridor with a kicker + gap in the middle, start on the left, goal on the right
+      fill(); wrapWalls(c);
+      const mid = Math.floor(w / 2);
+      if (w >= 8) {
+        for (let j = 0; j < hh; j++) { const p = pieceAt(c, mid, j); if (p) c.pieces.splice(c.pieces.indexOf(p), 1); set('kicker', mid - 1, j, 1); }
+      }
+      for (let j = 0; j < hh; j++) markers.push({ kind: 'spawn', x: tcx(0), z: tcz(j) });
+      markers.push({ kind: 'checkpoint', x: tcx(Math.min(w - 2, mid + 2)), z: tcz(0), r: 2.2 }, { kind: 'gem', x: tcx(2), z: tcz(0) }, { kind: 'gem', x: tcx(mid + 1), z: tcz(hh - 1) }, { kind: 'goal', x: tcx(w - 1), z: 0, r: 2.6 });
+      break;
+    }
+    case 'questworld': {
+      // open plaza with a raised middle reached by ramps, a drone hive guarding it, goal in the far corner
+      fill(); wrapWalls(c);
+      const ci = Math.floor(w / 2), cj = Math.floor(hh / 2);
+      if (w >= 6 && hh >= 6) {
+        for (let j = cj - 1; j <= cj; j++) for (let i = ci - 1; i <= ci; i++) set('flat', i, j, 0, 1);
+        set('ramp', ci - 2, cj, 1); set('ramp', ci + 1, cj - 2, 0);
+      }
+      markers.push({ kind: 'spawn', x: tcx(1), z: tcz(1) }, { kind: 'spawn', x: tcx(2), z: tcz(1) },
+        { kind: 'hive', x: tcx(ci), z: tcz(cj), r: 8, len: 2 }, { kind: 'gem', x: tcx(ci), z: tcz(cj) - 2 }, { kind: 'gem', x: tcx(1), z: tcz(hh - 2) }, { kind: 'gem', x: tcx(w - 2), z: tcz(1) },
+        { kind: 'checkpoint', x: tcx(w - 2), z: tcz(2), r: 2.2 }, { kind: 'goal', x: tcx(w - 2), z: tcz(hh - 2), r: 2.6 });
+      break;
+    }
     case 'ctf': {
       fill(); wrapWalls(c);
       const mid = Math.floor(w / 2);
@@ -583,6 +612,9 @@ class CourseEditor {
       case 'bumper': case 'pillar': slider('Radius', 'r', 0.4, 2.2, 0.05, 0.8); break;
       case 'spinpad': slider('Radius', 'r', 0.6, 2.6, 0.05, 1.1); break;
       case 'zone': slider('Radius', 'r', 1.5, 7, 0.1, 2.6); break;
+      case 'hive': slider('Zone', 'r', 3, 20, 0.5, 8); slider('Drones', 'len', 1, 5, 1, 2); break;
+      case 'goal': slider('Radius', 'r', 1.5, 5, 0.1, 2.6); break;
+      case 'checkpoint': slider('Width', 'r', 1.2, 4, 0.1, 2.2); slider('Turn', 'rot', 0, 0, 0, 0, true); break;
     }
     if (m.kind === 'spawn' || m.kind === 'flag') {
       const opts = m.kind === 'flag' ? [0, 1] : [undefined, 0, 1];
@@ -1134,6 +1166,25 @@ class CourseEditor {
         const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 2.5, 40, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
         cyl.position.y = 1.25;
         g.add(cyl, flatRing(r - 0.08, r));
+        break;
+      }
+      case 'checkpoint': {
+        const r = m.r ?? 2.2;
+        for (const sgn of [-1, 1]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 2.4, 6), glowMat()); post.position.set(Math.cos(m.rot ?? 0) * r * sgn, 1.2, -Math.sin(m.rot ?? 0) * r * sgn); g.add(post); }
+        g.add(flatRing(r - 0.1, r));
+        break;
+      }
+      case 'goal': {
+        const r = m.r ?? 2.6;
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.18, 8, 40), glowMat());
+        ring.position.y = r + 0.3; ring.rotation.y = Math.PI / 2;
+        g.add(ring, flatRing(r - 0.12, r));
+        break;
+      }
+      case 'hive': {
+        const r = m.r ?? 8;
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 6, 4, 0, Math.PI * 2, 0, Math.PI / 2), glowMat());
+        g.add(dome, flatRing(r - 0.15, r));
         break;
       }
       case 'gem': {

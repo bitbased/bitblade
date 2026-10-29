@@ -176,7 +176,9 @@ export function buildArenaMesh(terrain: Terrain, theme: Theme): THREE.Group {
   geo.setIndex(idx);
   geo.computeVertexNormals();
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: gridTexture(theme), roughness: 0.62, metalness: 0.15 });
-  const glowColor = new THREE.Color(theme.glow).multiplyScalar(2.2);
+  // big floating quest levels have long drop-off faces; full-strength neon there blows the picture out
+  const quest = terrain.def.markers.some((m) => m.kind === 'goal');
+  const glowColor = new THREE.Color(theme.glow).multiplyScalar(quest ? 0.8 : 2.2);
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.glowColor = { value: glowColor };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float glow;\nvarying float vGlow;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = glow;');
@@ -375,6 +377,8 @@ export class GameView {
   flagViews: { pole: THREE.Group; orb: THREE.Mesh; base: THREE.Mesh }[] = [];
   zoneMesh: THREE.Mesh | null = null;
   boostMeshes: THREE.Mesh[] = [];
+  checkpoints: { mi: number; banner: THREE.Mesh; pad: THREE.Mesh }[] = [];
+  goalRing: THREE.Mesh | null = null;
   spinPads: { arms: THREE.Mesh[]; spin: number; beam: THREE.Mesh; ring: THREE.Mesh; x: number; z: number; r: number }[] = [];
   camTarget = new THREE.Vector3();
   camPos = new THREE.Vector3();
@@ -632,6 +636,53 @@ export class GameView {
           this.boostMeshes.push(pad);
           break;
         }
+        case 'checkpoint': {
+          // a glowing gate you roll through; lights up once touched (see update)
+          const r = m.r ?? 2.2;
+          const gate = new THREE.Group();
+          const postMat = new THREE.MeshStandardMaterial({ color: '#1a2a2a', emissive: '#38ffb0', emissiveIntensity: 0.6, metalness: 0.4, roughness: 0.4 });
+          for (const sgn of [-1, 1]) {
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 2.6, 8), postMat);
+            post.position.set(sgn * r, 1.3, 0);
+            gate.add(post);
+          }
+          const banner = new THREE.Mesh(new THREE.BoxGeometry(r * 2 + 0.3, 0.32, 0.08), new THREE.MeshBasicMaterial({ color: '#38ffb0', toneMapped: false }));
+          banner.position.y = 2.6;
+          gate.add(banner);
+          gate.position.set(m.x, y, m.z);
+          gate.rotation.y = m.rot ?? 0;
+          const pad = new THREE.Mesh(new THREE.RingGeometry(r * 0.85, r, 40, 2), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false }));
+          this.drape(pad, m.x, m.z, 1, 0.05);
+          this.scene.add(gate, pad);
+          this.checkpoints.push({ mi, banner, pad });
+          break;
+        }
+        case 'goal': {
+          // a big checkered portal ring with a light column
+          const r = m.r ?? 2.6;
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.22, 10, 48), new THREE.MeshBasicMaterial({ color: '#ffd23a', toneMapped: false }));
+          ring.position.set(m.x, y + r + 0.3, m.z);
+          ring.rotation.y = m.rot ?? Math.PI / 2;
+          const pad = new THREE.Mesh(new THREE.RingGeometry(0, r, 40, 3), new THREE.MeshBasicMaterial({ map: checkerTexture(), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false }));
+          this.drape(pad, m.x, m.z, 1, 0.05);
+          const beam = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 14, 32, 1, true), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+          beam.position.set(m.x, y + 7, m.z);
+          this.scene.add(ring, pad, beam);
+          this.goalRing = ring;
+          break;
+        }
+        case 'hive': {
+          // drone nest: dark hex dome + a red zone ring showing where its drones will hunt you
+          const r = m.r ?? 8;
+          const dome = new THREE.Mesh(new THREE.SphereGeometry(1.1, 6, 4, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#221016', emissive: '#ff2244', emissiveIntensity: 0.35, flatShading: true, metalness: 0.5, roughness: 0.5 }));
+          dome.position.set(m.x, y, m.z);
+          const zone = new THREE.Mesh(new THREE.RingGeometry(r - 0.18, r, 64, 1), new THREE.MeshBasicMaterial({ color: '#ff2244', transparent: true, opacity: 0.55, toneMapped: false, depthWrite: false }));
+          this.drape(zone, m.x, m.z, 1, 0.06);
+          const fill = new THREE.Mesh(new THREE.RingGeometry(0, r, 48, 4), new THREE.MeshBasicMaterial({ color: '#ff2244', transparent: true, opacity: 0.06, toneMapped: false, depthWrite: false }));
+          this.drape(fill, m.x, m.z, 1, 0.04);
+          this.scene.add(dome, zone, fill);
+          break;
+        }
         case 'spinpad': {
           const r = m.r ?? 1.1;
           const col = '#38ffb0';
@@ -762,6 +813,40 @@ export class GameView {
     }
   }
 
+  /** quest: the next checkpoint after `qcp` (marker index), else the goal */
+  questWaypoint(qcp: number) {
+    const ms = this.cfg.arena.markers;
+    for (let i = qcp + 1; i < ms.length; i++) if (ms[i].kind === 'checkpoint') return ms[i];
+    return ms.find((m) => m.kind === 'goal') ?? null;
+  }
+
+  /** quest: a floating arrow over each of your blades pointing at where to go next */
+  questArrows: THREE.Mesh[] = [];
+  updateQuestArrows(s: GameState) {
+    if (this.cfg.mode !== 'quest') return;
+    this.focus.forEach((id, k) => {
+      let a = this.questArrows[k];
+      if (!a) {
+        const shape = new THREE.Shape();
+        shape.moveTo(0, 0.9); shape.lineTo(0.55, 0); shape.lineTo(0.2, 0.05); shape.lineTo(0.2, -0.6); shape.lineTo(-0.2, -0.6); shape.lineTo(-0.2, 0.05); shape.lineTo(-0.55, 0); shape.closePath();
+        a = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: '#38ffb0', transparent: true, opacity: 0.85, side: THREE.DoubleSide, toneMapped: false, depthWrite: false }));
+        a.rotation.order = 'YXZ';
+        this.scene.add(a);
+        this.questArrows[k] = a;
+      }
+      const t = s.tops[id];
+      const wp = t && this.questWaypoint(t.qcp ?? -1);
+      a.visible = !!(t && t.alive && wp && s.phase === 'battle');
+      if (!a.visible || !wp || !t) return;
+      const dx = wp.x - t.x, dz = wp.z - t.z, d = Math.hypot(dx, dz);
+      a.visible = d > 4;
+      const yaw = Math.atan2(dx, dz);
+      a.position.set(t.x + (dx / (d || 1)) * 1.6, t.y + 1.9 + Math.sin(this.time * 4) * 0.12, t.z + (dz / (d || 1)) * 1.6);
+      a.rotation.set(-Math.PI / 2, yaw + Math.PI, 0);
+      (a.material as THREE.MeshBasicMaterial).color.set(wp.kind === 'goal' ? '#ffd23a' : '#38ffb0');
+    });
+  }
+
   /**
    * Lay a flat ring / disc (built in the XY plane) onto the terrain around (cx, cz): every vertex sits on the
    * surface + lift. `scale` and `angle` are applied to the flat shape first (so animated pads stay draped).
@@ -841,6 +926,14 @@ export class GameView {
     }
     for (const b of this.boostMeshes) { const mat = b.material as THREE.MeshBasicMaterial; if (mat.map) mat.map.offset.y -= dt * 1.5; }
     // spin pads: swirl turns; flares up while someone is re-spinning on it
+    // quest: checkpoints you've reached turn gold; the goal ring turns slowly
+    for (const c of this.checkpoints) {
+      const reached = this.focus.some((i) => (s.tops[i]?.qcp ?? -1) >= c.mi);
+      (c.banner.material as THREE.MeshBasicMaterial).color.set(reached ? '#ffd23a' : '#38ffb0');
+      (c.pad.material as THREE.MeshBasicMaterial).color.set(reached ? '#ffd23a' : '#38ffb0');
+    }
+    if (this.goalRing) this.goalRing.rotation.z = this.time * 0.6;
+    this.updateQuestArrows(s);
     // when one of your blades is low on spin, every pad pulses like a beacon so you can find one
     const beacon = this.focus.some((i) => s.tops[i]?.alive && s.tops[i].spin < 0.4 && s.phase === 'battle');
     for (const p of this.spinPads) {
@@ -1030,6 +1123,19 @@ export class GameView {
       return;
     }
     let pts = s.tops.filter((t) => t.alive || (s.phase !== 'battle' && t.out !== 'over' && t.out !== 'xtreme'));
+    if (this.cfg.mode === 'quest') {
+      const mine = this.focus.map((i) => s.tops[i]).filter((t) => t && (t.alive || t.respawnT > 0));
+      const humans = s.tops.filter((t) => !t.drone && t.alive);
+      pts = mine.length ? mine : humans.length ? humans : pts;
+      // look ahead: also frame a point ~10m toward each blade's next checkpoint / the goal, so you see where to go
+      const ahead = pts.map((t) => {
+        const wp = this.questWaypoint(t.qcp ?? -1);
+        if (!wp) return null;
+        const dx = wp.x - t.x, dz = wp.z - t.z, d = Math.hypot(dx, dz) || 1, k = Math.min(10, d);
+        return { ...t, x: t.x + (dx / d) * k, z: t.z + (dz / d) * k, y: t.y } as typeof t;
+      }).filter((p): p is (typeof pts)[number] => !!p);
+      pts = [...pts, ...ahead];
+    }
     if (this.terrain.track) {
       const f = this.focus.length ? this.focus.map((i) => s.tops[i]).filter(Boolean) : [...s.tops].sort((a, b) => a.place - b.place).slice(0, 1);
       pts = f.length ? f : pts;
@@ -1057,7 +1163,7 @@ export class GameView {
       } else {
         // fit every blade inside the part of the screen the HUD doesn't cover (works for portrait phones too)
         const tgt = new THREE.Vector3(cx, cy * 0.5, cz);
-        const base = Math.min(S * 2.2, Math.max(11, spread * 1.7 + 8));
+        const base = Math.min(S * 2.2, Math.max(this.cfg.mode === 'quest' ? 17 : 11, spread * 1.7 + 8));
         const need = this.fitDistance(pts, tgt, cx, cz, base);
         this.fitDist = this.fitDist ? this.fitDist + (need - this.fitDist) * Math.min(1, dt * (need > this.fitDist ? 7 : 1.5)) : need;
         const dist = this.fitDist;
@@ -1103,7 +1209,7 @@ export class GameView {
         }
       }
       if (worst <= 0) break;
-      d = Math.max(11, Math.min(this.terrain.size * 3, d * Math.max(0.85, worst)));
+      d = Math.max(this.cfg.mode === 'quest' ? 17 : 11, Math.min(this.terrain.size * 3, d * Math.max(0.85, worst)));
     }
     return d;
   }
@@ -1159,6 +1265,19 @@ export class GameView {
 }
 
 /** Race chase camera: behind the leading followed blade, looking down the track (pure, unit-testable). */
+/** checkered finish texture for quest goals */
+let checkerTex: THREE.CanvasTexture | null = null;
+function checkerTexture() {
+  if (checkerTex) return checkerTex;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const g = cv.getContext('2d')!;
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { g.fillStyle = (x + y) % 2 ? '#111' : '#ffd23a'; g.fillRect(x * 8, y * 8, 8, 8); }
+  checkerTex = new THREE.CanvasTexture(cv);
+  checkerTex.colorSpace = THREE.SRGBColorSpace;
+  return checkerTex;
+}
+
 export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | null, spread: number, dt: number) {
   const lead = pts.reduce((a, b) => (b.lap * T.n + b.prog > a.lap * T.n + a.prog ? b : a));
   let cx = 0, cz = 0, cy = 0;

@@ -163,7 +163,7 @@ export class LobbyScreen implements Screen {
   fillCpus() {
     const m = this.mode;
     const names = ['Kai', 'Ryo', 'Mika', 'Zed', 'Nova', 'Juno', 'Rex', 'Ivy'];
-    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' ? 1 : 2)) {
+    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' || m.id === 'quest' ? 1 : 2)) {
       const used = new Set(L.slots.map((s) => s.bladeId));
       const blade = PRESETS.find((b) => !used.has(b.id)) ?? PRESETS[L.slots.length % PRESETS.length];
       L.slots.push({ name: `CPU ${names[L.slots.length % names.length]}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length });
@@ -174,7 +174,7 @@ export class LobbyScreen implements Screen {
   assignTeams(force = false) {
     const m = this.mode;
     L.slots.forEach((s, i) => {
-      if (m.id === 'gauntlet') s.team = 0;
+      if (m.id === 'gauntlet' || m.id === 'quest') s.team = 0;
       else if (m.teams === 0 || m.id === 'duel') s.team = i;
       else if (force || s.team > 1) s.team = m.id === 'tag' ? (i < 2 ? 0 : 1) : i % 2;
     });
@@ -356,7 +356,10 @@ export class LobbyScreen implements Screen {
   }
 
   /** arenas that make sense for a mode: races need a track, everything else needs an arena/course */
-  fits(a: ArenaDef, mode = L.mode) { return mode === 'race' ? !!a.track : !a.track; }
+  fits(a: ArenaDef, mode = L.mode) {
+    const quest = a.markers.some((m) => m.kind === 'goal');
+    return mode === 'race' ? !!a.track : mode === 'quest' ? quest : !a.track && !quest;
+  }
 
   arenaOrder() {
     const m = this.mode;

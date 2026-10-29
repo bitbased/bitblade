@@ -1,7 +1,7 @@
 import type { BladeDesign } from '../core/blade';
 import type { ArenaDef } from './terrain';
 
-export type ModeId = 'duel' | 'tag' | 'ffa' | 'ctf' | 'rush' | 'koth' | 'gauntlet' | 'race';
+export type ModeId = 'duel' | 'tag' | 'ffa' | 'ctf' | 'rush' | 'koth' | 'gauntlet' | 'race' | 'quest';
 export type ItemKind = 'turbo' | 'shield' | 'shock' | 'surge' | 'vortex' | 'titan' | 'comet' | 'mine';
 export type FinishType = 'spin' | 'over' | 'burst' | 'xtreme';
 
@@ -16,6 +16,7 @@ export const MODES: ModeInfo[] = [
   { id: 'koth', name: 'King of the Hill', tag: 'Zone', desc: 'Hold the zone alone to score. The zone moves!', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: false, target: 45, time: 180, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'ramp-park', 'titan-colosseum', 'mega-bowl'] },
   { id: 'race', name: 'Grand Prix', tag: 'Race', desc: 'F-Zero style laps on floating sky tracks. Boost strips, jumps, items. Fall off and you respawn behind.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 3, time: 300, arenas: ['neon-circuit', 'sky-serpent', 'crystal-canyon', 'inferno-gauntlet', 'frost-byte', 'hyper-tube', 'crossfire-8', 'trefoil'] },
   { id: 'gauntlet', name: 'Gauntlet', tag: 'Solo / Co-op', desc: 'Collect 15 gems through automated hazards and drones before your spin dies.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 15, time: 300, arenas: ['gauntlet-works', 'gauntlet-mega', 'ramp-park', 'kidney-pool'] },
+  { id: 'quest', name: 'Blade Quest', tag: 'Adventure', desc: 'Platforming adventure: jump gaps, climb levels, dodge drone hives, grab gems and reach the goal. Checkpoints respawn you and refill your spin.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 0, time: 600, arenas: ['quest-neon-run', 'quest-sky-steps', 'quest-hive-valley'] },
 ];
 
 export const ITEMS: Record<ItemKind, { name: string; icon: string; color: string }> = {
@@ -71,6 +72,8 @@ export interface TopState {
   respawnT: number; lastHit: number; lastHitT: number;
   launch: number; launchLocked: boolean;
   drone?: boolean; scale: number;
+  /** quest: index (into the arena's markers) of the last checkpoint touched, -1 = start; drones: their hive marker */
+  qcp?: number; home?: number;
   lap: number; prog: number; cp: number; place: number; finishT: number;
   /** race: seconds spent on the wrong segment of the track (took a crossing); 0 = on course */
   off: number;

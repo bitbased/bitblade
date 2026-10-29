@@ -27,6 +27,7 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     chooseGoal(sim, t, ai);
   }
   if (sim.terrain.track && sim.cfg.mode === 'race') return raceControl(sim, t, ai, dt, c);
+  if (sim.cfg.mode === 'quest' && !t.drone) return questControl(sim, t, ai, dt, c);
   // steering toward goal (with lead on moving enemy)
   let gx = ai.tx, gz = ai.tz;
   const raceBrake = 0;
@@ -157,6 +158,25 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       return;
     }
     case 'race': return;
+    case 'quest': {
+      if (t.drone) {
+        const hv = sim.markers[t.home ?? -1];
+        if (!hv) return pickEnemy();
+        // chase whoever is inside the zone; otherwise drift back and patrol around the hive
+        const intruders = enemies.filter((e) => !e.drone && Math.hypot(e.x - hv.x, e.z - hv.z) < (hv.r ?? 8));
+        const tgt = intruders.sort((a, b) => Math.hypot(a.x - t.x, a.z - t.z) - Math.hypot(b.x - t.x, b.z - t.z))[0];
+        if (tgt) { ai.target = tgt.id; return; }
+        ai.target = -1;
+        wanderAround(hv.x, hv.z, (hv.r ?? 8) * 0.4);
+        return;
+      }
+      ai.target = -1;
+      const g = nearest(s.gems.filter((g) => Math.abs(g.y - t.y) < 1.5 && Math.hypot(g.x - t.x, g.z - t.z) < 7));
+      const wp = questWaypoint(sim, t);
+      if (g && wp && Math.hypot(g.x - wp.x, g.z - wp.z) < Math.hypot(t.x - wp.x, t.z - wp.z) + 2) { ai.tx = g.x; ai.tz = g.z; return; }
+      if (wp) { ai.tx = wp.x; ai.tz = wp.z; }
+      return;
+    }
     case 'gauntlet': {
       if (t.drone) { pickEnemy(); return; }
       const g = nearest(s.gems);
@@ -174,6 +194,56 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       pickEnemy();
     }
   }
+}
+
+/** the next thing a quest runner should head for: the next checkpoint after the last one touched, else the goal */
+export function questWaypoint(sim: Sim, t: TopState) {
+  const ms = sim.markers;
+  const from = t.qcp ?? -1;
+  for (let i = from + 1; i < ms.length; i++) if (ms[i].kind === 'checkpoint') return ms[i];
+  return ms.find((m) => m.kind === 'goal') ?? null;
+}
+
+/**
+ * Quest runner: velocity-matched steering toward the waypoint, a speed-up before gaps and ramps,
+ * jumps over gaps and up small ledges, brakes at drop-offs it can't clear.
+ */
+function questControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control): Control {
+  const ter = sim.terrain;
+  let dx = ai.tx - t.x, dz = ai.tz - t.z;
+  const dist = Math.hypot(dx, dz) || 1;
+  dx /= dist; dz /= dist;
+  const speed = Math.hypot(t.vx, t.vz);
+  const here = ter.height(t.x, t.z);
+  // what's ahead along where we want to go
+  let gapAt = -1, wallAt = -1;
+  for (let k = 1; k <= 8; k++) {
+    const d = k * 0.9;
+    const h = ter.height(t.x + dx * d, t.z + dz * d);
+    if (h <= VOID) { if (gapAt < 0) gapAt = d; }
+    else if (here > VOID && h > here + 1.1 && wallAt < 0 && gapAt < 0) wallAt = d;
+  }
+  // landing on the far side of a gap?
+  let land = false;
+  if (gapAt > 0) for (let d = gapAt; d < gapAt + 12; d += 0.6) if (ter.height(t.x + dx * d, t.z + dz * d) > VOID) { land = true; break; }
+  const want = gapAt > 0 && land ? 13 : dist < 4 ? 5 : 10;
+  const pace = [0, 0.85, 0.95, 1][ai.level];
+  let mx = (dx * want * pace - t.vx) * 0.35, mz = (dz * want * pace - t.vz) * 0.35;
+  // a gap with no landing: stop and back off
+  if (gapAt > 0 && gapAt < 3 && !land) { mx = -t.vx * 0.5; mz = -t.vz * 0.5; }
+  const ml = Math.hypot(mx, mz);
+  if (ml > 1) { mx /= ml; mz /= ml; }
+  c.mx = mx; c.mz = mz;
+  const along = (t.vx * dx + t.vz * dz);
+  if (t.grounded && gapAt > 0 && gapAt < 2.2 + speed * 0.12 && land && along > 5) c.jump = true;
+  if (t.grounded && wallAt > 0 && wallAt < 1.6 && along > 2) c.jump = true;
+  if (t.dashCd <= 0 && along > 2 && (gapAt > 0 && land && gapAt < 4 + speed * 0.3) && t.spin > 0.2) c.dash = true;
+  if (t.dashCd <= 0 && gapAt < 0 && dist > 14 && along > 3 && along < 8 && t.spin > 0.5 && Math.random() < dt * 1.5) c.dash = true;
+  // fight drones that get close
+  const drone = sim.s.tops.find((o) => o.drone && o.alive && Math.hypot(o.x - t.x, o.z - t.z) < 3);
+  if (drone && t.dashCd <= 0 && Math.random() < dt * 3) { const ex = drone.x - t.x, ez = drone.z - t.z, el = Math.hypot(ex, ez) || 1; c.mx = ex / el; c.mz = ez / el; c.dash = true; }
+  if (t.item && t.roll <= 0 && (t.item !== 'surge' || t.spin < 0.6) && Math.random() < dt) c.item = true;
+  return c;
 }
 
 /**

@@ -95,7 +95,10 @@ else app.go('title');
 
 let last = performance.now();
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  // real elapsed time drives everything (physics runs in fixed 1/120s steps off this), so game speed is the same
+  // at 30, 60 or 144 fps; only a long stall (tab in background, debugger) is treated as a pause instead of a jump
+  const raw = (now - last) / 1000;
+  const dt = raw > 0.5 ? 1 / 60 : Math.max(0, raw);
   last = now;
   app.input.poll();
   if (currentName === 'match' || !NO_BACKDROP.has(currentName)) perf.sample(dt);

@@ -28,7 +28,7 @@ export const PIECES: Record<PieceKind, { label: string; desc: string }> = {
 
 export interface Piece { kind: PieceKind; x: number; y: number; rot: number; level: number }
 
-export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone';
+export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' | 'pillar' | 'spinpad' | 'flag' | 'gem' | 'zone' | 'checkpoint' | 'goal' | 'hive';
 export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
@@ -686,6 +686,130 @@ function ensureSpinPads(a: ArenaDef) {
   }
 }
 for (const a of BUILTIN_ARENAS) ensureSpinPads(a);
+
+// ------------------------------------------------------------------ Blade Quest levels
+/**
+ * Quest levels are drawn as text grids (one char per 6m tile, rows run along +z, columns along +x):
+ *   .  flat         (space) gap / nothing
+ *   >  kicker launching toward +x   <  toward -x   ^ toward -z   v toward +z
+ *   /  ramp up toward +x (next tile is one level higher)   \  ramp up toward -x   n ramp up toward -z   u toward +z
+ *   s  stairs up toward +x   b bumps   p pit   d dome   h funbox   o bowl   c cradle   y pyramid
+ *   =  rail wall on the outer edge (auto-faces the nearest outside)
+ * A second grid of digits gives each tile's level (0-9). Markers are placed by tile coordinates.
+ */
+type QuestMark = [kind: MarkerKind, i: number, j: number, extra?: Partial<Marker>];
+function questLevel(id: string, name: string, desc: string, theme: Theme, rows: string[], levels: string[], marks: QuestMark[]): ArenaDef {
+  const T = 6, h = rows.length, w = Math.max(...rows.map((r) => r.length));
+  const c: CourseDef = { tile: T, w, h, pieces: [] };
+  const KIND: Record<string, PieceKind> = { '.': 'flat', '>': 'kicker', '<': 'kicker', '^': 'kicker', v: 'kicker', '/': 'ramp', '\\': 'ramp', n: 'ramp', u: 'ramp', s: 'stairs', b: 'bumps', p: 'pit', d: 'dome', h: 'hump', o: 'bowl', c: 'cradle', y: 'pyramid', '=': 'wall' };
+  const DIR: Record<string, [number, number]> = { '>': [1, 0], '<': [-1, 0], '^': [0, -1], v: [0, 1], '/': [1, 0], '\\': [-1, 0], n: [0, -1], u: [0, 1], s: [1, 0] };
+  // which rotation makes this piece rise toward a world direction (sampled, so it can't be wrong)
+  const faceRot = (kind: PieceKind, dx: number, dz: number) => {
+    let best = 0, bv = -Infinity;
+    for (let r = 0; r < 4; r++) {
+      const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
+      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      if (val > bv) { bv = val; best = r; }
+    }
+    return best;
+  };
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const ch = rows[j][i] ?? ' ';
+    if (ch === ' ') continue;
+    const kind = KIND[ch] ?? 'flat';
+    const level = Number(levels[j]?.[i] ?? 0) || 0;
+    let rot = 0;
+    const d = DIR[ch];
+    if (d) rot = faceRot(kind, d[0], d[1]);
+    else if (kind === 'wall') {
+      // face the nearest outside edge (or gap)
+      const out = ([[0, 1], [0, -1], [1, 0], [-1, 0]] as [number, number][]).find(([dx, dz]) => (rows[j + dz]?.[i + dx] ?? ' ') === ' ') ?? [0, 1]; // sides first, so walls never block a gap landing
+      rot = faceRot('wall', out[0], out[1]);
+    }
+    c.pieces.push({ kind, x: i, y: j, rot, level });
+  }
+  const tx = (i: number) => (i + 0.5) * T - (w * T) / 2, tz = (j: number) => (j + 0.5) * T - (h * T) / 2;
+  const markers: Marker[] = marks.map(([kind, i, j, extra]) => ({ kind, x: tx(i), z: tz(j), ...extra }));
+  return { id, name, desc, theme, course: c, markers };
+}
+
+const R0 = '0', LV = (s: string) => s; // readability helpers for level grids
+void R0; void LV;
+
+BUILTIN_ARENAS.push(
+  // 1. a Mario-style left-to-right run: kicker jumps over gaps, a climb, a drone hive, pits and a final leap
+  questLevel('quest-neon-run', 'Neon Run', 'Linear run: jump the gaps, climb the ramps, slip past the drone hive and reach the goal.', THEMES.neon,
+    [
+      '==...>. ../...=.... >. .bb...ppp..==',
+      '==...>. ../........ >. .bb...ppp..==',
+    ],
+    [
+      '000000000111111111111111110000001111',
+      '000000000111111111111111110000001111',
+    ],
+    [
+      ['spawn', 1, 0], ['spawn', 1, 1], ['spawn', 2, 0], ['spawn', 2, 1],
+      ['gem', 4, 0], ['gem', 8, 1], ['item', 11, 0], ['gem', 13, 1],
+      ['checkpoint', 12, 1, { r: 2.2 }],
+      ['hive', 16, 0, { r: 9, len: 2 }],
+      ['gem', 17, 1], ['spinpad', 18, 0, { r: 1.3 }],
+      ['checkpoint', 23, 0, { r: 2.2 }], ['gem', 24, 1], ['gem', 25, 0],
+      ['gem', 28, 1], ['item', 31, 0],
+      ['checkpoint', 32, 1, { r: 2.2 }],
+      ['goal', 34, 0, { r: 2.6 }],
+    ]),
+  // 2. a climb: stairs and ramps up five levels, kicker jumps between ledges, a hive on the middle shelf
+  questLevel('quest-sky-steps', 'Sky Steps', 'Climb five levels of floating ledges: stairs, ramps and kicker jumps. Fall and you drop back to your checkpoint.', THEMES.sunset,
+    ['.==s==> .=/==bs==> .=/==y=> ..', '.==s==> .=/==bs==> .=/==y=> ..'],
+    ['000011111111222233333334444444', '000011111111222233333334444444'],
+    [
+      ['spawn', 0, 0], ['spawn', 0, 1], ['spawn', 1, 0], ['spawn', 1, 1],
+      ['gem', 5, 1], ['item', 4, 0], ['checkpoint', 9, 0, { r: 2.2 }], ['gem', 12, 0],
+      ['hive', 12, 1, { r: 7, len: 2 }], ['checkpoint', 16, 1, { r: 2.2 }], ['gem', 16, 0], ['item', 19, 1],
+      ['checkpoint', 20, 0, { r: 2.2 }], ['spinpad', 22, 1, { r: 1.3 }], ['gem', 23, 0], ['gem', 25, 1],
+      ['goal', 29, 0, { r: 2.6, z: 0 }],
+    ]),
+  // 3. an open world: circle the valley floor, climb to the middle tier, jump the north gap, ramp up to the summit
+  questLevel('quest-hive-valley', 'Hive Valley', 'Open world: work round the valley, up through three tiers to the summit goal. Two drone hives hunt anyone in their zones.', THEMES.toxic,
+    [
+      '==========',
+      '=........=',
+      '=.d.. <..=',
+      '=...u....=',
+      '=........=',
+      '=..h.....=',
+      '=.....b..=',
+      '=......p.=',
+      '=....n...=',
+      '==========',
+    ],
+    [
+      '0000000000',
+      '0000000000',
+      '0011111100',
+      '0011111100',
+      '0011221100',
+      '0011221100',
+      '0011111100',
+      '0011111100',
+      '0000000000',
+      '0000000000',
+    ],
+    [
+      ['spawn', 1, 8], ['spawn', 2, 8], ['spawn', 3, 8], ['spawn', 1, 7],
+      ['gem', 8, 1], ['gem', 1, 1], ['gem', 7, 8], ['gem', 6, 4], ['gem', 2, 5], ['gem', 5, 5],
+      ['item', 8, 8], ['item', 3, 6], ['spinpad', 8, 4, { r: 1.3 }], ['spinpad', 2, 3, { r: 1.3 }],
+      ['hive', 7, 8, { r: 6, len: 2 }],
+      ['checkpoint', 5, 9, { r: 2.2 }],
+      ['checkpoint', 5, 6, { r: 2.2 }],
+      ['checkpoint', 7, 6, { r: 2.2 }],
+      ['hive', 5, 3, { r: 6, len: 2 }],
+      ['checkpoint', 7, 2, { r: 2.2 }],
+      ['checkpoint', 4, 2, { r: 2.2 }],
+      ['goal', 4, 4, { r: 2.6, x: 0, z: 0 }],
+    ]),
+)
+
 
 export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';
 export const SIZE_LABEL: Record<ArenaSize, string> = { S: 'SMALL', M: 'MEDIUM', L: 'LARGE', TRACK: 'TRACK' };

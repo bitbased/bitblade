@@ -63,10 +63,13 @@ export function unpinBackdrop() {
   if (visible && canvasRef) start(canvasRef);
 }
 
+let backAcc = 0;
 export function updateBackdrop(dt: number) {
   if (!visible || !view || !sim) return;
   const s = sim.s;
-  for (let k = 0; k < 2; k++) sim.step(1 / 120);
+  // fixed 1/120s steps off real time, so the attract-mode match runs at the same speed on every screen
+  backAcc = Math.min(backAcc + dt, 0.25);
+  while (backAcc >= 1 / 120) { sim.step(1 / 120); backAcc -= 1 / 120; }
   if (s.phase === 'launch' && s.phaseT > 0.5) s.phaseT = Math.max(s.phaseT, 2.95);
   view.handleEvents(s.events.splice(0), s);
   view.update(s, dt, 0);

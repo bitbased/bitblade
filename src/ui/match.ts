@@ -196,9 +196,10 @@ export class MatchScreen implements Screen {
     });
     // simulate
     if (this.sim) {
-      this.acc += Math.min(dt, 0.1);
+      this.acc += Math.min(dt, 0.25); // up to a 4 fps frame is still real-time
       let n = 0;
-      while (this.acc >= STEP && n < 12) { this.sim.step(STEP); this.acc -= STEP; n++; }
+      while (this.acc >= STEP && n < 32) { this.sim.step(STEP); this.acc -= STEP; n++; }
+      if (n >= 32) this.acc = Math.min(this.acc, STEP); // machine can't keep up: drop the backlog rather than spiral
       const ev = this.sim.s.events.splice(0);
       this.consumeEvents(ev);
       if (this.arg.host) {
@@ -232,7 +233,7 @@ export class MatchScreen implements Screen {
     }
     const TS = this.view.terrain.track;
     if (TS && renderState.phase === 'battle') {
-      const isWrong = (t: (typeof renderState.tops)[number]) => t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog] < -2.5;
+      const isWrong = (t: (typeof renderState.tops)[number]) => t.grounded && t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog] < -2.5; // airborne shortcuts aren't wrong-way
       if (this.hud.vps.length) {
         // split-screen: every viewport gets its own tag + warning
         this.hud.vps.forEach((v, k) => {

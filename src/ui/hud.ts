@@ -39,7 +39,7 @@ export class Hud {
     else this.scores.append(this.timer, ...this.scoreEls);
     const objText: Record<string, string> = {
       duel: `FIRST TO ${cfg.target} POINTS`, tag: `TEAM BATTLE · FIRST TO ${cfg.target}`, ffa: `FREE-FOR-ALL · FIRST TO ${cfg.target}`,
-      ctf: `CAPTURE ${cfg.target} CORES`, rush: 'MOST CRYSTALS WINS', koth: `HOLD THE ZONE · ${cfg.target}s TO WIN`, gauntlet: 'COLLECT THE GEMS · AVOID HAZARDS', race: `GRAND PRIX · ${cfg.target} LAPS`,
+      ctf: `CAPTURE ${cfg.target} CORES`, rush: 'MOST CRYSTALS WINS', koth: `HOLD THE ZONE · ${cfg.target}s TO WIN`, gauntlet: 'COLLECT THE GEMS · AVOID HAZARDS', race: `GRAND PRIX · ${cfg.target} LAPS`, quest: 'REACH THE GOAL',
     };
     this.obj.textContent = objText[cfg.mode];
     cfg.players.forEach((p, i) => {
@@ -134,6 +134,7 @@ export class Hud {
     this.timer.classList.toggle('low', tl < 10 && s.phase === 'battle');
     this.scoreEls.forEach((el, i) => (el.textContent = this.cfg.mode === 'koth' ? Math.floor(s.teamScores[i] ?? 0).toString() : String(s.teamScores[i] ?? 0)));
     if (this.cfg.mode === 'gauntlet') this.obj.textContent = `GEMS ${s.teamScores[0] ?? 0} / ${this.cfg.target} · ${Math.ceil(tl)}s`;
+    if (this.cfg.mode === 'quest') { const cps = this.cfg.arena.markers.filter((m) => m.kind === 'checkpoint').length; const gems = this.cfg.arena.markers.filter((m) => m.kind === 'gem').length; this.obj.textContent = `REACH THE GOAL · GEMS ${s.teamScores[0] ?? 0}/${gems}${cps ? ` · ${cps} CHECKPOINTS` : ''}`; }
     this.hint.style.display = s.phase === 'launch' ? '' : 'none';
     if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? 'PRESS DASH WHEN THE RING IS GREEN!' : '';
     if (this.standings) {
@@ -158,7 +159,7 @@ export class Hud {
       if (ik && c.item.dataset.k !== ik.icon) { c.item.dataset.k = ik.icon; c.item.innerHTML = iconSvg(ik.icon); c.item.style.color = ik.color; }
       const bits: string[] = [];
       if (this.cfg.mode === 'rush') bits.push(`${iconSvg('gem')} ${t.crystals}`);
-      if (this.cfg.mode === 'gauntlet') bits.push(`${iconSvg('heart')} ${t.lives}`, `${iconSvg('diamond')} ${t.score}`);
+      if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') bits.push(`${iconSvg('heart')} ${t.lives}`, `${iconSvg('diamond')} ${t.score}`);
       if (this.cfg.mode === 'ctf' && t.flag >= 0) bits.push(`${iconSvg('hex')} CARRYING CORE`);
       if (this.cfg.mode === 'race') bits.push(`${iconSvg('finish')} LAP ${Math.min(t.lap + 1, this.cfg.target)}/${this.cfg.target}`, `<b class="place">P${t.place}</b>`);
       if (t.kos) bits.push(`KO ${t.kos}`);
