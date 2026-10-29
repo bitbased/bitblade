@@ -359,7 +359,7 @@ class BladeDesigner implements Screen {
     );
     this.bindStage();
     // editor
-    const tabs = h('div.bd-tabs', { 'data-tabs': '1' });
+    const tabs = h('div.bd-tabs', { 'data-tabs': '1', 'data-kl': 'Q', 'data-kr': 'E', 'data-pl': 'LB', 'data-pr': 'RB', 'data-psl': 'L1', 'data-psr': 'R1' });
     for (const t of ['tune', 'shape', 'core', 'paint', 'decals'] as Tab[]) {
       const b = h('button.bd-mini.nav', { onclick: () => { this.tab = t; this.renderTab(); app.sfx.play('tick'); } }, t) as HTMLButtonElement;
       this.tabBtns[t] = b;

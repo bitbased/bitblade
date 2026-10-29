@@ -9,8 +9,11 @@
 //  - a prompt bar shows the buttons for whatever device you're using
 import type { App } from './app';
 
+/** 'key' = keyboard + mouse (one device, like PC games), 'pad' = controller, 'mouse' = touch-only (no prompts) */
 type Device = 'key' | 'pad' | 'mouse';
 let lastDevice: Device = 'mouse';
+/** the bottom prompt bar appears once someone actually drives menus with keys or a pad */
+let navUsed = false;
 let padFamily: 'xbox' | 'ps' = 'xbox';
 let lastPad = -1;
 /** remembered focus per screen, so going Back lands where you left off */
@@ -26,7 +29,7 @@ function setDevice(d: Device, pad?: number) {
   const b = document.body.classList;
   if (d === lastDevice && (d !== 'pad' || b.contains('pad-' + padFamily))) return;
   lastDevice = d;
-  b.toggle('dev-pad', d === 'pad'); b.toggle('dev-key', d === 'key'); b.toggle('dev-mouse', d === 'mouse');
+  b.toggle('dev-pad', d === 'pad'); b.toggle('dev-key', d === 'key'); b.toggle('dev-mouse', d === 'mouse'); b.toggle('dev-touch', d === 'mouse');
   b.toggle('pad-ps', d === 'pad' && padFamily === 'ps'); b.toggle('pad-xbox', d === 'pad' && padFamily === 'xbox');
 }
 
@@ -54,16 +57,21 @@ function isText(el: Element | null): el is HTMLInputElement | HTMLTextAreaElemen
 function installGlobal() {
   if (installed || typeof document === 'undefined') return;
   installed = true;
+  const NAV_KEYS = /^(Arrow|Key[WASDQEZC]$|Enter$|Space$|Escape$|Backspace$|Tab$)/;
   addEventListener('keydown', (e) => {
-    setDevice('key');
+    // only menu keys switch the prompts to keyboard (typing a name on a phone must not)
+    if (!isText(e.target as Element) && NAV_KEYS.test(e.code)) { navUsed = true; setDevice('key'); }
     // typing in a field: Enter / Esc hand control back to the menu
     if (isText(e.target as Element) && (e.key === 'Escape' || (e.key === 'Enter' && (e.target as Element).tagName !== 'TEXTAREA'))) {
       (e.target as HTMLElement).blur();
       if (e.key === 'Escape') e.stopPropagation();
     }
   });
-  addEventListener('pointermove', (e) => { if (e.isTrusted && e.pointerType === 'mouse' && (Math.abs(e.movementX) + Math.abs(e.movementY) > 2)) setDevice('mouse'); }, { passive: true });
-  addEventListener('pointerdown', (e) => { if (e.isTrusted) setDevice('mouse'); }, { passive: true });
+  // a real mouse keeps keyboard prompts (same device); a finger switches to touch (no prompts)
+  addEventListener('pointermove', (e) => { if (e.isTrusted && e.pointerType === 'mouse' && lastDevice !== 'key' && Math.abs(e.movementX) + Math.abs(e.movementY) > 6) setDevice('key'); }, { passive: true });
+  addEventListener('pointerdown', (e) => { if (!e.isTrusted) return; setDevice(e.pointerType === 'touch' || e.pointerType === 'pen' ? 'mouse' : 'key'); }, { passive: true });
+  // desktop starts with keyboard+mouse prompts, phones/tablets with none
+  setDevice(typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? 'key' : 'mouse');
   // mouse wheel over any selector turns it
   addEventListener('wheel', (e) => {
     const t = (e.target as HTMLElement)?.closest?.('[data-navx]') as HTMLElement | null;
@@ -233,7 +241,14 @@ export class MenuNav {
     memory.set(this.memKey, this.curKey);
     const r = el.getBoundingClientRect();
     this.lastRect = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    if (scroll) el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    if (scroll) {
+      const sp = scrollParent(el);
+      if (sp) {
+        const pr = sp.getBoundingClientRect(), er = el.getBoundingClientRect();
+        if (er.top < pr.top + 8) sp.scrollTop -= pr.top + 8 - er.top;
+        else if (er.bottom > pr.bottom - 8) sp.scrollTop += er.bottom - (pr.bottom - 8);
+      }
+    }
   }
 
   /** after a re-render: same element if it survived, else its twin (same key), else the nearest one */
@@ -281,7 +296,7 @@ export class MenuNav {
 
   private padEdge(b: number) {
     const inp = this.app.input;
-    for (let p = 0; p < inp.padNow.length; p++) if (!this.ignorePads.has(p) && inp.padNow[p]?.[b] && !inp.padPrev[p]?.[b]) { setDevice('pad', p); return true; }
+    for (let p = 0; p < inp.padNow.length; p++) if (!this.ignorePads.has(p) && inp.padNow[p]?.[b] && !inp.padPrev[p]?.[b]) { navUsed = true; setDevice('pad', p); return true; }
     return false;
   }
 
@@ -430,23 +445,19 @@ export class MenuNav {
     if (typeof document === 'undefined') return;
     if (!hintsEl) { hintsEl = document.createElement('div'); hintsEl.className = 'nav-hints'; document.body.append(hintsEl); }
     if (activeNav !== this) return;
-    this.badges();
-    const show = !this.osk && (lastDevice !== 'mouse' || typing) && this.container.isConnected;
+    const show = !this.osk && ((lastDevice !== 'mouse' && navUsed) || typing) && this.container.isConnected;
     hintsEl.classList.toggle('on', show);
+    document.body.classList.toggle('hints-on', show);
     if (!show) return;
     const pad = lastDevice === 'pad';
     const parts: string[] = [];
-    const sh = this.container.querySelector<HTMLElement>('[data-shoulder]'), tr = this.container.querySelector<HTMLElement>('[data-trigger]');
-    if (typing) parts.push(`${glyph('A', 'ENTER')} done`, `${glyph('B', 'ESC')} cancel`);
+        if (typing) parts.push(`${glyph('A', 'ENTER')} done`, `${glyph('B', 'ESC')} cancel`);
     else {
       parts.push(`${pad ? '<i class="g stick">L</i>' : glyph('', 'W A S D')} move`);
       if (this.cur && isText(this.cur)) parts.push(`${glyph('A', 'ENTER')} type`);
       else if (this.cur?.dataset.navx !== undefined) parts.push(`${pad ? '<i class="g stick">◀▶</i>' : glyph('', 'A D')} change`);
       else parts.push(`${glyph('A', 'ENTER')} select`);
       if (this.onBack) parts.push(`${glyph('B', 'ESC')} back`);
-      if (this.container.querySelector('[data-tabs]')) parts.push(`${glyph('LB', 'Q')}${glyph('RB', 'E')} tabs`);
-      else if (sh) parts.push(`${glyph('LB', 'Q')}${glyph('RB', 'E')} ${sh.dataset.shoulder}`);
-      if (tr) parts.push(`${glyph('LT', 'Z')}${glyph('RT', 'C')} ${tr.dataset.trigger}`);
       if (pad && (this.container.querySelector('[data-start]') || this.container.querySelector('.btn.primary'))) parts.push(`${glyph('START', '')} ${this.primaryLabel()}`);
       if (this.hints) parts.push(this.hints);
     }
@@ -460,35 +471,8 @@ export class MenuNav {
     return t.replace(/[▶◀↻]/g, '').trim().toLowerCase().slice(0, 18) || 'go';
   }
 
-  /** little button badges on the controls themselves: back button, primary button, tab strip, shoulder / trigger selectors */
-  private badgeSig = '';
-  private badges() {
-    const dev = lastDevice === 'pad' ? 'pad-' + padFamily : lastDevice;
-    const root = this.container;
-    const sig = dev + '|' + root.querySelectorAll('.nav').length;
-    if (this.badgeSig === sig && (lastDevice === 'mouse' || root.querySelector('.gb'))) return;
-    this.badgeSig = sig;
-    root.querySelectorAll('.gb').forEach((b) => b.remove());
-    if (lastDevice === 'mouse') return;
-    const add = (el: Element | null | undefined, html: string, where: 'before' | 'after' = 'after') => {
-      if (!el || !html) return;
-      const b = document.createElement('span');
-      b.className = 'gb';
-      b.innerHTML = html;
-      if (where === 'before') el.prepend(b); else el.append(b);
-    };
-    if (this.onBack) add(Array.from(root.querySelectorAll<HTMLElement>('.btn')).find((b) => /^\s*◀/.test(b.textContent ?? '')), glyph('B', 'ESC'), 'before');
-    if (lastDevice === 'pad') add(root.querySelector('[data-start]') ?? root.querySelector('.btn.primary'), glyph('START', ''));
-    const tabs = root.querySelector('[data-tabs]');
-    if (tabs) { add(tabs, glyph('LB', 'Q'), 'before'); add(tabs, glyph('RB', 'E')); }
-    const sh = root.querySelector('[data-shoulder]');
-    if (sh) add(sh.querySelector('.lbl') ?? sh, glyph('LB', 'Q') + glyph('RB', 'E'));
-    const tr = root.querySelector('[data-trigger]');
-    if (tr) add(tr.querySelector('.lbl') ?? tr, glyph('LT', 'Z') + glyph('RT', 'C'));
-  }
-
   /** call once per frame after screens update: hides the prompt bar when no menu is active (in-game, editors) */
-  static endFrame() { if (!touched) hintsEl?.classList.remove('on'); touched = false; }
+  static endFrame() { if (!touched) { hintsEl?.classList.remove('on'); document.body.classList.remove('hints-on'); } touched = false; }
   static hideHints() { hintsEl?.classList.remove('on'); }
   static device() { return lastDevice; }
   static padFamily() { return padFamily; }

@@ -201,3 +201,19 @@
 .bd-tabrand .bd-mini { border-color: #ffd23a; color: #ffd23a; }
 .bd-tabrand .bd-mini:hover, .bd-tabrand .bd-mini.focus { background: rgba(255, 210, 58, 0.2); }
 .bd-tabrand .ico { width: 14px; height: 14px; vertical-align: -2px; }
+
+/* narrow screens: one column, nothing wider than the phone */
+.bd-root > * { min-width: 0; }
+@media (max-width: 780px) {
+  .bd-root { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto; padding: 10px; gap: 10px; }
+  .bd-center { min-height: auto; }
+  .bd-stage { flex: none; height: 38vh; min-height: 220px; }
+  .bd-title { font-size: 20px; }
+  .bd-top .bd-mini, .bd-top .btn { font-size: 11px; }
+  .bd-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .bd-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .bd-grid.bd-emb { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .bd-namebar { flex-wrap: wrap; }
+  .bd-namebar input { min-width: 0; flex: 1 1 160px; }
+  .bd-rand { justify-content: flex-start; }
+}

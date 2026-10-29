@@ -19,6 +19,16 @@ import type { RoomOpts } from './online';
 
 interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
 
+interface Card {
+  el: HTMLElement; pnum: HTMLElement; team: HTMLElement; cv: HTMLCanvasElement; name: HTMLInputElement; bname: HTMLElement;
+  left: HTMLElement; right: HTMLElement; bars: { i: HTMLElement; row: HTMLElement }[]; ctrl: HTMLElement; ctrlKey: string; pad: HTMLElement; x: HTMLElement; d: BladeDesign | null;
+}
+interface Sel { el: HTMLElement; set(title: string, sub: string): void }
+interface LobbyUI {
+  back: HTMLButtonElement; desc: HTMLElement; mode: Sel; size: Sel; arena: Sel;
+  items: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement;
+}
+
 const L = {
   mode: 'duel' as ModeId,
   arenaId: 'neon-stadium',
@@ -85,7 +95,11 @@ export class LobbyScreen implements Screen {
   el!: HTMLElement;
   nav!: MenuNav;
   slotsEl!: HTMLElement;
-  icons: { cv: HTMLCanvasElement; d: BladeDesign }[] = [];
+  /** slot cards are built once and updated in place (no flicker, focus and animations survive) */
+  cards: Card[] = [];
+  joinCard!: HTMLElement;
+  ui!: LobbyUI;
+  lastBackdrop = '';
   angle = 0;
   onlineEl!: HTMLElement;
   peerSlot = new Map<number, number>();
@@ -120,7 +134,7 @@ export class LobbyScreen implements Screen {
       const i = order.findIndex((x) => x.id === L.arenaId);
       L.arenaId = order[(i + 1) % order.length].id;
     }
-    this.el = this.build();
+    this.build();
     if (a.autostart) this.el.style.visibility = 'hidden';
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
@@ -176,67 +190,169 @@ export class LobbyScreen implements Screen {
   bladeOf(s: Slot) { return s.blade ?? findBlade(s.bladeId); }
 
   build() {
-    const m = this.mode;
-    const arenas = allArenas();
-    const arena = findArena(L.arenaId);
-    const selector = (label: string, title: string, sub: string, step: (d: number) => void) => {
+    // keys: [prev key, next key, prev pad button, next pad button, PlayStation names] shown on the matching arrow
+    const selector = (label: string, step: (d: number) => void, keys?: [string, string, string, string, string, string]): Sel => {
+      const val = h('b'), sub = h('span');
+      const g = (i: number) => (keys ? { 'data-k': keys[i], 'data-p': keys[i + 2], 'data-ps': keys[i + 4] } : {});
       const el = h('div.selector.panel.nav', { 'data-navx': '1' },
         h('span.lbl', null, label),
-        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(-1); } }, '◀'),
-        h('div.val', null, h('b', null, title), h('span', null, sub)),
-        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(1); } }, '▶'));
+        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(-1); }, 'aria-label': 'previous', ...g(0) }, '◀'),
+        h('div.val', null, val, sub),
+        h('button.arrow', { onclick: (e: Event) => { e.stopPropagation(); step(1); }, 'aria-label': 'next', ...g(1) }, '▶'));
       el.addEventListener('navx', (e) => step((e as CustomEvent).detail));
-      return el;
+      return { el, set: (t, s2) => { if (val.textContent !== t) val.textContent = t; if (sub.textContent !== s2) sub.textContent = s2; } };
     };
-    const modeSel = selector('MODE', m.name.toUpperCase(), m.tag, (d) => this.stepMode(d));
-    modeSel.dataset.trigger = 'mode';
-    const order = this.arenaOrder();
-    setBackdropArena(findArena(L.arenaId), L.mode);
-    const sz = arenaSize(arena);
-    const arenaSel = selector('ARENA', arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`, (d) => this.stepArena(d));
-    arenaSel.style.flex = '1';
-    arenaSel.dataset.shoulder = 'arena';
-    const sizeSel = selector('SIZE', L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`, (d) => this.stepSize(d));
-    sizeSel.style.minWidth = '200px';
-    arenaSel.style.setProperty('border-color', arena.theme.glow);
+    const mode = selector('MODE', (d) => this.stepMode(d), ['Z', 'C', 'LT', 'RT', 'L2', 'R2']);
+    mode.el.dataset.trigger = 'mode';
+    mode.el.classList.add('sel-mode');
+    const size = selector('SIZE', (d) => this.stepSize(d));
+    size.el.classList.add('sel-size');
+    const arena = selector('ARENA', (d) => this.stepArena(d), ['Q', 'E', 'LB', 'RB', 'L1', 'R1']);
+    arena.el.dataset.shoulder = 'arena';
+    arena.el.classList.add('sel-arena');
 
-    this.slotsEl = h('div.slots');
-    this.renderSlots();
-
-    const num = (label: string, get: () => number, set: (v: number) => void, step: number, min: number, fmt = (v: number) => String(v)) => {
-      const val = h('b', null, fmt(get()));
-      const el = h('div.toggle.panel.nav', { 'data-navx': '1' }, label, ' ', h('button.arrow', { onclick: () => ch(-1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' } }, '−'), val, h('button.arrow', { onclick: () => ch(1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' } }, '+'));
-      const ch = (d: number) => { set(Math.max(min, get() + d * step)); val.textContent = fmt(get()); this.dirty = true; };
+    const stepper = (label: HTMLElement, val: HTMLElement, ch: (d: number) => void) => {
+      const el = h('div.toggle.panel.nav.stepper', { 'data-navx': '1' }, label, h('button.arrow', { onclick: () => ch(-1), 'aria-label': 'less' }, '−'), val, h('button.arrow', { onclick: () => ch(1), 'aria-label': 'more' }, '+'));
       el.addEventListener('navx', (e) => ch((e as CustomEvent).detail));
       return el;
     };
+    const targetLbl = h('span'), targetVal = h('b'), timeVal = h('b'), rubberVal = h('b');
+    const target = stepper(targetLbl, targetVal, (d) => { L.target = Math.max(1, L.target + d * (L.mode === 'koth' ? 5 : 1)); this.refresh(); });
+    const time = stepper(h('span', null, 'TIME'), timeVal, (d) => { L.time = Math.max(30, L.time + d * 15); this.refresh(); });
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
-    const rubberNames = ['OFF', 'NORMAL', 'STRONG'];
-    const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => { L.rubber = (L.rubber + 1) % 3; this.rebuild(); } }, 'CPU CATCH-UP ', h('b', null, rubberNames[L.rubber]));
-    rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.rebuild(); });
-    items.classList.toggle('on', L.items);
+    const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => { L.rubber = (L.rubber + 1) % 3; this.refresh(); } }, 'CPU CATCH-UP ', rubberVal);
+    rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.refresh(); });
+    const back = h<HTMLButtonElement>('button.btn.small.nav.back-btn', { onclick: () => this.leave(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back');
+    const desc = h('div.screen-sub');
+    this.ui = { back, desc, mode, size, arena, items, rubber, rubberVal, target, targetLbl, targetVal, timeVal };
+
+    this.slotsEl = h('div.slots');
+    const hint = Input.isTouchDevice() ? 'TAP + ADD CPU' : 'PRESS SPACE · ENTER · Ⓐ';
+    this.joinCard = h('div.slot.join', null, h('div.big', null, '+'), hint, h('br'), 'TO JOIN');
+    this.slotsEl.append(this.joinCard);
 
     this.onlineEl = h('div.online-box.panel');
     this.renderOnline();
 
-    return h('div.screen', null,
+    const el = h('div.screen.lobby', null,
       h('div.screen-head', null,
-        h('button.btn.small.nav', { onclick: () => this.leave() }, hostRoom.t ? '◀ Close Room' : '◀ Back'),
+        back,
         h('div.screen-title', null, 'LOBBY'),
-        h('div.screen-sub', null, m.desc),
-        h('div.spacer'),
-        h('button.btn.primary.nav', { onclick: () => this.start() }, '▶ START')),
-      h('div.lobby-top', null, modeSel, sizeSel, arenaSel),
+        desc,
+        h('button.btn.primary.nav.start-btn', { onclick: () => this.start(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ START')),
+      h('div.lobby-top', null, mode.el, size.el, arena.el),
       this.slotsEl,
       h('div.lobby-bottom', null,
-        h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ Add CPU'),
-        m.id !== 'gauntlet' && m.id !== 'rush' ? items : null,
-        m.id === 'race' ? rubber : null,
-        m.target > 0 ? num(m.id === 'koth' ? 'HOLD SECS' : m.id === 'gauntlet' ? 'GEMS' : 'TARGET', () => L.target, (v) => (L.target = v), m.id === 'koth' ? 5 : 1, 1) : null,
-        num('TIME', () => L.time, (v) => (L.time = v), 15, 30, (v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`),
-        h('div.spacer'),
+        h('div.rules', null,
+          h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ CPU'),
+          items, rubber, target, time),
         this.onlineEl),
     );
+    this.el = el;
+    this.refresh();
+    return el;
+  }
+
+  /** push lobby state into the existing DOM — never rebuilds it */
+  refresh() {
+    if (!this.ui) return;
+    const m = this.mode, u = this.ui;
+    const order = this.arenaOrder();
+    const arena = findArena(L.arenaId);
+    const sz = arenaSize(arena);
+    u.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
+    if (u.desc.textContent !== m.desc) u.desc.textContent = m.desc;
+    u.mode.set(m.name.toUpperCase(), m.tag);
+    u.size.set(L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`);
+    u.arena.set(arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`);
+    u.arena.el.style.setProperty('border-color', arena.theme.glow);
+    const bk = `${arena.id}|${L.mode}`;
+    if (bk !== this.lastBackdrop) { this.lastBackdrop = bk; setBackdropArena(arena, L.mode); }
+    u.items.style.display = m.id !== 'gauntlet' && m.id !== 'rush' ? '' : 'none';
+    u.items.classList.toggle('on', L.items);
+    u.rubber.style.display = m.id === 'race' ? '' : 'none';
+    u.rubberVal.textContent = ['OFF', 'NORMAL', 'STRONG'][L.rubber];
+    u.target.style.display = m.target > 0 ? '' : 'none';
+    u.targetLbl.textContent = m.id === 'koth' ? 'HOLD SECS' : m.id === 'gauntlet' ? 'GEMS' : m.id === 'race' ? 'LAPS' : 'TARGET';
+    u.targetVal.textContent = String(L.target);
+    u.timeVal.textContent = `${Math.floor(L.time / 60)}:${String(L.time % 60).padStart(2, '0')}`;
+    this.renderSlots();
+    this.dirty = true;
+  }
+
+  makeCard(): Card {
+    const idx = () => Number(card.el.dataset.i);
+    const remote = () => L.slots[idx()]?.ctrl.type === 'remote';
+    const cv = h<HTMLCanvasElement>('canvas', { width: 200, height: 200 });
+    const name = h<HTMLInputElement>('input.pname', { maxLength: 16 });
+    name.addEventListener('change', () => {
+      const i = idx(), s = L.slots[i];
+      if (!s) return;
+      s.name = name.value || `Player ${i + 1}`;
+      if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); }
+      this.dirty = true;
+    });
+    const left = h('button.arrow', { onclick: () => { if (!remote()) this.cycleSlotBlade(idx(), -1); }, 'aria-label': 'previous blade' }, '◀');
+    const right = h('button.arrow', { onclick: () => { if (!remote()) this.cycleSlotBlade(idx(), 1); }, 'aria-label': 'next blade' }, '▶');
+    const bname = h('div.bname');
+    const pick = h('div.bladepick.nav', { 'data-navx': '1' }, left, bname, right);
+    pick.addEventListener('navx', (e) => { if (!remote()) this.cycleSlotBlade(idx(), (e as CustomEvent).detail); });
+    const bars = STAT_KEYS.map((k) => {
+      const info = STAT_INFO[k];
+      const i = h('i', { style: { background: info.color } });
+      const row = h('div.ss', null, h('b', null, info.short), h('span.ssbar', null, i));
+      return { i, row };
+    });
+    const ctrl = h('div.ctrl.nav', { onclick: () => this.cycleCtrl(idx()) });
+    const team = h('div.team-tag', { onclick: () => { const s = L.slots[idx()]; if (!s) return; s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } });
+    const pad = h('div.slot-pad', { html: '<i class="g stick">◀▶</i> blade <i class="g g-y">Y</i> random <span class="tm"><i class="g g-x">X</i> team</span> <i class="g g-b">B</i> leave' });
+    const x = h('div.x', { onclick: () => this.removeSlot(idx()), title: 'Remove' }, icon('close'));
+    const pnum = h('div.pnum');
+    const el = h('div.slot', null, pnum, team, cv, name, pick, h('div.slot-stats', null, ...bars.map((b) => b.row)), ctrl, pad, x);
+    const card: Card = { el, pnum, team, cv, name, bname, left, right, bars, ctrl, ctrlKey: '', pad, x, d: null };
+    return card;
+  }
+
+  updateCard(c: Card, s: Slot, i: number) {
+    const d = this.bladeOf(s);
+    const remote = s.ctrl.type === 'remote';
+    c.el.dataset.i = String(i);
+    c.el.style.setProperty('--slot', this.slotColor(s, i));
+    c.pnum.textContent = `P${i + 1}`;
+    c.team.style.display = this.isTeamMode() ? '' : 'none';
+    c.team.textContent = s.team === 0 ? 'RED' : 'BLUE';
+    if (document.activeElement !== c.name && c.name.value !== s.name) c.name.value = s.name;
+    c.name.disabled = remote;
+    c.left.style.visibility = c.right.style.visibility = remote ? 'hidden' : '';
+    if (c.d !== d) {
+      c.d = d;
+      c.bname.textContent = d.name;
+      const st = computeStats(d);
+      STAT_KEYS.forEach((k, j) => { c.bars[j].i.style.width = `${st.points[k] * 10}%`; c.bars[j].row.title = `${STAT_INFO[k].label} ${st.points[k]}/10 — ${STAT_INFO[k].desc}`; });
+      drawBladeIcon(c.cv, d, this.angle);
+    }
+    const ck = remote ? 'remote' : specKey(s.ctrl) + specLabel(s.ctrl);
+    if (c.ctrlKey !== ck) {
+      c.ctrlKey = ck;
+      c.ctrl.innerHTML = '';
+      c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
+    }
+    c.pad.style.display = this.isPersonalPad(i) ? '' : 'none';
+    (c.pad.querySelector('.tm') as HTMLElement).style.display = this.isTeamMode() ? '' : 'none';
+    c.x.style.display = L.slots.length > 1 ? '' : 'none';
+  }
+
+  cycleCtrl(i: number) {
+    const s = L.slots[i];
+    if (!s || s.ctrl.type === 'remote') return;
+    const opts = this.controllerOptions(s.ctrl);
+    const k = opts.findIndex((o) => specLabel(o) === specLabel(s.ctrl));
+    s.ctrl = opts[(k + 1) % opts.length];
+    if (s.ctrl.type === 'touch' && s.ctrl.gyro) this.app.input.enableGyro();
+    if (s.ctrl.type === 'cpu' && !s.name.startsWith('CPU')) s.name = `CPU ${i + 1}`;
+    if (s.ctrl.type !== 'cpu' && s.name.startsWith('CPU')) s.name = `Player ${i + 1}`;
+    this.renderSlots();
+    this.dirty = true;
   }
 
   /** arenas that make sense for a mode: races need a track, everything else needs an arena/course */
@@ -324,15 +440,7 @@ export class LobbyScreen implements Screen {
     if (this.onlineEl) this.renderOnline();
   }
 
-  rebuild() {
-    const focus = this.nav?.idx ?? 0;
-    this.el.remove();
-    this.el = this.build();
-    this.app.root.append(this.el);
-    this.nav = new MenuNav(this.app, this.el, () => this.leave());
-    this.nav.focus(focus);
-    this.dirty = true;
-  }
+  rebuild() { this.refresh(); }
 
   controllerOptions(current: ControllerSpec): ControllerSpec[] {
     const used = new Set(L.slots.map((s) => specKey(s.ctrl)));
@@ -344,69 +452,13 @@ export class LobbyScreen implements Screen {
     return [...free, { type: 'cpu', level: 1 }, { type: 'cpu', level: 2 }, { type: 'cpu', level: 3 }];
   }
 
+  /** sync slot cards with L.slots: reuse cards, add/remove only at the end */
   renderSlots() {
-    this.slotsEl.innerHTML = '';
-    this.icons = [];
-    const m = this.mode;
-    const blades = allBlades();
-    L.slots.forEach((s, i) => {
-      const d = this.bladeOf(s);
-      const cv = h<HTMLCanvasElement>('canvas', { width: 240, height: 240 });
-      this.icons.push({ cv, d });
-      const remote = s.ctrl.type === 'remote';
-      const cycleBlade = (dir: number) => {
-        if (remote) return;
-        const k = blades.findIndex((b) => b.id === s.bladeId);
-        s.bladeId = blades[(k + dir + blades.length) % blades.length].id;
-        this.renderSlots();
-        this.dirty = true;
-        this.app.sfx.play('tick');
-      };
-      const bladeRow = h('div.row.nav', { 'data-navx': '1' },
-        h('button.selector.arrow', { onclick: () => cycleBlade(-1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '18px' } }, '◀'),
-        h('div.bname', null, d.name),
-        h('button.selector.arrow', { onclick: () => cycleBlade(1), style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '18px' } }, '▶'));
-      bladeRow.addEventListener('navx', (e) => cycleBlade((e as CustomEvent).detail));
-      const ctrl = h('div.ctrl.nav', {
-        onclick: () => {
-          if (remote) return;
-          const opts = this.controllerOptions(s.ctrl);
-          const k = opts.findIndex((o) => specLabel(o) === specLabel(s.ctrl));
-          s.ctrl = opts[(k + 1) % opts.length];
-          if (s.ctrl.type === 'touch' && s.ctrl.gyro) this.app.input.enableGyro();
-          if (s.ctrl.type === 'cpu' && !s.name.startsWith('CPU')) s.name = `CPU ${i + 1}`;
-          if (s.ctrl.type !== 'cpu' && s.name.startsWith('CPU')) s.name = `Player ${i + 1}`;
-          this.renderSlots();
-          this.dirty = true;
-        },
-      }, icon(remote ? 'link' : s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
-      const name = h<HTMLInputElement>('input.pname', { value: s.name, maxLength: 16, disabled: remote });
-      name.addEventListener('change', () => { s.name = name.value || `Player ${i + 1}`; if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); } this.dirty = true; });
-      const card = h('div.slot', null,
-        h('div.pnum', null, `P${i + 1}`),
-        this.isTeamMode() ? h('div.team-tag', { onclick: () => { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } }, s.team === 0 ? 'RED' : 'BLUE') : null,
-        cv, name, bladeRow, this.statLine(d), ctrl,
-        this.isPersonalPad(i) ? h('div.slot-pad', { html: `<i class="g stick">◀▶</i> blade ${'<i class="g g-y">Y</i>'} random${this.isTeamMode() ? ' <i class="g g-x">X</i> team' : ''} <i class="g g-b">B</i> leave` }) : null,
-        L.slots.length > 1 ? h('div.x', { onclick: () => this.removeSlot(i), title: 'Remove' }, icon('close')) : null);
-      card.style.setProperty('--slot', this.slotColor(s, i));
-      card.style.animationDelay = `${i * 0.04}s`;
-      this.slotsEl.append(card);
-    });
-    if (L.slots.length < m.maxPlayers) {
-      const hint = Input.isTouchDevice() ? 'TAP + ADD CPU OR' : 'PRESS';
-      this.slotsEl.append(h('div.slot.join', null, h('div.big', null, '+'), `${hint} SPACE · ENTER · Ⓐ`, h('br'), 'TO JOIN'));
-    }
-    for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle);
-  }
-
-  statLine(d: BladeDesign) {
-    const st = computeStats(d);
-    return h('div.slot-stats', null, ...STAT_KEYS.map((k) => {
-      const info = STAT_INFO[k];
-      return h('div.ss', { title: `${info.label} ${st.points[k]}/10 — ${info.desc}` },
-        h('b', null, info.short),
-        h('span.ssbar', null, h('i', { style: { width: `${st.points[k] * 10}%`, background: info.color } })));
-    }));
+    if (!this.slotsEl) return;
+    while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
+    while (this.cards.length > L.slots.length) this.cards.pop()!.el.remove();
+    L.slots.forEach((s, i) => this.updateCard(this.cards[i], s, i));
+    this.joinCard.style.display = L.slots.length < this.mode.maxPlayers ? '' : 'none';
   }
 
   /** pads that joined as P2+ steer their own slot; P1's device (or keyboard) drives the menu */
@@ -508,6 +560,7 @@ export class LobbyScreen implements Screen {
   // -------------------------------------------------------------- online host
   renderOnline() {
     const el = this.onlineEl;
+    if (this.ui) this.ui.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
     // typing a room name: redraw once they're done instead of wiping the field mid-word
     const typing = el.querySelector<HTMLInputElement>('.room-name');
     if (typing && document.activeElement === typing) { typing.addEventListener('blur', () => this.renderOnline(), { once: true }); return; }
@@ -637,7 +690,7 @@ export class LobbyScreen implements Screen {
     this.nav.update(dt);
     this.angle += dt * 2.5;
     this.iconT += dt;
-    if (this.iconT > 0.05) { this.iconT = 0; for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle * (ic.d.spinDir)); }
+    if (this.iconT > 0.05) { this.iconT = 0; for (const c of this.cards) if (c.d) drawBladeIcon(c.cv, c.d, this.angle * c.d.spinDir); }
     if (hostRoom.t) {
       this.broadcastT -= dt;
       if (this.dirty && this.broadcastT <= 0) {
