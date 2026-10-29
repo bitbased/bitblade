@@ -7,6 +7,7 @@ import { TouchControls } from '../input/input';
 import type { GameEvent, GameState, MatchConfig } from '../game/types';
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
+import { clientRoom, hostRoom } from '../net/room';
 
 export interface MatchArg {
   cfg: MatchConfig;
@@ -14,7 +15,7 @@ export interface MatchArg {
   client?: { t: ClientTransport; mine: number[] }; // player indices controlled here
 }
 
-export interface MatchSummary { cfg: MatchConfig; state: GameState; again?: MatchArg }
+export interface MatchSummary { cfg: MatchConfig; state: GameState; again?: MatchArg; online?: 'host' | 'client' }
 
 const STEP = 1 / 120;
 
@@ -36,6 +37,7 @@ export class MatchScreen implements Screen {
   sendAcc = 0;
   ended = false;
   wrongT = 0;
+  unsubRoom: (() => void) | null = null;
   wrap!: HTMLElement;
   private pendingCtl = new Map<number, { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }>();
 
@@ -63,22 +65,21 @@ export class MatchScreen implements Screen {
       // mirror mode: wait for first snapshot; build a throwaway sim just for an initial state
       const tmp = new Sim(cfg);
       this.state = tmp.s;
-      this.arg.client.t.onMessage((m) => this.onHostMsg(m));
-      this.arg.client.t.onClose((r) => { if (!this.ended) { app.toast(`Disconnected: ${r}`); app.go('menu'); } });
+      clientRoom.handler = (m) => this.onHostMsg(m);
+      clientRoom.closeHandler = (r) => { if (!this.ended) { this.ended = true; app.toast(`Disconnected: ${r}`); app.go('menu'); } };
     } else {
       this.sim = new Sim(cfg);
       this.state = this.sim.s;
       if (this.arg.host) {
-        const { t, peerSlot } = this.arg.host;
-        t.onMessage((peer, m) => {
-          if (m?.t === 'in') {
-            const idx = m.p as number;
-            if (peerSlot.get(peer) === undefined) return;
-            if (cfg.players[idx]?.ctrl.type === 'remote' && (cfg.players[idx].ctrl as { peer: number }).peer === peer) this.sim!.setControl(idx, m.c);
-          }
-        });
-        t.onLeave((peer) => {
-          for (const [i, p] of cfg.players.entries()) if (p.ctrl.type === 'remote' && p.ctrl.peer === peer) { const top = this.sim!.s.tops[i]; if (top) top.spin = 0; }
+        const { peerSlot } = this.arg.host;
+        hostRoom.onInput = (peer, m) => {
+          const idx = m.p as number;
+          if (peerSlot.get(peer) !== idx) return;
+          this.sim!.setControl(idx, m.c);
+        };
+        this.unsubRoom = hostRoom.subscribe(() => {
+          // a player who left the room spins out
+          for (const [i, p] of cfg.players.entries()) if (p.ctrl.type === 'remote' && !hostRoom.members.has(p.ctrl.peer)) { const top = this.sim!.s.tops[i]; if (top?.alive) top.spin = 0; }
         });
       }
     }
@@ -141,7 +142,7 @@ export class MatchScreen implements Screen {
       this.sendAcc += dt;
       if (this.sendAcc > 1 / 30) {
         this.sendAcc = 0;
-        for (const [i, c] of this.pendingCtl) this.arg.client.t.send({ t: 'in', p: i, c });
+        for (const [i, c] of this.pendingCtl) clientRoom.send({ t: 'in', p: i, c });
         this.pendingCtl.clear();
       }
     }
@@ -157,7 +158,7 @@ export class MatchScreen implements Screen {
         this.snapAcc += dt;
         if (this.snapAcc > 1 / 30) {
           this.snapAcc = 0;
-          this.arg.host.t.send('all', { t: 'snap', s: { ...this.sim.s, events: this.pendingEvents } });
+          hostRoom.send('all', { t: 'snap', s: { ...this.sim.s, events: this.pendingEvents } });
           this.pendingEvents = [];
         }
       }
@@ -189,7 +190,7 @@ export class MatchScreen implements Screen {
     app.sfx.setHum(renderState.phase === 'battle' ? hum : 0);
     this.view.render();
     if (renderState.phase === 'matchEnd' && renderState.phaseT > 3.5 && !this.ended) {
-      if (this.arg.host) this.arg.host.t.send('all', { t: 'end' });
+      if (this.arg.host) hostRoom.send('all', { t: 'end' });
       this.finish();
     }
   }
@@ -252,14 +253,21 @@ export class MatchScreen implements Screen {
 
   quit() {
     this.ended = true;
-    this.arg.host?.t.close();
-    this.arg.client?.t.close();
+    if (this.arg.host) {
+      // the leader ends the match for everyone and the room heads back to the lobby
+      hostRoom.send('all', { t: 'end' });
+      hostRoom.inMatch = false;
+      this.app.go('lobby', { mode: this.arg.cfg.mode, keep: true });
+      return;
+    }
+    if (this.arg.client) clientRoom.leave();
     this.app.go('menu');
   }
 
   finish() {
     this.ended = true;
-    const summary: MatchSummary = { cfg: this.arg.cfg, state: this.state, again: this.arg.client ? undefined : { ...this.arg, cfg: { ...this.arg.cfg, seed: (Math.random() * 1e9) | 0 } } };
+    if (this.arg.host) hostRoom.inMatch = false;
+    const summary: MatchSummary = { cfg: this.arg.cfg, state: this.state, again: this.arg.client || this.arg.host ? undefined : { ...this.arg, cfg: { ...this.arg.cfg, seed: (Math.random() * 1e9) | 0 } }, online: this.arg.host ? 'host' : this.arg.client ? 'client' : undefined };
     this.app.go('results', summary);
   }
 
@@ -273,5 +281,8 @@ export class MatchScreen implements Screen {
     this.app.input.touch = null;
     this.wrap.remove();
     this.view.dispose();
+    this.unsubRoom?.();
+    if (this.arg.host) hostRoom.onInput = null;
+    if (this.arg.client) { clientRoom.handler = null; clientRoom.closeHandler = null; }
   }
 }

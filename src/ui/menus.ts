@@ -6,9 +6,10 @@ import { cloudRelayUrl } from '../net/transport';
 import { FINISH_LABEL } from '../game/sim';
 import type { MatchSummary } from './match';
 import { TEAM_COLORS } from './hud';
-import { setBackdropVisible } from './backdrop';
+import { setBackdropVisible, unpinBackdrop } from './backdrop';
 import { Input } from '../input/input';
 import { settings } from '../core/settings';
+import { clientRoom, hostRoom } from '../net/room';
 import { icon } from './icons';
 import { getRenderer } from '../game/render';
 
@@ -22,6 +23,7 @@ abstract class Base implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(this.backdrop, app.canvas);
+    if (!(this instanceof Results)) unpinBackdrop();
     this.el = this.build(arg);
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.onBack());
@@ -97,7 +99,15 @@ export class ModeSelect extends Base {
 // ------------------------------------------------------------------ results
 export class Results extends Base {
   build(arg: unknown) {
-    const { cfg, state, again } = arg as MatchSummary;
+    const { cfg, state, again, online } = arg as MatchSummary;
+    this.online = online;
+    if (online === 'client') {
+      clientRoom.handler = (m) => {
+        if (m?.t === 'start' && clientRoom.t) this.app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } });
+        else if (m?.t === 'lobby') this.app.go('online', { resume: true });
+      };
+      clientRoom.closeHandler = (r) => { this.app.toast(`Room closed: ${r}`); this.app.go('menu'); };
+    }
     const w = state.winner;
     const isG = cfg.mode === 'gauntlet';
     const teamName = (t: number) => {
@@ -125,13 +135,31 @@ export class Results extends Base {
       banner2,
       h('div.screen-sub', null, state.lastFinish),
       h('table.res-table', null, h('tr', null, ...['BLADER', 'SCORE', 'KOs', 'DAMAGE DEALT', 'FINAL'].map((x) => h('th', null, x))), ...rows),
-      h('div.lobby-bottom', null,
-        again ? h('button.btn.primary.nav', { onclick: () => this.app.go('match', again) }, '↻ Rematch') : null,
-        h('button.btn.nav', { onclick: () => this.app.go('lobby', { mode: cfg.mode, keep: true }) }, 'Lobby'),
-        h('button.btn.nav', { onclick: () => this.app.go('menu') }, 'Main Menu')),
+      online === 'client'
+        ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
+        : h('div.lobby-bottom', null,
+          again ? h('button.btn.primary.nav', { onclick: () => this.app.go('match', again) }, '↻ Rematch') : null,
+          h('button.btn.nav' + (online === 'host' ? '.primary' : ''), { onclick: () => this.app.go('lobby', { mode: cfg.mode, keep: true }) }, online === 'host' ? 'Back to Room' : 'Lobby'),
+          online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
+          h('button.btn.nav', { onclick: () => { if (online === 'host') hostRoom.close(); this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
     );
   }
-  onBack() { this.app.go('menu'); }
+  online?: 'host' | 'client';
+  autoEl: HTMLElement | null = null;
+  autoT = 12;
+  update(dt: number) {
+    super.update(dt);
+    if (this.online === 'host' && hostRoom.t) {
+      this.autoT -= dt;
+      if (this.autoEl) this.autoEl.textContent = `Room returns to the lobby in ${Math.ceil(Math.max(0, this.autoT))}s`;
+      if (this.autoT <= 0) this.app.go('lobby', { keep: true });
+    }
+  }
+  unmount() {
+    super.unmount();
+    if (this.online === 'client') { clientRoom.handler = null; clientRoom.closeHandler = null; }
+  }
+  onBack() { if (this.online !== 'client') this.app.go('menu'); }
 }
 
 // ------------------------------------------------------------------ settings

@@ -2,16 +2,17 @@
 import { h, MenuNav, type App, type Screen } from './app';
 import { allBlades, findBlade, PRESETS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
-import { allArenas, findArena } from '../game/terrain';
+import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaSize } from '../game/terrain';
 import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
-import { cloudRelayUrl, hostCloud, hostLocal, type HostTransport } from '../net/transport';
+import { cloudRelayUrl, hostCloud, hostLocal } from '../net/transport';
 import { getPlatform } from '../net/platform';
 import { TEAM_COLORS } from './hud';
-import { setBackdropVisible } from './backdrop';
+import { setBackdropVisible, setBackdropArena } from './backdrop';
 import { settings } from '../core/settings';
 import { icon, drawIcon } from './icons';
 import type { MatchArg } from './match';
+import { hostRoom } from '../net/room';
 
 interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
 
@@ -19,14 +20,12 @@ const L = {
   mode: 'duel' as ModeId,
   arenaId: 'neon-stadium',
   items: true,
+  sizeFilter: 'ALL' as 'ALL' | ArenaSize,
   target: 4,
   time: 90,
   slots: [] as Slot[],
 };
 
-// online host session survives lobby <-> match round trips
-let hostT: HostTransport | null = null;
-let lobbyListeners = false;
 
 export function drawBladeIcon(cv: HTMLCanvasElement, d: BladeDesign, angle = 0) {
   const S = cv.width;
@@ -78,6 +77,7 @@ export class LobbyScreen implements Screen {
   peerSlot = new Map<number, number>();
   broadcastT = 0;
   dirty = true;
+  unsub: (() => void) | null = null;
 
   get mode() { return MODES.find((m) => m.id === L.mode)!; }
 
@@ -97,8 +97,11 @@ export class LobbyScreen implements Screen {
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1); // START
-    this.wireHost();
-    if (a.online && !hostT) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
+    this.unsub = hostRoom.subscribe(() => this.syncMembers());
+    hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
+    hostRoom.inMatch = false;
+    this.syncMembers();
+    if (a.online && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
   }
 
   setMode(id: ModeId, keepArena = false) {
@@ -154,19 +157,14 @@ export class LobbyScreen implements Screen {
       el.addEventListener('navx', (e) => step((e as CustomEvent).detail));
       return el;
     };
-    const modeSel = selector('MODE', m.name.toUpperCase(), m.tag, (d) => {
-      const i = MODES.findIndex((x) => x.id === L.mode);
-      this.setMode(MODES[(i + d + MODES.length) % MODES.length].id);
-      this.fillCpus();
-      this.rebuild();
-    });
-    const order = [...m.arenas.map((id) => arenas.find((a) => a.id === id)!).filter(Boolean), ...arenas.filter((a) => !m.arenas.includes(a.id))];
-    const arenaSel = selector('ARENA', arena.name.toUpperCase(), arena.desc, (d) => {
-      const i = order.findIndex((a) => a.id === L.arenaId);
-      L.arenaId = order[(i + d + order.length) % order.length].id;
-      this.rebuild();
-    });
+    const modeSel = selector('MODE', m.name.toUpperCase(), m.tag, (d) => this.stepMode(d));
+    const order = this.arenaOrder();
+    setBackdropArena(findArena(L.arenaId), L.mode);
+    const sz = arenaSize(arena);
+    const arenaSel = selector('ARENA', arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`, (d) => this.stepArena(d));
     arenaSel.style.flex = '1';
+    const sizeSel = selector('SIZE', L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`, (d) => this.stepSize(d));
+    sizeSel.style.minWidth = '200px';
     arenaSel.style.setProperty('border-color', arena.theme.glow);
 
     this.slotsEl = h('div.slots');
@@ -179,7 +177,7 @@ export class LobbyScreen implements Screen {
       el.addEventListener('navx', (e) => ch((e as CustomEvent).detail));
       return el;
     };
-    const items = h('div.toggle.panel.nav', { onclick: () => { L.items = !L.items; items.classList.toggle('on', L.items); this.dirty = true; } }, h('span.dot'), 'ITEMS');
+    const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
     items.classList.toggle('on', L.items);
 
     this.onlineEl = h('div.online-box.panel');
@@ -192,7 +190,7 @@ export class LobbyScreen implements Screen {
         h('div.screen-sub', null, m.desc),
         h('div.spacer'),
         h('button.btn.primary.nav', { onclick: () => this.start() }, '▶ START')),
-      h('div.lobby-top', null, modeSel, arenaSel),
+      h('div.lobby-top', null, modeSel, sizeSel, arenaSel),
       this.slotsEl,
       h('div.lobby-bottom', null,
         h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ Add CPU'),
@@ -202,6 +200,88 @@ export class LobbyScreen implements Screen {
         h('div.spacer'),
         this.onlineEl),
     );
+  }
+
+  arenaOrder() {
+    const m = this.mode;
+    const arenas = allArenas();
+    let order = [...m.arenas.map((id) => arenas.find((a) => a.id === id)!).filter(Boolean), ...arenas.filter((a) => !m.arenas.includes(a.id))];
+    if (L.sizeFilter !== 'ALL') order = order.filter((a) => arenaSize(a) === L.sizeFilter);
+    if (!order.length) order = [findArena(L.arenaId)];
+    if (!order.some((a) => a.id === L.arenaId)) L.arenaId = order[0].id;
+    return order;
+  }
+
+  stepMode(d: number) {
+    const i = MODES.findIndex((x) => x.id === L.mode);
+    this.setMode(MODES[(i + d + MODES.length) % MODES.length].id);
+    this.fillCpus();
+    this.rebuild();
+  }
+
+  stepArena(d: number) {
+    const order = this.arenaOrder();
+    const i = order.findIndex((a) => a.id === L.arenaId);
+    L.arenaId = order[(i + d + order.length) % order.length].id;
+    this.rebuild();
+  }
+
+  stepSize(d: number) {
+    const sizes: ('ALL' | ArenaSize)[] = ['ALL', 'S', 'M', 'L', 'TRACK'];
+    const i = sizes.indexOf(L.sizeFilter);
+    L.sizeFilter = sizes[(i + d + sizes.length) % sizes.length];
+    const m = this.mode;
+    const first = allArenas().find((a) => L.sizeFilter === 'ALL' || arenaSize(a) === L.sizeFilter);
+    if (first && L.sizeFilter !== 'ALL' && arenaSize(findArena(L.arenaId)) !== L.sizeFilter) L.arenaId = (m.arenas.map(findArena).find((a) => arenaSize(a) === L.sizeFilter) ?? first).id;
+    this.rebuild();
+  }
+
+  toggleItems() { L.items = !L.items; this.rebuild(); }
+
+  /** a room member asked to change something (only honoured with Open Control) */
+  onRemoteCtl(peer: number, m: any) {
+    if (!hostRoom.openControl) return;
+    const who = hostRoom.members.get(peer)?.name ?? 'Someone';
+    const d = m.d === -1 ? -1 : 1;
+    switch (m.a) {
+      case 'mode': this.stepMode(d); break;
+      case 'arena': this.stepArena(d); break;
+      case 'size': this.stepSize(d); break;
+      case 'items': this.toggleItems(); break;
+      case 'start': this.app.toast(`${who} started the match`); this.start(); return;
+      default: return;
+    }
+    this.app.toast(`${who} changed the room`);
+  }
+
+  /** mirror room membership into lobby slots */
+  syncMembers() {
+    if (!this.el) return;
+    let changed = false;
+    const mem = hostRoom.members;
+    for (let i = L.slots.length - 1; i >= 0; i--) {
+      const sl = L.slots[i];
+      if (sl.ctrl.type === 'remote' && !mem.has(sl.ctrl.peer)) { this.app.toast(`${sl.name} left`); L.slots.splice(i, 1); changed = true; }
+    }
+    for (const m of mem.values()) {
+      const sl = L.slots.find((x) => x.ctrl.type === 'remote' && x.ctrl.peer === m.peer);
+      if (sl) {
+        if (sl.name !== m.name || (m.blade && sl.blade?.id !== m.blade.id)) { sl.name = m.name; if (m.blade) sl.blade = m.blade; changed = true; }
+        continue;
+      }
+      if (L.slots.length >= this.mode.maxPlayers) {
+        const cpu = L.slots.findIndex((x) => x.ctrl.type === 'cpu');
+        if (cpu < 0) continue; // room full for this mode: they watch from the room until a slot frees up
+        L.slots.splice(cpu, 1);
+      }
+      L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: L.slots.length % 2 });
+      this.app.sfx.play('select');
+      this.app.toast(`${m.name} joined the room`);
+      changed = true;
+    }
+    if (changed) { this.fillCpus(); this.assignTeams(); this.renderSlots(); }
+    this.dirty = true;
+    if (this.onlineEl) this.renderOnline();
   }
 
   rebuild() {
@@ -280,7 +360,7 @@ export class LobbyScreen implements Screen {
 
   removeSlot(i: number) {
     const s = L.slots[i];
-    if (s.ctrl.type === 'remote') hostT?.kick(s.ctrl.peer);
+    if (s.ctrl.type === 'remote') hostRoom.t?.kick(s.ctrl.peer);
     L.slots.splice(i, 1);
     this.assignTeams();
     this.renderSlots();
@@ -326,13 +406,16 @@ export class LobbyScreen implements Screen {
   renderOnline() {
     const el = this.onlineEl;
     el.innerHTML = '';
-    if (hostT) {
-      const t = hostT;
+    if (hostRoom.t) {
+      const t = hostRoom.t;
+      const ctl = h('div.toggle.panel.nav', { onclick: () => { hostRoom.openControl = !hostRoom.openControl; this.dirty = true; this.renderOnline(); }, title: 'Let everyone in the room change mode / arena and start matches' }, h('span.dot'), 'OPEN CONTROL');
+      ctl.classList.toggle('on', hostRoom.openControl);
       el.append(
-        h('div.hint', null, t.kind === 'relay-tunnel' ? 'PUBLIC ROOM — share the link' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'),
+        h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'PUBLIC ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
-        h('button.btn.small.nav', { onclick: () => { t.close(); hostT = null; lobbyListeners = false; L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); this.renderSlots(); this.renderOnline(); } }, 'Close Room'),
+        h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, ctl,
+          h('button.btn.small.nav', { onclick: () => { hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
       return;
     }
@@ -352,53 +435,20 @@ export class LobbyScreen implements Screen {
     el.innerHTML = '';
     el.append(h('div.hint', null, `Opening ${kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room'}…`));
     try {
-      hostT = await (kind === 'cloud' ? hostCloud(name) : hostLocal(name, kind === 'tunnel'));
-      lobbyListeners = false;
-      this.wireHost();
-      this.app.toast(`Room ${hostT.code} open — share the code!`);
+      const t = await (kind === 'cloud' ? hostCloud(name) : hostLocal(name, kind === 'tunnel'));
+      hostRoom.open(t);
+      this.app.toast(`Room ${t.code} open — share the code!`);
     } catch (e) {
       this.app.toast(String((e as Error).message || e));
     }
     this.renderOnline();
   }
 
-  wireHost() {
-    if (!hostT || lobbyListeners) return;
-    lobbyListeners = true;
-    const t = hostT;
-    t.onJoin((peer, name) => {
-      if (L.slots.length >= this.mode.maxPlayers) {
-        const cpu = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
-        if (cpu < 0) { t.send(peer, { t: 'full' }); t.kick(peer); return; }
-        L.slots.splice(cpu, 1);
-      }
-      L.slots.push({ name: name.slice(0, 16) || `Guest ${peer}`, ctrl: { type: 'remote', peer }, bladeId: PRESETS[peer % PRESETS.length].id, team: L.slots.length % 2 });
-      this.assignTeams();
-      this.app.sfx.play('select');
-      this.app.toast(`${name} joined online`);
-      this.renderSlots();
-      this.dirty = true;
-    });
-    t.onLeave((peer) => {
-      const i = L.slots.findIndex((s) => s.ctrl.type === 'remote' && s.ctrl.peer === peer);
-      if (i >= 0) { this.app.toast(`${L.slots[i].name} left`); L.slots.splice(i, 1); this.fillCpus(); this.renderSlots(); this.dirty = true; }
-    });
-    t.onMessage((peer, msg) => {
-      const s = L.slots.find((x) => x.ctrl.type === 'remote' && x.ctrl.peer === peer);
-      if (!s) return;
-      if (msg?.t === 'hello' || msg?.t === 'blade') {
-        if (msg.name) s.name = String(msg.name).slice(0, 16);
-        if (msg.blade) s.blade = msg.blade as BladeDesign;
-        this.renderSlots();
-        this.dirty = true;
-      }
-    });
-  }
-
   lobbySnapshot() {
     const arena = findArena(L.arenaId);
     return {
-      t: 'lobby', mode: L.mode, arena: arena.name, target: L.target, time: L.time,
+      t: 'lobby', mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
+      items: L.items, target: L.target, time: L.time, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host',
       slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i) })),
     };
   }
@@ -418,16 +468,19 @@ export class LobbyScreen implements Screen {
     cfg.players.forEach((p) => (p.team = teams.indexOf(p.team)));
     this.app.sfx.play('go');
     const arg: MatchArg = { cfg };
-    if (hostT) {
+    if (hostRoom.t) {
       const peerSlot = new Map<number, number>();
-      cfg.players.forEach((p, i) => { if (p.ctrl.type === 'remote') { peerSlot.set(p.ctrl.peer, i); hostT!.send(p.ctrl.peer, { t: 'start', cfg, mine: [i] }); } });
-      arg.host = { t: hostT, peerSlot };
+      cfg.players.forEach((p, i) => { if (p.ctrl.type === 'remote') peerSlot.set(p.ctrl.peer, i); });
+      // everyone in the room follows: players get their slots, extra members spectate
+      for (const peer of hostRoom.members.keys()) hostRoom.send(peer, { t: 'start', cfg, mine: peerSlot.has(peer) ? [peerSlot.get(peer)] : [] });
+      hostRoom.inMatch = true;
+      arg.host = { t: hostRoom.t, peerSlot };
     }
     this.app.go('match', arg);
   }
 
   leave() {
-    if (hostT) { hostT.close(); hostT = null; lobbyListeners = false; L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); }
+    if (hostRoom.t) { hostRoom.close(); L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); }
     this.app.go('menu');
   }
 
@@ -439,15 +492,19 @@ export class LobbyScreen implements Screen {
     this.nav.update(dt);
     this.angle += dt * 2.5;
     for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle * (ic.d.spinDir));
-    if (hostT) {
+    if (hostRoom.t) {
       this.broadcastT -= dt;
       if (this.dirty && this.broadcastT <= 0) {
-        hostT.send('all', this.lobbySnapshot());
+        hostRoom.send('all', this.lobbySnapshot());
         this.dirty = false;
         this.broadcastT = 0.25;
       }
     }
   }
 
-  unmount() { this.el.remove(); }
+  unmount() {
+    this.unsub?.();
+    hostRoom.onCtl = null;
+    this.el.remove();
+  }
 }

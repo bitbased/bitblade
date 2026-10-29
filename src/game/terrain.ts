@@ -405,6 +405,94 @@ BUILTIN_ARENAS.push(
   }),
 );
 
+// ---- large arenas ----
+function tc(w: number, h: number, i: number, j: number, T = 6) {
+  return { x: (i + 0.5) * T - (w * T) / 2, z: (j + 0.5) * T - (h * T) / 2 };
+}
+const at = (kind: MarkerKind, w: number, h: number, i: number, j: number, extra: Partial<Marker> = {}): Marker => ({ kind, ...tc(w, h, i, j), ...extra });
+
+BUILTIN_ARENAS.push(
+  {
+    id: 'mega-bowl', name: 'Mega Bowl Complex', desc: 'Huge walled pool: sunken bowls, domes, a spine and kickers.', theme: THEMES.concrete,
+    course: {
+      tile: 6, w: 7, h: 5,
+      pieces: poolCourse(7, 5, (i, j) => {
+        const m: Record<string, Piece> = {
+          '1,1': pc('bowl', 1, 1), '5,1': pc('bowl', 5, 1), '3,2': pc('dome', 3, 2), '3,1': pc('cradle', 3, 1),
+          '2,3': pc('hump', 2, 3), '4,3': pc('hump', 4, 3), '4,1': pc('spine', 4, 1, 1), '2,1': pc('spine', 2, 1, 1),
+          '1,3': pc('kicker', 1, 3, 3), '5,3': pc('kicker', 5, 3, 1),
+        };
+        return m[`${i},${j}`] ?? null;
+      }),
+    },
+    markers: [at('item', 7, 5, 2, 2), at('item', 7, 5, 4, 2), at('item', 7, 5, 3, 3), at('item', 7, 5, 3, 0, { z: -10 }), { kind: 'zone', x: 0, z: 0, r: 3 }, at('spinpad', 7, 5, 1, 2, { r: 1.2 }), at('spinpad', 7, 5, 5, 2, { r: 1.2 })],
+  },
+  {
+    id: 'ramp-park-xl', name: 'Ramp Park XL', desc: 'Giant park with a raised plateau, ramps up, cliffs down, kickers and pits.', theme: THEMES.neon,
+    course: {
+      tile: 6, w: 8, h: 6,
+      pieces: [
+        pc('corner', 0, 0, 2), pc('quarter', 1, 0, 2), pc('quarter', 2, 0, 2), pc('quarter', 3, 0, 2), pc('quarter', 4, 0, 2, 1), pc('quarter', 5, 0, 2, 1), pc('quarter', 6, 0, 2, 1), pc('corner', 7, 0, 3, 1),
+        pc('quarter', 0, 1, 1), pc('flat', 1, 1), pc('dome', 2, 1), pc('flat', 3, 1), pc('flat', 4, 1, 0, 1), pc('hump', 5, 1, 0, 1), pc('flat', 6, 1, 0, 1), pc('quarter', 7, 1, 3, 1),
+        pc('quarter', 0, 2, 1), pc('kicker', 1, 2, 0), pc('spine', 2, 2, 0), pc('flat', 3, 2), pc('flat', 4, 2, 0, 1), pc('flat', 5, 2, 0, 1), pc('kicker', 6, 2, 0, 1), pc('quarter', 7, 2, 3, 1),
+        pc('quarter', 0, 3, 1), pc('flat', 1, 3), pc('flat', 2, 3), pc('pit', 3, 3), pc('ramp', 4, 3, 2), pc('ramp', 5, 3, 2), pc('flat', 6, 3), pc('quarter', 7, 3, 3),
+        pc('quarter', 0, 4, 1), pc('hump', 1, 4), pc('kicker', 2, 4, 1), pc('flat', 3, 4), pc('flat', 4, 4), pc('cradle', 5, 4), pc('bowl', 6, 4), pc('quarter', 7, 4, 3),
+        pc('corner', 0, 5, 1), pc('quarter', 1, 5, 0), pc('quarter', 2, 5, 0), pc('flat', 3, 5), pc('quarter', 4, 5, 0), pc('quarter', 5, 5, 0), pc('quarter', 6, 5, 0), pc('corner', 7, 5, 0),
+      ],
+    },
+    markers: [at('item', 8, 6, 5, 2), at('item', 8, 6, 1, 1), at('item', 8, 6, 3, 4), at('item', 8, 6, 6, 3), at('boost', 8, 6, 3, 2, { rot: Math.PI }), at('boost', 8, 6, 1, 3, { rot: 0 }), { kind: 'zone', ...tc(8, 6, 5, 1), r: 3 }],
+  },
+  {
+    id: 'twin-forts-xl', name: 'Twin Forts XL', desc: 'Long CTF battlefield: walled bases, mid-field humps, pits and a spine.', theme: THEMES.toxic,
+    course: {
+      tile: 6, w: 10, h: 4,
+      pieces: poolCourse(10, 4, (i, j) => {
+        if ((i === 3 || i === 6) && (j === 1 || j === 2)) return pc('hump', i, j);
+        if ((i === 4 || i === 5) && j === 1) return pc('pit', i, j);
+        if ((i === 4 || i === 5) && j === 2) return pc('spine', i, j, 1);
+        if (i === 2 && j === 2) return pc('kicker', i, j, 1);
+        if (i === 7 && j === 1) return pc('kicker', i, j, 3);
+        return null;
+      }),
+    },
+    markers: [
+      { kind: 'flag', ...tc(10, 4, 1, 1), z: 0, team: 0 }, { kind: 'flag', ...tc(10, 4, 8, 1), z: 0, team: 1 },
+      at('spawn', 10, 4, 1, 1, { team: 0 }), at('spawn', 10, 4, 1, 2, { team: 0 }), at('spawn', 10, 4, 2, 1, { team: 0 }), at('spawn', 10, 4, 2, 2, { team: 0 }),
+      at('spawn', 10, 4, 8, 1, { team: 1 }), at('spawn', 10, 4, 8, 2, { team: 1 }), at('spawn', 10, 4, 7, 1, { team: 1 }), at('spawn', 10, 4, 7, 2, { team: 1 }),
+      { kind: 'item', x: 0, z: 9 }, { kind: 'item', x: -9, z: -9 }, { kind: 'item', x: 9, z: -9 }, { kind: 'item', x: 0, z: -9 },
+      { kind: 'boost', x: -12, z: 9, rot: Math.PI / 2 }, { kind: 'boost', x: 12, z: 9, rot: -Math.PI / 2 },
+    ],
+  },
+  {
+    id: 'gauntlet-mega', name: 'Gauntlet Megaworks', desc: 'Massive automated factory: four sweepers, orbiting saws, bumper fields and pits.', theme: THEMES.inferno,
+    course: {
+      tile: 6, w: 7, h: 7,
+      pieces: poolCourse(7, 7, (i, j) => (i === 3 && j === 3 ? pc('dome', i, j) : (i + j) % 4 === 0 && i > 0 && j > 0 && i < 6 && j < 6 && !(i === 3 && j === 3) ? pc('pit', i, j) : null)),
+    },
+    markers: [
+      { kind: 'arm', x: -9, z: -9, len: 5, speed: 1.0 }, { kind: 'arm', x: 9, z: 9, len: 5, speed: -1.2 }, { kind: 'arm', x: 9, z: -9, len: 5, speed: 0.9 }, { kind: 'arm', x: -9, z: 9, len: 5, speed: -0.8 },
+      { kind: 'saw', x: 0, z: 0, r: 6, speed: 0.6 }, { kind: 'saw', x: 0, z: 0, r: 12, speed: -0.35 }, { kind: 'saw', x: 0, z: 0, r: 12, speed: -0.35, rot: Math.PI },
+      ...ring(6, 15, 'bumper', { r: 0.9 }, 0.3), ...ring(4, 4, 'spinpad', { r: 1.1 }, Math.PI / 4),
+      { kind: 'boost', x: 0, z: 16, rot: Math.PI / 2 }, { kind: 'boost', x: 0, z: -16, rot: -Math.PI / 2 },
+      { kind: 'item', x: 6, z: 0 }, { kind: 'item', x: -6, z: 0 }, { kind: 'item', x: 0, z: 9 },
+      { kind: 'spawn', x: 0, z: 17 },
+    ],
+  },
+  {
+    id: 'titan-colosseum', name: 'Titan Colosseum', desc: 'Enormous eight-sided bowl for 8-player brawls: pillars, bumpers and spin pads.', theme: THEMES.royal,
+    stadium: { radius: 19.5, depth: 2.6, wall: 1.7, pockets: 8, pocketWidth: 3, sides: 8, dome: 3 },
+    markers: [...ring(8, 11, 'pillar', { r: 0.9 }, Math.PI / 8), ...ring(4, 6, 'bumper', { r: 0.8 }), ...ring(4, 15, 'spinpad', { r: 1.2 }), ...ring(6, 8.5, 'item', {}, 0.4), { kind: 'zone', x: 0, z: 0, r: 3.5 }],
+  },
+);
+
+export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';
+export const SIZE_LABEL: Record<ArenaSize, string> = { S: 'SMALL', M: 'MEDIUM', L: 'LARGE', TRACK: 'TRACK' };
+export function arenaSize(a: ArenaDef): ArenaSize {
+  if (a.track) return 'TRACK';
+  const half = a.stadium ? a.stadium.radius : (Math.max(a.course!.w, a.course!.h) * a.course!.tile) / 2;
+  return half < 13 ? 'S' : half < 19 ? 'M' : 'L';
+}
+
 const LS_KEY = 'bitblade.courses.v1';
 export function loadCustomArenas(): ArenaDef[] {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch { return []; }
