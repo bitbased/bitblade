@@ -391,7 +391,10 @@ export const BUILTIN_ARENAS: ArenaDef[] = [
   },
 ];
 
-function trackArena(id: string, name: string, desc: string, theme: Theme, track: TrackDef): ArenaDef {
+/** obstacle placed along a race track: f = lap fraction, lat = -1..1 across the road (left..right) */
+export interface TrackObstacle { f: number; kind: 'arm' | 'saw' | 'bumper' | 'pillar' | 'spinpad'; lat?: number; speed?: number; size?: number }
+
+function trackArena(id: string, name: string, desc: string, theme: Theme, track: TrackDef, obstacles: TrackObstacle[] = []): ArenaDef {
   const S = sampleTrack(track);
   const markers: Marker[] = [];
   const at = (f: number) => Math.floor((((f % 1) + 1) % 1) * S.n);
@@ -399,6 +402,26 @@ function trackArena(id: string, name: string, desc: string, theme: Theme, track:
   for (const f of track.items) {
     const i = at(f);
     for (const o of [-0.3, 0, 0.3]) markers.push({ kind: 'item', x: S.x[i] - S.tz[i] * o * track.width, z: S.z[i] + S.tx[i] * o * track.width });
+  }
+  // obstacles: positions are relative to the road so they always sit on the ribbon
+  const half = track.width / 2;
+  for (const o of obstacles) {
+    const i = at(o.f);
+    const lat = (o.lat ?? 0) * half;
+    const x = S.x[i] - S.tz[i] * lat, z = S.z[i] + S.tx[i] * lat;
+    switch (o.kind) {
+      case 'arm': {
+        // pivot just inside one edge, sweeping across the road
+        const side = (o.lat ?? 1) >= 0 ? 1 : -1;
+        const px = S.x[i] - S.tz[i] * (half - 0.5) * side, pz = S.z[i] + S.tx[i] * (half - 0.5) * side;
+        markers.push({ kind: 'arm', x: px, z: pz, len: o.size ?? track.width * 0.8, speed: o.speed ?? 1.2, rot: Math.atan2(-S.tx[i] * side, S.tz[i] * side) });
+        break;
+      }
+      case 'saw': markers.push({ kind: 'saw', x, z, r: o.size ?? track.width * 0.28, speed: o.speed ?? 1.1 }); break;
+      case 'bumper': markers.push({ kind: 'bumper', x, z, r: o.size ?? 0.8 }); break;
+      case 'pillar': markers.push({ kind: 'pillar', x, z, r: o.size ?? 0.7 }); break;
+      case 'spinpad': markers.push({ kind: 'spinpad', x, z, r: o.size ?? 1.4 }); break;
+    }
   }
   // starting grid behind the line
   for (let k = 0; k < 8; k++) {
@@ -506,6 +529,43 @@ BUILTIN_ARENAS.push(
     stadium: { radius: 19.5, depth: 2.6, wall: 1.7, pockets: 8, pocketWidth: 3, sides: 8, dome: 3 },
     markers: [...ring(8, 11, 'pillar', { r: 0.9 }, Math.PI / 8), ...ring(4, 6, 'bumper', { r: 0.8 }), ...ring(4, 15, 'spinpad', { r: 1.2 }), ...ring(6, 8.5, 'item', {}, 0.4), { kind: 'zone', x: 0, z: 0, r: 3.5 }],
   },
+);
+
+BUILTIN_ARENAS.push(
+  trackArena('crystal-canyon', 'Crystal Canyon', 'Long canyon run: pillar chicane, bumper field, a big hill jump and a spin-recharge pit pad.', THEMES.toxic, {
+    width: 9,
+    pts: [[0, -45, 0], [35, -48, 1], [60, -30, 2], [62, 0, 4], [45, 20, 5], [20, 15, 3], [5, 30, 2], [15, 50, 1], [-10, 62, 0], [-40, 55, 1], [-55, 30, 2], [-40, 10, 3], [-55, -15, 2], [-35, -38, 0]],
+    rails: [[0.1, 0.2], [0.33, 0.42], [0.52, 0.6], [0.7, 0.8]],
+    gaps: [[0.265, 0.275]],
+    boosts: [0.03, 0.25, 0.62, 0.9],
+    items: [0.15, 0.47, 0.75],
+  }, [
+    { f: 0.44, kind: 'pillar', lat: 0.45 }, { f: 0.46, kind: 'pillar', lat: -0.45 }, { f: 0.48, kind: 'pillar', lat: 0.45 },
+    { f: 0.66, kind: 'bumper', lat: -0.5 }, { f: 0.675, kind: 'bumper', lat: 0.4 }, { f: 0.69, kind: 'bumper', lat: -0.2 },
+    { f: 0.85, kind: 'spinpad', lat: 0.5 },
+  ]),
+  trackArena('inferno-gauntlet', 'Inferno Gauntlet', 'Obstacle course on rails: sweeping arms, saws on the racing line, bumpers and a final jump.', THEMES.inferno, {
+    width: 10,
+    pts: [[0, -40, 0], [40, -40, 0], [55, -20, 1], [50, 10, 2], [25, 20, 2], [0, 15, 1], [-25, 25, 2], [-45, 10, 1], [-50, -20, 0], [-30, -38, 0]],
+    rails: [[0.0, 0.1], [0.11, 0.3], [0.33, 0.6], [0.6, 0.82]],
+    gaps: [[0.865, 0.875]],
+    boosts: [0.05, 0.5, 0.84],
+    items: [0.24, 0.62],
+  }, [
+    { f: 0.14, kind: 'arm', lat: 1, speed: 1.3 }, { f: 0.35, kind: 'saw', speed: 1.2 }, { f: 0.4, kind: 'arm', lat: -1, speed: -1.1 },
+    { f: 0.55, kind: 'saw', speed: -1.0 }, { f: 0.505, kind: 'bumper', lat: 0.4 }, { f: 0.51, kind: 'bumper', lat: -0.4 },
+    { f: 0.72, kind: 'arm', lat: 1, speed: 1.5 }, { f: 0.97, kind: 'spinpad', lat: -0.4 },
+  ]),
+  trackArena('frost-byte', 'Frost Byte', 'Fast frozen oval: three jumps, boost strips into every one, bumpers on the straights.', THEMES.ice, {
+    width: 9,
+    pts: [[0, -30, 0], [50, -30, 0], [70, -10, 1], [70, 15, 2], [50, 35, 3], [0, 35, 3], [-50, 35, 2], [-70, 15, 1], [-70, -10, 0], [-50, -30, 0]],
+    rails: [[0.13, 0.42], [0.62, 0.9]],
+    gaps: [[0.075, 0.083], [0.45, 0.458], [0.93, 0.938]],
+    boosts: [0.055, 0.43, 0.91],
+    items: [0.2, 0.55, 0.75],
+  }, [
+    { f: 0.37, kind: 'bumper', lat: 0.4 }, { f: 0.39, kind: 'bumper', lat: -0.4 }, { f: 0.87, kind: 'bumper', lat: 0 },
+  ]),
 );
 
 export type ArenaSize = 'S' | 'M' | 'L' | 'TRACK';

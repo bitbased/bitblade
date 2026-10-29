@@ -204,9 +204,28 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   if (gapK >= 0) want = 99; // carry speed into jumps
   // racing line: drift to the inside of the coming bend, back to center on straights
   const lane = worst > 0.01 && worstK < window * 0.8 ? Math.sign(worstSigned) * Math.min(0.32, worst * 9) * T.width : 0;
+  let laneAdj = lane;
+  // obstacles on the road ahead: pick the side away from them, hop over sweeping arms
+  for (const m of sim.markers) {
+    if (m.kind !== 'pillar' && m.kind !== 'bumper' && m.kind !== 'saw' && m.kind !== 'arm') continue;
+    const hp = hazardPose(m, s.t + 0.25);
+    if (!hp) continue;
+    const ox = hp.kind === 'arm' ? (hp.ax + hp.bx) / 2 : hp.ax, oz = hp.kind === 'arm' ? (hp.az + hp.bz) / 2 : hp.az;
+    const rx = ox - t.x, rz = oz - t.z;
+    const ahead = rx * T.tx[t.prog] + rz * T.tz[t.prog];
+    if (ahead < -1 || ahead > 9 + speed * 0.6) continue;
+    const oLat = -(ox - T.x[t.prog]) * T.tz[t.prog] + (oz - T.z[t.prog]) * T.tx[t.prog];
+    if (hp.kind === 'arm') {
+      if (ahead < 3.5 + speed * 0.12 && t.grounded && t.jumpCd <= 0 && lv >= 2) c.jump = true;
+      continue;
+    }
+    const clear = hp.r + 1.4;
+    if (Math.abs(oLat - laneAdj) < clear) laneAdj = oLat + (oLat > 0 ? -clear : clear);
+  }
+  laneAdj = Math.max(-T.width * 0.36, Math.min(T.width * 0.36, laneAdj));
   const look = Math.max(6, Math.round((3 + speed * 0.55) / 0.5));
   const k = at(look);
-  const gx = T.x[k] - T.tz[k] * lane, gz = T.z[k] + T.tx[k] * lane;
+  const gx = T.x[k] - T.tz[k] * laneAdj, gz = T.z[k] + T.tx[k] * laneAdj;
   let dx = gx - t.x, dz = gz - t.z;
   const dl = Math.hypot(dx, dz) || 1;
   dx /= dl; dz /= dl;

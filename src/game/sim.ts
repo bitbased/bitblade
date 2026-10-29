@@ -576,8 +576,10 @@ export class Sim {
           const bounce = hp.kind === 'bumper' ? 1.0 : hp.kind === 'pillar' ? 0.6 : 1.1;
           top.vx -= (1 + bounce) * rvn * nx; top.vz -= (1 + bounce) * rvn * nz;
         }
-        if (hp.kind === 'bumper') { top.vx += nx * 9; top.vz += nz * 9; }
-        if (hp.kind === 'arm' || hp.kind === 'saw') { top.vx += hvx * 0.6 + nx * 4; top.vz += hvz * 0.6 + nz * 4; top.vy += 2.5; }
+        // on race ribbons obstacles slow you and cost spin, but shouldn't fling you into the void every time
+        const kb = this.cfg.mode === 'race' ? 0.55 : 1;
+        if (hp.kind === 'bumper') { top.vx += nx * 9 * kb; top.vz += nz * 9 * kb; }
+        if (hp.kind === 'arm' || hp.kind === 'saw') { top.vx += (hvx * 0.6 + nx * 4) * kb; top.vz += (hvz * 0.6 + nz * 4) * kb; top.vy += 2.5 * kb; }
         if (!this.hazardHitCd.has(key)) {
           this.hazardHitCd.set(key, 0.4);
           const dmg = hp.kind === 'saw' ? 0.09 : hp.kind === 'arm' ? 0.05 : hp.kind === 'bumper' ? 0.01 : 0.004;
