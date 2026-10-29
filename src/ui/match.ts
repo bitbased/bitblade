@@ -1,5 +1,6 @@
 // Match screen: runs the sim (local / host) or mirrors snapshots (client), renders, HUD, pause.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
+import { allSongs, surpriseSong } from '../game/music';
 import { Hud } from './hud';
 import { icon } from './icons';
 import { Sim } from '../game/sim';
@@ -311,6 +312,37 @@ export class MatchScreen implements Screen {
     }
   }
 
+  /**
+   * Pause menu MUSIC: ◀ ▶ through this course's own song, 🎲 a fresh surprise, 📻 radio (new surprise songs keep
+   * coming), and every song in your library. It switches straight away, for this match.
+   */
+  musicIdx = 0;
+  musicPicker() {
+    const sfx = this.app.sfx;
+    type Opt = { label: string; play: () => void };
+    const opts: Opt[] = [
+      { label: this.arg.cfg.song ? `♪ Room song — ${this.arg.cfg.song.name}` : '♪ This course\'s song', play: () => (this.arg.cfg.song ? sfx.playSong(this.arg.cfg.song) : sfx.useMusic('game', this.arg.cfg.arena)) },
+      { label: '🎲 Surprise song', play: () => sfx.playSong((sfx.surprise = surpriseSong())) },
+      { label: '📻 Surprise radio', play: () => sfx.startRadio() },
+      ...allSongs().map((s) => ({ label: `♪ ${s.name}${s.custom ? '' : ' ★'}`, play: () => sfx.playSong(s) })),
+    ];
+    const val = h('b', null, opts[this.musicIdx]?.label ?? opts[0].label);
+    const now = h('span', null, sfx.player?.song ? `now: ${sfx.player.song.name}` : '');
+    const go = (d: number) => {
+      this.musicIdx = (this.musicIdx + d + opts.length) % opts.length;
+      opts[this.musicIdx].play();
+      val.textContent = opts[this.musicIdx].label;
+      now.textContent = sfx.player?.song ? `now: ${sfx.player.song.name}` : '';
+    };
+    const row = h('div.selector.panel.nav.pause-music', { 'data-navx': '1' },
+      h('span.lbl', null, 'MUSIC'),
+      h('button.arrow', { onclick: () => go(-1) }, '◀'),
+      h('div.val', null, val, now),
+      h('button.arrow', { onclick: () => go(1) }, '▶'));
+    row.addEventListener('navx', (e) => go((e as CustomEvent).detail));
+    return row;
+  }
+
   togglePause() {
     this.paused = !this.paused;
     if (this.paused) {
@@ -339,7 +371,7 @@ export class MatchScreen implements Screen {
       const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
       this.pauseEl = h('div.pause', null, h('h2', null, online ? 'MENU' : 'PAUSED'),
         online ? h('div.hint', null, `ONLINE ROOM ${code ?? ''} · the match keeps running while this menu is open`) : null,
-        resume, ...buttons, this.hud.controlsHelp(this.view.focus));
+        resume, ...buttons, this.musicPicker(), this.hud.controlsHelp(this.view.focus));
       this.wrap.append(this.pauseEl);
       this.pauseNav = new MenuNav(this.app, this.pauseEl);
       this.pauseNav.focus(0);

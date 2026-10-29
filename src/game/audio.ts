@@ -3,6 +3,17 @@ import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, surpriseS
 
 export type SfxName = 'tick' | 'select' | 'back' | 'clash' | 'bigclash' | 'land' | 'launch' | 'count' | 'go' | 'finish' | 'burst' | 'pickup' | 'item' | 'shock' | 'dash' | 'jump' | 'special' | 'crystal' | 'gem' | 'hazard' | 'win' | 'grind';
 
+export type HumStyle = 'buzz' | 'soft' | 'chip' | 'hum' | 'whine' | 'off';
+/** spin sound characters: the blade's whir from rough to smooth */
+export const HUM_STYLES: { id: HumStyle; label: string; wave: OscillatorType; cutoff: number; pitch: number; gain: number }[] = [
+  { id: 'buzz', label: 'Classic buzz', wave: 'sawtooth', cutoff: 900, pitch: 1, gain: 1 },
+  { id: 'soft', label: 'Soft whir', wave: 'sine', cutoff: 2000, pitch: 1.4, gain: 1.6 },
+  { id: 'chip', label: '8-bit chip', wave: 'square', cutoff: 1400, pitch: 1, gain: 0.8 },
+  { id: 'hum', label: 'Smooth hum', wave: 'triangle', cutoff: 1200, pitch: 0.8, gain: 1.4 },
+  { id: 'whine', label: 'High whine', wave: 'sawtooth', cutoff: 2600, pitch: 2, gain: 0.7 },
+  { id: 'off', label: 'Off', wave: 'sine', cutoff: 800, pitch: 1, gain: 0 },
+];
+
 export class Sfx {
   ctx: AudioContext | null = null;
   master: GainNode | null = null;
@@ -21,13 +32,18 @@ export class Sfx {
   /** told whenever the music changes by itself (radio / random), e.g. so the menu can show the new name */
   onSongChange: ((s: Song | null) => void) | null = null;
   private songStart = 0;
-  private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
+  private hum: { osc: OscillatorNode; gain: GainNode; f: BiquadFilterNode } | null = null;
+  /** the spinning-blade sound: loudness (0 = off) and its character */
+  humVolume = 1;
+  humStyle: HumStyle = 'buzz';
 
   constructor() {
     try {
       const s = JSON.parse(localStorage.getItem('bitblade.audio') || '{}');
       if (typeof s.volume === 'number') this.volume = s.volume;
       if (typeof s.music === 'number') this.musicVolume = s.music;
+      if (typeof s.hum === 'number') this.humVolume = s.hum;
+      if (s.humStyle && HUM_STYLES.some((h) => h.id === s.humStyle)) this.humStyle = s.humStyle;
     } catch { /* ignore */ }
     const unlock = () => { this.ensure(); this.ctx?.resume(); };
     addEventListener('pointerdown', unlock);
@@ -35,7 +51,8 @@ export class Sfx {
   }
 
   save() {
-    try { localStorage.setItem('bitblade.audio', JSON.stringify({ volume: this.volume, music: this.musicVolume })); } catch { /* ignore */ }
+    try { localStorage.setItem('bitblade.audio', JSON.stringify({ volume: this.volume, music: this.musicVolume, hum: this.humVolume, humStyle: this.humStyle })); } catch { /* ignore */ }
+    if (this.hum) this.styleHum();
     if (this.master) this.master.gain.value = this.volume;
     if (this.musicGain) this.musicGain.gain.value = this.musicVolume;
   }
@@ -135,17 +152,43 @@ export class Sfx {
     if (!this.hum) {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
-      osc.type = 'sawtooth';
       const f = this.ctx.createBiquadFilter();
       f.type = 'lowpass';
-      f.frequency.value = 900;
       gain.gain.value = 0;
       osc.connect(f).connect(gain).connect(this.master!);
       osc.start();
-      this.hum = { osc, gain };
+      this.hum = { osc, gain, f };
+      this.styleHum();
     }
-    this.hum.osc.frequency.setTargetAtTime(60 + level * 220, this.ctx.currentTime, 0.1);
-    this.hum.gain.gain.setTargetAtTime(level * 0.035, this.ctx.currentTime, 0.1);
+    const st = HUM_STYLES.find((h) => h.id === this.humStyle) ?? HUM_STYLES[0];
+    const on = st.id !== 'off' && this.humVolume > 0;
+    this.hum.osc.frequency.setTargetAtTime((60 + level * 220) * st.pitch, this.ctx.currentTime, 0.1);
+    this.hum.gain.gain.setTargetAtTime(on ? level * 0.035 * st.gain * this.humVolume : 0, this.ctx.currentTime, 0.1);
+  }
+
+  private styleHum() {
+    if (!this.hum) return;
+    const st = HUM_STYLES.find((h) => h.id === this.humStyle) ?? HUM_STYLES[0];
+    this.hum.osc.type = st.wave;
+    this.hum.f.frequency.value = st.cutoff;
+  }
+
+  /** 📻 in a match: a fresh surprise song, and new ones keep coming (each ≥45s, switching at the end of a loop) */
+  startRadio() {
+    const n = surpriseSong();
+    this.surprise = n;
+    this.playSong(n);
+    this.armRadio();
+  }
+  private armRadio() {
+    if (!this.player) return;
+    this.player.onLoop = () => {
+      if (!this.ctx || this.ctx.currentTime - this.songStart < 45) return;
+      const n = surpriseSong();
+      this.surprise = n; this.wanted = n; this.songStart = this.ctx.currentTime;
+      this.player!.play(n);
+      this.onSongChange?.(n);
+    };
   }
 
   music(on: boolean) { this.musicOn = on; }

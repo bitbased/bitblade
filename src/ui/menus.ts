@@ -1,5 +1,6 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
+import { HUM_STYLES, type HumStyle } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, saveCustomSongs, saveMusicPrefs, songById, surpriseSong } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
@@ -295,6 +296,8 @@ export class SettingsScreen extends Base {
       h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
         slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }),
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
+        slider('SPIN SOUND VOLUME', sfx.humVolume, 0, 1.5, 0.05, (v) => { sfx.humVolume = v; sfx.save(); }),
+        (() => { const se = h<HTMLSelectElement>('select.nav', { onchange: () => { sfx.humStyle = se.value as HumStyle; sfx.save(); } }, ...HUM_STYLES.map((s) => h('option', { value: s.id, selected: sfx.humStyle === s.id }, s.label))); return h('div.field', null, h('label', null, 'SPIN SOUND'), se); })(),
         musicPick('MENU MUSIC', 'menu', [['surprise', '🎲 Surprise — a brand-new song each session'], ['random', '🔀 Random — a new song every couple of loops'], ['off', 'Off']]),
         musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),
