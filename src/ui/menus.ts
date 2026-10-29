@@ -12,6 +12,7 @@ import { settings } from '../core/settings';
 import { clientRoom, hostRoom } from '../net/room';
 import { icon } from './icons';
 import { getRenderer } from '../game/render';
+import { lobbySession } from './lobby';
 
 abstract class Base implements Screen {
   app!: App;
@@ -63,10 +64,12 @@ export class MainMenu extends Base {
   build() {
     const item = (label: string, sub: string, fn: () => void) => h('button.menu-item.nav', { onclick: () => { this.app.sfx.play('select'); fn(); } }, label, h('small', null, sub));
     const p = getPlatform();
+    const session = lobbySession();
     return h('div.menu-screen', null,
       h('div.menu-col', null,
         h('div.menu-logo', null, 'BITBLADE'),
-        item('PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
+        session ? item('CONTINUE', `Back to your lobby · ${session.mode} · ${session.arena} · ${session.humans} player${session.humans === 1 ? '' : 's'}${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
+        item(session ? 'NEW GAME' : 'PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
         item('ONLINE', 'Host a room or join with a code / link', () => this.app.go('online')),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
@@ -138,8 +141,10 @@ export class Results extends Base {
       online === 'client'
         ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return; clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
         : h('div.lobby-bottom', null,
-          again ? h('button.btn.primary.nav', { onclick: () => this.app.go('match', again) }, '↻ Rematch') : null,
-          h('button.btn.nav' + (online === 'host' ? '.primary' : ''), { onclick: () => this.app.go('lobby', { mode: cfg.mode, keep: true }) }, online === 'host' ? 'Back to Room' : 'Lobby'),
+          // rematch / next go back through the lobby so a host's room follows along (and newcomers get slotted in)
+          h('button.btn.primary.nav', { onclick: () => (again ? this.app.go('match', again) : this.app.go('lobby', { keep: true, autostart: true })) }, online === 'host' ? '↻ Rematch — everyone' : '↻ Rematch'),
+          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true, next: true, autostart: true }) }, cfg.arena.track ? 'Next Track ▶' : 'Next Arena ▶'),
+          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? 'Room Lobby — change track / players' : 'Lobby — change track / players'),
           online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
           h('button.btn.nav', { onclick: () => { if (online === 'host') { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); } this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
     );
@@ -159,7 +164,8 @@ export class Results extends Base {
     super.unmount();
     if (this.online === 'client') { clientRoom.handler = null; clientRoom.closeHandler = null; }
   }
-  onBack() { if (this.online !== 'client') this.app.go('menu'); }
+  // Esc / B from results: back to the lobby (the host's room stays open), never straight out
+  onBack() { if (this.online !== 'client') this.app.go('lobby', { keep: true }); }
 }
 
 // ------------------------------------------------------------------ settings

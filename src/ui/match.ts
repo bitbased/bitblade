@@ -140,6 +140,10 @@ export class MatchScreen implements Screen {
       this.consumeEvents(ev);
     } else if (m?.t === 'end') {
       this.finish();
+    } else if (m?.t === 'start' && clientRoom.t) {
+      // host restarted / started the next match while we were still in this one
+      this.ended = true;
+      this.app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } });
     }
   }
 
@@ -279,7 +283,8 @@ export class MatchScreen implements Screen {
       let buttons: HTMLElement[];
       if (this.arg.host) {
         buttons = [
-          h('button.btn.nav', { onclick: () => this.quit() }, 'End Match — everyone back to room'),
+          h('button.btn.nav', { onclick: () => this.hostRestart() }, 'Restart Match — everyone'),
+          h('button.btn.nav', { onclick: () => this.quit() }, 'Back to Room Lobby — change track / players'),
           h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) this.closeRoomAndQuit(); } }, 'Close Room & Quit'),
         ];
       } else if (this.arg.client) {
@@ -288,7 +293,11 @@ export class MatchScreen implements Screen {
           h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) this.quit(); } }, 'Leave Room'),
         ];
       } else {
-        buttons = [h('button.btn.nav', { onclick: () => this.restart() }, 'Restart'), h('button.btn.nav', { onclick: () => this.quit() }, 'Quit to Menu')];
+        buttons = [
+          h('button.btn.nav', { onclick: () => this.restart() }, 'Restart'),
+          h('button.btn.nav', { onclick: () => this.toLobby() }, 'Back to Lobby — change track / players'),
+          h('button.btn.nav', { onclick: () => this.quit() }, 'Quit to Menu'),
+        ];
       }
       const online = this.arg.host || this.arg.client;
       const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
@@ -308,6 +317,19 @@ export class MatchScreen implements Screen {
   restart() {
     const arg = { ...this.arg, cfg: { ...this.arg.cfg, seed: (Math.random() * 1e9) | 0 } };
     this.app.go('match', arg);
+  }
+
+  /** local: back to the lobby with everything kept (players, blades, mode, arena, rules) */
+  toLobby() {
+    this.ended = true;
+    this.app.go('lobby', { keep: true });
+  }
+
+  /** host: restart for the whole room — the lobby re-sends 'start' and guests jump straight into the new match */
+  hostRestart() {
+    this.ended = true;
+    hostRoom.inMatch = false;
+    this.app.go('lobby', { keep: true, autostart: true });
   }
 
   leaveMatchStayInRoom() {
@@ -330,7 +352,7 @@ export class MatchScreen implements Screen {
       // the leader ends the match for everyone and the room heads back to the lobby
       hostRoom.send('all', { t: 'end' });
       hostRoom.inMatch = false;
-      this.app.go('lobby', { mode: this.arg.cfg.mode, keep: true });
+      this.app.go('lobby', { keep: true });
       return;
     }
     if (this.arg.client) clientRoom.leave();

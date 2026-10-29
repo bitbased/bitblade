@@ -25,7 +25,17 @@ const L = {
   target: 4,
   time: 90,
   slots: [] as Slot[],
+  /** set once the lobby has been visited: the menu offers CONTINUE back into it */
+  active: false,
 };
+
+/** the lobby you'll return to (players, mode, arena all kept), or null if there isn't one yet */
+export function lobbySession() {
+  if (!L.active) return null;
+  const mode = MODES.find((m) => m.id === L.mode)!;
+  const humans = L.slots.filter((s) => s.ctrl.type !== 'cpu').length;
+  return { mode: mode.name, arena: findArena(L.arenaId).name, humans, total: Math.min(L.slots.length, mode.maxPlayers) };
+}
 
 
 export function drawBladeIcon(cv: HTMLCanvasElement, d: BladeDesign, angle = 0) {
@@ -86,16 +96,25 @@ export class LobbyScreen implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(true, app.canvas);
-    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean };
-    if (a.mode && a.mode !== L.mode) this.setMode(a.mode);
-    else if (a.mode) this.setMode(a.mode, true);
+    // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
+    // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)
+    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean; next?: boolean; autostart?: boolean };
+    L.active = true;
+    if (a.mode && !a.keep && a.mode !== L.mode) this.setMode(a.mode);
+    else if (a.mode && !a.keep) this.setMode(a.mode, true);
     if (a.arenaId) L.arenaId = a.arenaId;
     if (!L.slots.some((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote')) {
       L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb1' }, bladeId: PRESETS[0].id, team: 0 });
     }
     if (a.bladeId) L.slots[0].bladeId = a.bladeId;
     this.fillCpus();
+    if (a.next) {
+      const order = this.arenaOrder();
+      const i = order.findIndex((x) => x.id === L.arenaId);
+      L.arenaId = order[(i + 1) % order.length].id;
+    }
     this.el = this.build();
+    if (a.autostart) this.el.style.visibility = 'hidden';
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1); // START
@@ -104,6 +123,7 @@ export class LobbyScreen implements Screen {
     hostRoom.inMatch = false;
     this.syncMembers();
     if (a.online && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
+    if (a.autostart) setTimeout(() => { if (this.el.isConnected) { this.el.style.visibility = ''; this.start(); } }, 0);
   }
 
   setMode(id: ModeId, keepArena = false) {
