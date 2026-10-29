@@ -1,4 +1,5 @@
 import { fillTrackHeights, sampleTrack, trackBounds, type TrackDef, type TrackSamples } from './track';
+import { compileCourse, type SegCourse } from './segments';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -829,6 +830,38 @@ function walkLevel(id: string, name: string, desc: string, theme: Theme, opts: {
 }
 
 
+
+/** Rollercoaster Run, as a segment course (also the reference course for the Track Studio editor) */
+export const COASTER: SegCourse = {
+  id: 'quest-coaster', name: 'Rollercoaster Run', desc: 'Race-style adventure: big climbs, steep drops, tilted turns and lipped jumps over gaps — chase camera, checkpoints, a drone hive and a long final leap.',
+  theme: THEMES.inferno, width: 11, open: true,
+  segs: [
+    { kind: 'straight', len: 34, rails: true, att: [{ at: 0.7, kind: 'gem' }] },
+    { kind: 'climb', len: 40, turn: 50, climb: 7, bank: 0.25, rails: true, boost: true },
+    { kind: 'crest', len: 24, climb: 1, att: [{ at: 0.5, kind: 'gem', lat: -0.4 }] },
+    { kind: 'drop', len: 34, climb: -9, att: [{ at: 0.6, kind: 'gem' }] },
+    { kind: 'jump', len: 30, lip: 1.6, gap: 9, boost: true },
+    { kind: 'straight', len: 26, att: [{ at: 0.4, kind: 'checkpoint' }, { at: 0.8, kind: 'spinpad', lat: 0.5 }] },
+    { kind: 'curve', len: 56, turn: -130, climb: 4, bank: -0.35, rails: true, att: [{ at: 0.5, kind: 'saw', lat: 0.1 }] },
+    { kind: 'climb', len: 36, climb: 9, boost: true, att: [{ at: 0.8, kind: 'gem' }] },
+    { kind: 'curve', len: 36, turn: 90, bank: 0.4, rails: true, items: true },
+    { kind: 'drop', len: 36, climb: -12, att: [{ at: 0.3, kind: 'gem', lat: 0.4 }, { at: 0.7, kind: 'gem', lat: -0.4 }] },
+    { kind: 'jump', len: 28, lip: 1.8, gap: 10, boost: true },
+    { kind: 'straight', len: 40, att: [{ at: 0.2, kind: 'checkpoint' }, { at: 0.55, kind: 'hive' }, { at: 0.75, kind: 'arm', lat: 1 }] },
+    { kind: 'curve', len: 60, turn: 150, climb: 6, bank: 0.3, rails: true, att: [{ at: 0.5, kind: 'pillar', lat: -0.35 }, { at: 0.65, kind: 'pillar', lat: 0.35 }] },
+    { kind: 'climb', len: 28, climb: 7, att: [{ at: 0.5, kind: 'gem' }] },
+    { kind: 'straight', len: 34, att: [{ at: 0.3, kind: 'bumper', lat: -0.4 }, { at: 0.6, kind: 'bumper', lat: 0.4 }, { at: 0.9, kind: 'spinpad' }] },
+    { kind: 'curve', len: 44, turn: -90, climb: -9, bank: -0.3, rails: true },
+    { kind: 'jump', len: 26, lip: 1.5, gap: 9, boost: true },
+    { kind: 'climb', len: 34, climb: 5, items: true, att: [{ at: 0.3, kind: 'checkpoint' }] },
+    { kind: 'curve', len: 46, turn: -70, climb: 7, bank: -0.25, rails: true, att: [{ at: 0.6, kind: 'gem' }] },
+    { kind: 'drop', len: 30, climb: -13, boost: true },
+    { kind: 'jump', len: 30, lip: 2, gap: 12, climb: 1 },
+    { kind: 'curve', len: 40, turn: 80, climb: 5, bank: 0.3, rails: true, att: [{ at: 0.5, kind: 'gem' }] },
+    { kind: 'straight', len: 40, climb: 3, att: [{ at: 0.4, kind: 'arm', lat: -1, speed: -1.3 }] },
+  ],
+};
+
 /**
  * Titan Peak: a 16x16 mountain of 8 one-tile tiers. Each tier's ramp up is on the next side round (E, S, W, N…),
  * so you spiral up; some tiers have a kicker gap, hives guard two of them, gems hide on the far sides.
@@ -938,10 +971,8 @@ BUILTIN_ARENAS.push(
   walkLevel('quest-glacier', 'Glacier Ascent', 'Climb an icy staircase of terraces: stairs and ramps up, kicker leaps between ledges, two hives — about 14m up.', THEMES.ice,
     { width: 2, walls: true, hive: 8 },
     '...E.s..k .I.s.C' + 'L' + '.E/..H..s.Z' + 'R' + '..k E.k ..s.C' + 'L' + './.E.y..s..C' + 'R' + '..E.k ..H.s..E.G'),
-  // 5. Rollercoaster Run: constant ups and downs — ramps up and down, stairs, drops and kicker jumps
-  walkLevel('quest-coaster', 'Rollercoaster Run', 'Linear thrill ride: up ramps, down ramps, stairs, cliff drops and kicker jumps — never on the level for long.', THEMES.inferno,
-    { width: 2, walls: true, hive: 8 },
-    '...E/.s.\\.k .E.s/.C.\\\\.k .H.E/..s.Z.\\.D.k D.E.C.s/.s..\\.k .E/s.G.'),
+  // 5. Rollercoaster Run: a race-style adventure track — big climbs, steep drops, tilted turns, lipped jumps over gaps
+  compileCourse(COASTER).arena,
   titanPeak(),
   // 3. an open world: circle the valley floor, climb to the middle tier, jump the north gap, ramp up to the summit
   questLevel('quest-hive-valley', 'Hive Valley', 'Open world: work round the valley, up through three tiers to the summit goal. Two drone hives hunt anyone in their zones.', THEMES.toxic,

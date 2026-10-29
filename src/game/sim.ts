@@ -1133,6 +1133,9 @@ export class Sim {
   questUpdate(dt: number) {
     const s = this.s;
     const players = s.tops.filter((t) => !t.drone);
+    // track adventures: keep each blade's position along the path (chase camera, wrong-way, CPU driving)
+    const TS = this.terrain.track;
+    if (TS) for (const t of s.tops) if (t.alive) { const ns = nearestSample(TS, t.x, t.z, t.prog); if (ns.d < TS.width) t.prog = ns.i; }
     // gems
     for (const g of s.gems) {
       for (const t of players) {

@@ -358,7 +358,7 @@ export class LobbyScreen implements Screen {
   /** arenas that make sense for a mode: races need a track, everything else needs an arena/course */
   fits(a: ArenaDef, mode = L.mode) {
     const quest = a.markers.some((m) => m.kind === 'goal');
-    return mode === 'race' ? !!a.track : mode === 'quest' ? quest : !a.track && !quest;
+    return mode === 'race' ? !!a.track && !quest : mode === 'quest' ? quest : !a.track && !quest;
   }
 
   arenaOrder() {

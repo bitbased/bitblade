@@ -171,6 +171,14 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
         return;
       }
       ai.target = -1;
+      // track adventures: drive the road — aim a little ahead along the path (further when fast)
+      const TS = sim.terrain.track;
+      if (TS) {
+        const sp = Math.hypot(t.vx, t.vz);
+        const k = Math.min(TS.n - 1, t.prog + Math.round((5 + sp * 0.6) / 0.5));
+        ai.tx = TS.x[k]; ai.tz = TS.z[k];
+        return;
+      }
       const g = nearest(s.gems.filter((g) => Math.abs(g.y - t.y) < 1.5 && Math.hypot(g.x - t.x, g.z - t.z) < 7));
       const wp = questWaypoint(sim, t);
       if (g && wp && Math.hypot(g.x - wp.x, g.z - wp.z) < Math.hypot(t.x - wp.x, t.z - wp.z) + 2) { ai.tx = g.x; ai.tz = g.z; return; }

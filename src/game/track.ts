@@ -1,4 +1,5 @@
-// Race tracks: closed Catmull-Rom splines turned into floating, banked F-Zero-style ribbons.
+// Race tracks: Catmull-Rom splines turned into floating, banked F-Zero-style ribbons. Closed loops for racing;
+// open (start → end) paths for track adventures.
 
 export interface TrackDef {
   pts: [number, number, number][]; // x, z, elevation control points (closed loop)
@@ -12,6 +13,14 @@ export interface TrackDef {
   depth?: number; // pipe wall height
   twist?: number; // extra left/right banking that waves along the lap (slope, ~0..0.6)
   twistWaves?: number; // how many bank flips per lap
+  /** start → end path instead of a loop (track adventures) */
+  open?: boolean;
+  /** extra sideways tilt per control point (slope; + raises the left edge) */
+  banks?: number[];
+  /** jump ramps on the road: rise `h` metres over the `len` metres before fraction `f` (the lip) */
+  ramps?: { f: number; len: number; h: number }[];
+  /** false: no automatic 1.5m kicker before gaps (use explicit ramps instead) */
+  autoKick?: boolean;
 }
 
 export interface TrackSamples {
@@ -22,6 +31,9 @@ export interface TrackSamples {
   cum: Float32Array; // distance from start
   total: number;
   width: number;
+  /** per-sample extra tilt (slope) from TrackDef.banks */
+  bank: Float32Array;
+  open: boolean;
 }
 
 const VOID = -1000;
@@ -34,18 +46,26 @@ function cr(p0: number, p1: number, p2: number, p3: number, t: number) {
 
 export function sampleTrack(def: TrackDef): TrackSamples {
   const P = def.pts;
-  const dense: [number, number, number][] = [];
-  for (let i = 0; i < P.length; i++) {
-    const a = P[(i - 1 + P.length) % P.length], b = P[i], c = P[(i + 1) % P.length], d = P[(i + 2) % P.length];
+  const open = !!def.open;
+  const B = def.banks ?? [];
+  const N = P.length;
+  const idx = (i: number) => (open ? Math.max(0, Math.min(N - 1, i)) : (i + N) % N);
+  const dense: [number, number, number, number][] = [];
+  const segs = open ? N - 1 : N;
+  for (let i = 0; i < segs; i++) {
+    const a = P[idx(i - 1)], b = P[i], c = P[idx(i + 1)], d = P[idx(i + 2)];
+    const ba = B[i] ?? 0, bc = B[idx(i + 1)] ?? 0;
     for (let k = 0; k < 40; k++) {
       const t = k / 40;
-      dense.push([cr(a[0], b[0], c[0], d[0], t), cr(a[1], b[1], c[1], d[1], t), cr(a[2], b[2], c[2], d[2], t)]);
+      dense.push([cr(a[0], b[0], c[0], d[0], t), cr(a[1], b[1], c[1], d[1], t), cr(a[2], b[2], c[2], d[2], t), ba + (bc - ba) * (t * t * (3 - 2 * t))]);
     }
   }
+  if (open) dense.push([P[N - 1][0], P[N - 1][1], P[N - 1][2], B[N - 1] ?? 0]);
   // resample at uniform spacing
-  const out: [number, number, number][] = [dense[0]];
+  const out: [number, number, number, number][] = [dense[0]];
   let acc = 0;
-  for (let i = 1; i <= dense.length; i++) {
+  const last = open ? dense.length - 1 : dense.length;
+  for (let i = 1; i <= last; i++) {
     const p = dense[i - 1], q = dense[i % dense.length];
     let seg = Math.hypot(q[0] - p[0], q[1] - p[1]);
     let s0 = 0;
@@ -53,34 +73,35 @@ export function sampleTrack(def: TrackDef): TrackSamples {
       const need = STEP - acc;
       s0 += need;
       const f = s0 / seg;
-      out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]);
+      out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f, p[3] + (q[3] - p[3]) * f]);
       acc = 0;
     }
     acc += seg - s0;
     void seg;
   }
-  if (out.length > 2 && Math.hypot(out[out.length - 1][0] - out[0][0], out[out.length - 1][1] - out[0][1]) < STEP * 0.5) out.pop();
+  if (!open && out.length > 2 && Math.hypot(out[out.length - 1][0] - out[0][0], out[out.length - 1][1] - out[0][1]) < STEP * 0.5) out.pop();
   const n = out.length;
   const S: TrackSamples = {
     n, x: new Float32Array(n), z: new Float32Array(n), y: new Float32Array(n), tx: new Float32Array(n), tz: new Float32Array(n),
-    curv: new Float32Array(n), cum: new Float32Array(n), total: n * STEP, width: def.width,
+    curv: new Float32Array(n), cum: new Float32Array(n), total: n * STEP, width: def.width, bank: new Float32Array(n), open,
   };
-  for (let i = 0; i < n; i++) { S.x[i] = out[i][0]; S.z[i] = out[i][1]; S.y[i] = out[i][2]; S.cum[i] = i * STEP; }
+  const w = (i: number) => (open ? Math.max(0, Math.min(n - 1, i)) : (i + n) % n);
+  for (let i = 0; i < n; i++) { S.x[i] = out[i][0]; S.z[i] = out[i][1]; S.y[i] = out[i][2]; S.bank[i] = out[i][3]; S.cum[i] = i * STEP; }
   for (let i = 0; i < n; i++) {
-    const a = (i - 1 + n) % n, b = (i + 1) % n;
+    const a = w(i - 1), b = w(i + 1);
     let dx = S.x[b] - S.x[a], dz = S.z[b] - S.z[a];
     const L = Math.hypot(dx, dz) || 1;
     dx /= L; dz /= L;
     S.tx[i] = dx; S.tz[i] = dz;
   }
   for (let i = 0; i < n; i++) {
-    const a = (i - 4 + n) % n, b = (i + 4) % n;
+    const a = w(i - 4), b = w(i + 4);
     const cross = S.tx[a] * S.tz[b] - S.tz[a] * S.tx[b];
     S.curv[i] = cross / (8 * STEP);
   }
   // smooth curvature for banking
   const c2 = new Float32Array(n);
-  for (let i = 0; i < n; i++) { let s = 0; for (let k = -10; k <= 10; k++) s += S.curv[(i + k + n) % n]; c2[i] = s / 21; }
+  for (let i = 0; i < n; i++) { let s = 0; for (let k = -10; k <= 10; k++) s += S.curv[w(i + k)]; c2[i] = s / 21; }
   S.curv = c2;
   return S;
 }
@@ -99,8 +120,9 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
   }
   const half = def.width / 2;
   const reach = Math.ceil((half + 1.5) / B);
-  // gap kickers: the 7m before every gap ramps up
-  const gapStarts = def.gaps.map(([a]) => a * S.total);
+  // gap kickers: the 7m before every gap ramps up (unless the course uses explicit ramps)
+  const gapStarts = def.autoKick === false ? [] : def.gaps.map(([a]) => a * S.total);
+  const ramps = (def.ramps ?? []).map((r) => ({ end: r.f * S.total, len: r.len, h: r.h }));
   for (let j = 0; j < nz; j++)
     for (let i = 0; i < nx; i++) {
       const x = minX + i * cell, z = minZ + j * cell;
@@ -121,12 +143,18 @@ export function fillTrackHeights(def: TrackDef, S: TrackSamples, minX: number, m
         // signed lateral offset (left of tangent positive)
         const side = (x - S.x[best]) * -S.tz[best] + (z - S.z[best]) * S.tx[best];
         const f = S.cum[best] / S.total;
-        const base = S.y[best] + Math.max(-1.2, Math.min(1.2, -S.curv[best] * side * 6)) * 0.5;
+        // curvature banking + any explicit tilt (positive raises the left edge)
+        const base = S.y[best] + Math.max(-1.2, Math.min(1.2, -S.curv[best] * side * 6)) * 0.5 + S.bank[best] * side;
         let kick = 0;
         for (const g of gapStarts) {
           let ds = g - S.cum[best];
-          if (ds < 0) ds += S.total;
-          if (ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
+          if (ds < 0 && !S.open) ds += S.total;
+          if (ds >= 0 && ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
+        }
+        // explicit jump ramps: a smooth rise to a sharp lip
+        for (const r of ramps) {
+          const ds = r.end - S.cum[best];
+          if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u * (3 - 2 * u) * (0.35 + 0.65 * u)); }
         }
         if (def.profile === 'pipe') {
           // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
@@ -161,7 +189,7 @@ export function trackBounds(S: TrackSamples) {
 export function nearestSample(S: TrackSamples, x: number, z: number, hint: number, back = 20, fwd = 50) {
   let best = hint, bd = 1e9;
   for (let k = -back; k <= fwd; k++) {
-    const i = (((hint + k) % S.n) + S.n) % S.n;
+    const i = S.open ? Math.max(0, Math.min(S.n - 1, hint + k)) : (((hint + k) % S.n) + S.n) % S.n;
     const d = (S.x[i] - x) ** 2 + (S.z[i] - z) ** 2;
     if (d < bd) { bd = d; best = i; }
   }

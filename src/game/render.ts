@@ -1126,7 +1126,7 @@ export class GameView {
       return;
     }
     let pts = s.tops.filter((t) => t.alive || (s.phase !== 'battle' && t.out !== 'over' && t.out !== 'xtreme'));
-    if (this.cfg.mode === 'quest') {
+    if (this.cfg.mode === 'quest' && !this.terrain.track) {
       const mine = this.focus.map((i) => s.tops[i]).filter((t) => t && (t.alive || t.respawnT > 0));
       const humans = s.tops.filter((t) => !t.drone && t.alive);
       pts = mine.length ? mine : humans.length ? humans : pts;
@@ -1140,7 +1140,7 @@ export class GameView {
       pts = [...pts, ...ahead];
     }
     if (this.terrain.track) {
-      const f = this.focus.length ? this.focus.map((i) => s.tops[i]).filter(Boolean) : [...s.tops].sort((a, b) => a.place - b.place).slice(0, 1);
+      const f = this.focus.length ? this.focus.map((i) => s.tops[i]).filter(Boolean) : [...s.tops].filter((t) => !t.drone).sort((a, b) => a.place - b.place).slice(0, 1);
       pts = f.length ? f : pts;
     }
     const S = this.terrain.size;
