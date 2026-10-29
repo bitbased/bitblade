@@ -11,6 +11,8 @@ export interface AIState {
   target: number; // enemy id or -1
   aimErr: number;
   wander: number;
+  /** stuck watch: where we were a moment ago, and a short break-out manoeuvre (side alternates per try) */
+  sx?: number; sz?: number; st?: number; unstuck?: number; unSide?: number;
 }
 
 export function newAI(level: number, rnd: () => number): AIState {
@@ -35,6 +37,17 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   if (enemy && enemy.alive) {
     const lead = 0.25 * ai.level;
     gx = enemy.x + enemy.vx * lead; gz = enemy.z + enemy.vz * lead;
+  }
+  // courses with levels: take the route (ramps, round walls) when the goal isn't straight ahead on our level
+  let climbing = false;
+  if (sim.terrain.def.course) {
+    const T = sim.terrain.def.course.tile;
+    const route = questRoute(sim, t.x, t.z, gx, gz);
+    if (route && route.length > 1) {
+      const wp = Math.hypot(route[0].x - t.x, route[0].z - t.z) < T * 0.45 ? route[1] : route[0];
+      climbing = sim.terrain.height(wp.x, wp.z) > sim.terrain.height(t.x, t.z) + 0.6;
+      gx = wp.x; gz = wp.z;
+    }
   }
   let dx = gx - t.x, dz = gz - t.z;
   const d = Math.hypot(dx, dz) || 1;
@@ -77,9 +90,11 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   }
   const ml = Math.hypot(mx, mz);
   if (ml > 1) { mx /= ml; mz /= ml; }
-  // stamina-type tops orbit lazily
-  const intensity = [0, 0.6, 0.85, 1][ai.level];
+  // stamina-type tops orbit lazily (but always take a ramp at full power)
+  const intensity = climbing ? 1 : [0, 0.6, 0.85, 1][ai.level];
   c.mx = mx * intensity; c.mz = mz * intensity;
+  if (climbing && t.grounded && t.dashCd <= 0 && Math.hypot(t.vx, t.vz) < 9 && (t.vx * dx + t.vz * dz) > 0) c.dash = true;
+  unstick(t, ai, dt, c, d);
 
   // attacks
   if (enemy && enemy.alive) {
@@ -101,6 +116,28 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     }
   }
   return c;
+}
+
+/**
+ * Stuck watch (every mode): wanted to go somewhere but barely moved for 1.5s → a short break-out: steer 70° off
+ * to one side (a diagonal, so walls and ramp lips are taken at an angle), dash and hop. The side alternates.
+ */
+function unstick(t: TopState, ai: AIState, dt: number, c: Control, goalD: number) {
+  if (!t.alive) { ai.st = undefined; return; }
+  if ((ai.unstuck ?? 0) > 0) {
+    ai.unstuck! -= dt;
+    const a = (ai.unSide ?? 1) * 1.2, mx = c.mx, mz = c.mz, ml = Math.hypot(mx, mz) || 1;
+    c.mx = ((mx * Math.cos(a) - mz * Math.sin(a)) / ml); c.mz = ((mx * Math.sin(a) + mz * Math.cos(a)) / ml);
+    if (t.dashCd <= 0) c.dash = true;
+    if (t.grounded && ai.unstuck! < 0.5) c.jump = true;
+    return;
+  }
+  if (ai.st === undefined || ai.sx === undefined) { ai.sx = t.x; ai.sz = t.z; ai.st = 0; return; }
+  ai.st += dt;
+  if (Math.hypot(t.x - ai.sx, t.z - ai.sz!) > 1.5) { ai.sx = t.x; ai.sz = t.z; ai.st = 0; return; }
+  if (ai.st > 1.5 && goalD > 3 && Math.hypot(c.mx, c.mz) > 0.3) {
+    ai.unstuck = 0.9; ai.unSide = -(ai.unSide ?? -1); ai.st = 0;
+  }
 }
 
 function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
@@ -240,6 +277,16 @@ function questNav(sim: { terrain: Sim['terrain'] }): QuestNav | null {
           const ha = ter.height(ex - di * 0.25, ez - dj * 0.25), hb = ter.height(ex + di * 0.25, ez + dj * 0.25);
           if (ha > VOID && hb > VOID && hb - ha < 0.55) { ok = true; break; } // level, gently up, or any drop down
         }
+        // ...and nowhere between the two tile centres is a climb steeper than a ramp (no routes up and over a
+        // quarter-pipe wall: its lip is fine to drop off, not to ride over)
+        if (ok) {
+          let prevH = ter.height(ox + (i + 0.5) * T, oz + (j + 0.5) * T);
+          for (let k = 1; k <= 12 && ok; k++) {
+            const f = k / 12, hh = ter.height(ox + (i + 0.5 + di * f) * T, oz + (j + 0.5 + dj * f) * T);
+            if (hh > VOID && prevH > VOID && hh - prevH > 0.45) ok = false;
+            if (hh > VOID) prevH = hh;
+          }
+        }
         if (ok) next[a].push(b);
       } else if (kick.has(a)) {
         const fi = i + di * 2, fj = j + dj * 2, f = fj * w + fi;
@@ -344,6 +391,7 @@ function questControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control
   const drone = sim.s.tops.find((o) => o.drone && o.alive && Math.hypot(o.x - t.x, o.z - t.z) < 3);
   if (drone && t.dashCd <= 0 && Math.random() < dt * 3) { const ex = drone.x - t.x, ez = drone.z - t.z, el = Math.hypot(ex, ez) || 1; c.mx = ex / el; c.mz = ez / el; c.dash = true; }
   if (t.item && t.roll <= 0 && (t.item !== 'surge' || t.spin < 0.6) && Math.random() < dt) c.item = true;
+  if (!sim.terrain.track) unstick(t, ai, dt, c, Math.hypot(ai.tx - t.x, ai.tz - t.z));
   return c;
 }
 
