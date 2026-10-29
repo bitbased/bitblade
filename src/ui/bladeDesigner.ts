@@ -118,6 +118,17 @@ class BladeDesigner implements Screen {
   }
 
   randomize(part: RandomPart) {
+    if (this.isPreset) {
+      // rolling from a preset: reuse a single draft blade instead of piling up copies
+      let draft = this.custom.find((c) => c.id === 'random-draft');
+      if (!draft) {
+        draft = { ...clone(this.cur), id: 'random-draft', name: 'Random Draft' };
+        this.custom.push(draft);
+      } else Object.assign(draft, clone(this.cur), { id: 'random-draft', name: 'Random Draft' });
+      this.select(draft);
+      this.renderLib();
+      this.app.toast('Rolling on your draft blade — hit Duplicate to keep one you like');
+    }
     this.randHistory.push(clone(this.cur));
     if (this.randHistory.length > 30) this.randHistory.shift();
     const next = randomizeDesign(this.cur, part, this.randStyle, this.randPalette, part !== 'all');
@@ -327,7 +338,7 @@ class BladeDesigner implements Screen {
         h('button.bd-mini.nav', { onclick: () => { const d = defaultDesign(); this.addCustom(d); } }, '+ New'),
         h('button.bd-mini.nav', { onclick: () => { const d = clone(this.cur); d.id = newBladeId(); d.name = `${this.cur.name} II`; this.addCustom(d); } }, 'Duplicate'),
         h('button.bd-mini.nav', { onclick: () => this.deleteCur() }, 'Delete'),
-        h('button.bd-mini.nav', { onclick: () => { const d = randomDesign(); this.addCustom(d); app.sfx.play('select'); } }, icon('dice'), ' Random'),
+        h('button.bd-mini.nav', { onclick: () => this.randomize('all'), title: 'Randomize the current blade (R)' }, icon('dice'), ' Random'),
       ),
     );
     // center
