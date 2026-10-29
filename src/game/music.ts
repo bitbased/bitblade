@@ -135,6 +135,34 @@ export const PRESET_SONGS: Song[] = [
       { lead: '7-8-9---8-7-6-4-', bass: '0000300004000300', kick: 'x...x.x.x...x.x.', snare: '....X.......X..x', hat: 'x.x.x.x.x.x.x.x.' },
     ],
     [[0, 0], [0, 0], [1, 3], [1, 4]]),
+  // a heavy, crunchy take on Boss Rush (found while testing random voices), arranged out: intro groove →
+  // main riff → climb → half-time breakdown with a snare roll → final run (20 bars)
+  S('Crunch Rush', 'crunch-rush', { bpm: 150, root: 50, scale: 'harmonic', crunch: 0.7 },
+    {
+      lead: { wave: 'pulse12', oct: 1, vol: 0.55, decay: 0.45, cutoff: 0.82, echo: 0.13, vib: 0.32, chord: true },
+      arp: { wave: 'pulse12', oct: 2, vol: 0.24, decay: 0.12, cutoff: 0.8, echo: 0.3, vib: 0, chord: false },
+      bass: { wave: 'pulse25', oct: -1, vol: 0.5, decay: 0.3, cutoff: 0.63, echo: 0 },
+      pad: { wave: 'sine', oct: 0, vol: 0.3, decay: 1.52, cutoff: 0.61, echo: 0.42, vib: 0.17, chord: true },
+      hat: { decay: 0.07, cutoff: 0.53, echo: 0.19 },
+      perc: { wave: 'pulse25', oct: 2, vol: 0.24, decay: 0.07, echo: 0.35 },
+    },
+    [
+      // A: intro groove (no lead) — arp hook over the driving bass
+      { arp: '0.2.4.2.0.2.4.6.', bass: '0000300004000300', pad: '0---------------', kick: 'x...x.x.x...x.x.', snare: '....X.......X...', hat: 'x.x.x.x.x.x.x.x.', perc: '..........9...b.' },
+      // B: the main riff
+      { lead: '7---6-5-4---2-4-', arp: '..........0.4...', bass: '0000300004000300', pad: '0-------4-------', kick: 'x...x.x.x...x.x.', snare: '....X.......X..x', hat: 'x.xxx.x.x.xxx.x.', perc: '.............9.b' },
+      // C: the climb — four on the floor, 16th hats, snare pickups
+      { lead: '7-8-9---8-7-6-4-', arp: '0.4.0.4.0.4.0.4.', bass: '0000300004000300', pad: '0---------------', kick: 'x.x.x.x.x.x.x.x.', snare: '....X.......X.XX', hat: 'xxxxxxxxxxxxxxxx' },
+      // D: half-time breakdown, long notes, falling blips, builds to a snare roll
+      { lead: '9-----7-----6---', arp: '0.2.4.6.4.2.0.2.', bass: '0-------3-------', pad: '0---------------', kick: 'x.........x.....', snare: '........X...xXXX', hat: '..x...x...x...x.', perc: 'b.9.7.....b.9.7.' },
+    ],
+    [
+      [0, 0], [0, 0], [0, 5], [0, 4], // intro: i  i  VI V
+      [1, 0], [1, 0], [1, 5], [1, 4], // riff
+      [2, 3], [2, 4], [2, 0], [2, 5], // climb: iv V i VI
+      [3, 0], [3, 5], [3, 3], [3, 4], // breakdown → roll
+      [1, 0], [2, 4], [1, 5], [2, 4], // final run
+    ]),
   S('Chill Lobby', 'chill-lobby', { bpm: 92, root: 50, scale: 'dorian', swing: 0.18 },
     { lead: { wave: 'triangle', echo: 0.5, vol: 0.5 }, bass: { oct: -1 }, kick: { vol: 0.55 }, snare: { vol: 0.3 }, hat: { vol: 0.18 }, arp: { mute: true } },
     [
@@ -207,7 +235,7 @@ export const musicPrefs = { menu: 'neon-drive', game: 'track' };
 try { Object.assign(musicPrefs, JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')); } catch { /* ignore */ }
 export function saveMusicPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(musicPrefs)); } catch { /* ignore */ } }
 
-const GAME_DEFAULTS = ['neon-drive', 'sky-ride', 'boss-rush', 'victory-lap', 'dungeon-crawl', 'glacier-dream', 'gravel-blues'];
+const GAME_DEFAULTS = ['neon-drive', 'sky-ride', 'boss-rush', 'crunch-rush', 'victory-lap', 'dungeon-crawl', 'glacier-dream', 'gravel-blues'];
 /** a stable preset for an arena with no song of its own */
 export function defaultSongFor(arenaId: string) {
   let h = 0;
