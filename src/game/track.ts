@@ -63,8 +63,11 @@ export function sampleTrack(def: TrackDef): TrackSamples {
   for (let i = 0; i < segs; i++) {
     const a = P[idx(i - 1)], b = P[i], c = P[idx(i + 1)], d = P[idx(i + 2)];
     const ba = B[i] ?? 0, bc = B[idx(i + 1)] ?? 0, wa = wAt(i), wc = wAt(idx(i + 1));
-    for (let k = 0; k < 40; k++) {
-      const t = k / 40;
+    // pieces by length, not a fixed 40 per span: on a long span 40 straight pieces left a kink every couple of
+    // metres (a washboard on long slopes). ~0.25m pieces follow the true curve.
+    const K = Math.max(40, Math.ceil(Math.hypot(c[0] - b[0], c[1] - b[1], c[2] - b[2]) / 0.25));
+    for (let k = 0; k < K; k++) {
+      const t = k / K;
       const sm = t * t * (3 - 2 * t);
       dense.push([cr(a[0], b[0], c[0], d[0], t), cr(a[1], b[1], c[1], d[1], t), cr(a[2], b[2], c[2], d[2], t), ba + (bc - ba) * sm, wa + (wc - wa) * sm]);
     }
@@ -126,31 +129,65 @@ export function surfaceCtx(def: TrackDef, S: TrackSamples): SurfaceCtx {
   };
 }
 
-/** height of the road surface at (x, z), measured against centre-line sample `best` (VOID if off this road) */
+/**
+ * Height of the road surface at (x, z) near centre-line sample `best` (VOID if off this road).
+ * Continuous along the road: the centre line, height, tilt and width are interpolated between `best` and its
+ * neighbour by how far along (x, z) is, so the surface is the smooth road you see. (Taking them straight from
+ * the nearest sample made a 0.5m staircase on every slope: bumpy, bouncy downhills.)
+ */
 export function trackSurface(def: TrackDef, S: TrackSamples, best: number, x: number, z: number, ctx: SurfaceCtx) {
-  const d = Math.hypot(S.x[best] - x, S.z[best] - z);
-  const half = S.w[best] / 2 + 1e-3; // this stretch's width (narrowing sections); the epsilon keeps the exact edge on the road (no sawtooth rim)
+  // where along the road is (x, z)? Solve for the spot on the segment between `best` and its neighbour where the
+  // line to (x, z) is square to the (interpolated) road direction — the same answer whichever sample we start from,
+  // so on curves the surface has no seams between samples, even far from the centre line.
+  const along0 = (x - S.x[best]) * S.tx[best] + (z - S.z[best]) * S.tz[best];
+  const nb = (i: number) => (S.open ? Math.max(0, Math.min(S.n - 1, i)) : (i + S.n) % S.n);
+  let a = along0 >= 0 ? best : nb(best - 1), b = nb(a + 1);
+  let w = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const dx = S.x[b] - S.x[a], dz = S.z[b] - S.z[a], ex = S.tx[b] - S.tx[a], ez = S.tz[b] - S.tz[a];
+    const px = x - S.x[a], pz = z - S.z[a];
+    w = Math.max(-0.5, Math.min(1.5, (px * S.tx[a] + pz * S.tz[a]) / STEP));
+    for (let it = 0; it < 4; it++) {
+      const rx = px - w * dx, rz = pz - w * dz, tx = S.tx[a] + w * ex, tz = S.tz[a] + w * ez;
+      const fv = rx * tx + rz * tz, fd = -(dx * tx + dz * tz) + (rx * ex + rz * ez);
+      if (Math.abs(fd) < 1e-9) break;
+      w -= fv / fd;
+    }
+    // landed past either end: it belongs to the neighbouring segment (open tracks: clamp at the ends)
+    if (w < 0 && (S.open ? a > 0 : true) && pass === 0) { b = a; a = nb(a - 1); continue; }
+    if (w > 1 && (S.open ? b < S.n - 1 : true) && pass === 0) { a = b; b = nb(b + 1); continue; }
+    break;
+  }
+  w = Math.max(0, Math.min(1, w));
+  const L = (arr: Float32Array) => arr[a] + (arr[b] - arr[a]) * w;
+  const cx = L(S.x), cz = L(S.z);
+  let ttx = L(S.tx), ttz = L(S.tz);
+  const tl = Math.hypot(ttx, ttz) || 1; ttx /= tl; ttz /= tl;
+  const d = Math.hypot(cx - x, cz - z);
+  const half = L(S.w) / 2 + 1e-3; // this stretch's width (narrowing sections); the epsilon keeps the exact edge on the road (no sawtooth rim)
   // signed lateral offset (left of tangent positive)
-  const side = (x - S.x[best]) * -S.tz[best] + (z - S.z[best]) * S.tx[best];
-  const f = S.cum[best] / S.total;
+  const side = (x - cx) * -ttz + (z - cz) * ttx;
+  const cum = S.cum[a] + w * STEP; // (a loop's last→first segment wraps; f below is only used for range tests)
+  const f = cum / S.total;
+  const curv = L(S.curv), y0c = L(S.y);
   // curvature banking + any explicit tilt (positive raises the left edge)
-  const base = S.y[best] + Math.max(-1.2, Math.min(1.2, -S.curv[best] * side * 6)) * 0.5 + S.bank[best] * side;
+  const base = y0c + Math.max(-1.2, Math.min(1.2, -curv * side * 6)) * 0.5 + L(S.bank) * side;
   let kick = 0;
   for (const g of ctx.gapStarts) {
-    let ds = g - S.cum[best];
+    let ds = g - cum;
     if (ds < 0 && !S.open) ds += S.total;
     if (ds >= 0 && ds < 7) kick = Math.max(kick, 1.5 * Math.pow(1 - ds / 7, 1.6));
   }
   // explicit jump ramps: steepest at the lip
   for (const r of ctx.ramps) {
-    const ds = r.end - S.cum[best];
+    const ds = r.end - cum;
     if (ds >= 0 && ds < r.len) { const u = 1 - ds / r.len; kick = Math.max(kick, r.h * u * u); }
   }
   if (def.profile === 'pipe' || (def.pipes && inRanges(f, def.pipes))) {
     // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
     const D = def.depth ?? 3;
-    const bank = Math.max(-0.6, Math.min(0.6, -S.curv[best] * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
-    const y0 = S.y[best] + kick;
+    const bank = Math.max(-0.6, Math.min(0.6, -curv * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
+    const y0 = y0c + kick;
     if (d <= half) { const u = d / half; return inRanges(f, def.gaps) ? VOID : y0 + D * (1 - Math.sqrt(Math.max(0, 1 - u * u * 0.96))) + bank * side; }
     if (d <= half + 0.7 && !inRanges(f, def.gaps)) return y0 + D * 0.8 + bank * side; // the rim: go over it and you're out
     return VOID;

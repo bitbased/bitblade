@@ -531,19 +531,10 @@ class CourseEditor {
       R.append(h('div.cd-muted', null, 'Click a tile to copy its piece (switches to Paint), or a marker to copy its type (switches to Place).'));
     }
 
-    // grid
+    // grid: sizes itself (paint past an edge to grow it; empty edge rows/columns go away when you erase)
     if (this.tool === 'paint' || this.tool === 'erase' || this.tool === 'level') {
       const c = this.def?.course;
-      R.append(h('div.cd-sub', null, 'GRID ' + (c ? `${c.w}×${c.h}` : '')),
-        h('div.cd-grid-btns', null,
-          h('button.cd-chip', { title: 'Add column left', onclick: () => this.resizeGrid(1, 0, 0, 0) }, '+◀'),
-          h('button.cd-chip', { title: 'Add column right', onclick: () => this.resizeGrid(0, 1, 0, 0) }, '▶+'),
-          h('button.cd-chip', { title: 'Add row at back', onclick: () => this.resizeGrid(0, 0, 1, 0) }, '+▲'),
-          h('button.cd-chip', { title: 'Add row at front', onclick: () => this.resizeGrid(0, 0, 0, 1) }, '▼+'),
-          h('button.cd-chip', { title: 'Remove column left', onclick: () => this.resizeGrid(-1, 0, 0, 0) }, '−◀'),
-          h('button.cd-chip', { title: 'Remove column right', onclick: () => this.resizeGrid(0, -1, 0, 0) }, '▶−'),
-          h('button.cd-chip', { title: 'Remove row at back', onclick: () => this.resizeGrid(0, 0, -1, 0) }, '−▲'),
-          h('button.cd-chip', { title: 'Remove row at front', onclick: () => this.resizeGrid(0, 0, 0, -1) }, '▼−')));
+      R.append(h('div.cd-sub', null, 'GRID ' + (c ? `${c.w}×${c.h}` : '')), h('div.cd-muted', null, 'Sizes itself: paint past an edge to grow the course; erasing an edge row or column shrinks it.'));
     }
     this.mini = h<HTMLCanvasElement>('canvas.cd-mini', {
       width: 240, height: 150,
@@ -792,18 +783,25 @@ class CourseEditor {
 
   // ============================================================ tile edits
   inGrid(i: number, j: number) { const c = this.def.course!; return i >= 0 && j >= 0 && i < c.w && j < c.h; }
+  /** painting can reach this far past the edge (the grid grows to fit) */
+  static GROW = 3;
+  reachable(i: number, j: number) {
+    if (this.tool !== 'paint') return this.inGrid(i, j);
+    const c = this.def.course!, g = CourseEditor.GROW;
+    return i >= -g && j >= -g && i < c.w + g && j < c.h + g && c.w + Math.max(0, -i, i - c.w + 1) * (this.symX ? 2 : 1) <= MAX_GRID && c.h + Math.max(0, -j, j - c.h + 1) * (this.symZ ? 2 : 1) <= MAX_GRID;
+  }
 
   /** brush cells around (i,j) */
   brushCells(i: number, j: number) {
     const out: { i: number; j: number }[] = [];
     const o = Math.floor((this.brush - 1) / 2);
     for (let dj = 0; dj < this.brush; dj++) for (let di = 0; di < this.brush; di++) out.push({ i: i - o + di, j: j - o + dj });
-    return out.filter((c) => this.inGrid(c.i, c.j));
+    return out.filter((c) => this.reachable(c.i, c.j));
   }
 
   rectCells(a: { i: number; j: number }, b: { i: number; j: number }) {
     const out: { i: number; j: number }[] = [];
-    for (let j = Math.min(a.j, b.j); j <= Math.max(a.j, b.j); j++) for (let i = Math.min(a.i, b.i); i <= Math.max(a.i, b.i); i++) if (this.inGrid(i, j)) out.push({ i, j });
+    for (let j = Math.min(a.j, b.j); j <= Math.max(a.j, b.j); j++) for (let i = Math.min(a.i, b.i); i <= Math.max(a.i, b.i); i++) if (this.reachable(i, j)) out.push({ i, j });
     return out;
   }
 
@@ -903,6 +901,8 @@ class CourseEditor {
   }
 
   applyCells(cells: { i: number; j: number }[], op: 'paint' | 'erase' | 'raise' | 'lower') {
+    if (op === 'paint') cells = this.growFor(cells);
+    else cells = cells.filter((k) => this.inGrid(k.i, k.j));
     const c = this.def.course!;
     const all = this.withMirrors(cells);
     let changed = false;
@@ -931,12 +931,43 @@ class CourseEditor {
         if (o && (o.kind !== p.kind || o.rot !== p.rot)) { p.kind = o.kind; p.rot = o.rot; changed = true; }
       }
     }
+    if (changed && op === 'erase') this.trimEmptyEdges();
     if (changed) {
       this.rebuildT = 0.1;
       this.scheduleSave();
       this.drawMini();
     }
     return changed;
+  }
+
+  /** painting past the edge: grow the grid just enough (both sides while mirroring), return the cells re-indexed */
+  growFor(cells: { i: number; j: number }[]) {
+    const c = this.def.course!;
+    let l = 0, r = 0, t = 0, b = 0;
+    for (const { i, j } of cells) { l = Math.max(l, -i); r = Math.max(r, i - (c.w - 1)); t = Math.max(t, -j); b = Math.max(b, j - (c.h - 1)); }
+    if (this.symX) l = r = Math.max(l, r);
+    if (this.symZ) t = b = Math.max(t, b);
+    if (!(l || r || t || b)) return cells;
+    if (!this.resizeGrid(l, r, t, b, false)) return cells.filter((k) => this.inGrid(k.i, k.j));
+    return cells.map((k) => ({ i: k.i + l, j: k.j + t }));
+  }
+
+  /** after erasing: drop empty rows / columns at the edges (not under a marker), so the course stays snug */
+  trimEmptyEdges() {
+    const c = this.def.course!, T = c.tile;
+    const used = (i: number, j: number) => !!pieceAt(c, i, j);
+    const markerCol = (i: number) => this.def.markers.some((m) => Math.floor((m.x + (c.w * T) / 2) / T) === i);
+    const markerRow = (j: number) => this.def.markers.some((m) => Math.floor((m.z + (c.h * T) / 2) / T) === j);
+    const colEmpty = (i: number) => { for (let j = 0; j < c.h; j++) if (used(i, j)) return false; return !markerCol(i); };
+    const rowEmpty = (j: number) => { for (let i = 0; i < c.w; i++) if (used(i, j)) return false; return !markerRow(j); };
+    let l = 0, r = 0, t = 0, b = 0;
+    while (c.w - l - r > 1 && colEmpty(l)) l++;
+    while (c.w - l - r > 1 && colEmpty(c.w - 1 - r)) r++;
+    while (c.h - t - b > 1 && rowEmpty(t)) t++;
+    while (c.h - t - b > 1 && rowEmpty(c.h - 1 - b)) b++;
+    if (this.symX) l = r = Math.min(l, r);
+    if (this.symZ) t = b = Math.min(t, b);
+    if (l || r || t || b) this.resizeGrid(-l, -r, -t, -b, false);
   }
 
   wrapWithWalls() {
@@ -970,11 +1001,13 @@ class CourseEditor {
     this.app.toast('Mirrored left half onto the right');
   }
 
-  resizeGrid(l: number, r: number, t: number, b: number) {
+  resizeGrid(l: number, r: number, t: number, b: number, undo = true) {
     const c0 = this.def.course!;
     const nw = c0.w + l + r, nh = c0.h + t + b;
-    if (nw < 1 || nh < 1 || nw > MAX_GRID || nh > MAX_GRID) return this.app.toast(`Grid must be 1–${MAX_GRID} tiles per side`);
-    this.snapshot();
+    if (nw < 1 || nh < 1 || nw > MAX_GRID || nh > MAX_GRID) { this.app.toast(`Courses can be up to ${MAX_GRID} tiles per side`); return false; }
+    if (undo) this.snapshot();
+    // the course is centred on the origin: growing one side shifts everything by half a tile — move the view with it
+    this.target.x += ((l - r) * c0.tile) / 2; this.target.z += ((t - b) * c0.tile) / 2;
     const c = this.def.course!;
     c.pieces = c.pieces.map((p) => ({ ...p, x: p.x + l, y: p.y + t })).filter((p) => p.x >= 0 && p.y >= 0 && p.x < nw && p.y < nh);
     for (const m of this.def.markers) { m.x += ((l - r) * c.tile) / 2; m.z += ((t - b) * c.tile) / 2; }
@@ -983,6 +1016,7 @@ class CourseEditor {
     this.renderRight();
     this.renderTop();
     this.scheduleSave();
+    return true;
   }
 
   // ============================================================ markers
@@ -1393,7 +1427,7 @@ class CourseEditor {
   cellOf(x: number, z: number) {
     const c = this.def.course!;
     const i = Math.floor((x + (c.w * c.tile) / 2) / c.tile), j = Math.floor((z + (c.h * c.tile) / 2) / c.tile);
-    if (i < 0 || j < 0 || i >= c.w || j >= c.h) return null;
+    if (!this.reachable(i, j)) return null;
     return { i, j };
   }
 
