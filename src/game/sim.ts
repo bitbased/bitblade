@@ -147,6 +147,8 @@ export class Sim {
   endT = -1;
   /** per-blade speed multiplier from race catch-up (rubber banding) */
   rubber: number[] = [];
+  /** race slipstream: true while tucked in behind another racer */
+  draft: boolean[] = [];
   finishers = 0;
 
   /** Merge input; edge flags persist until consumed by a substep. */
@@ -308,7 +310,8 @@ export class Sim {
         let dx = ix, dz = iz;
         if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
         const dl = Math.hypot(dx, dz) || 1;
-        t.vx += (dx / dl) * 9; t.vz += (dz / dl) * 9;
+        const dashV = this.cfg.mode === 'race' ? 11 : 9;
+        t.vx += (dx / dl) * dashV; t.vz += (dz / dl) * dashV;
         t.spin -= this.cfg.mode === 'race' ? 0.01 : 0.025;
         t.dashCd = 1.1;
         t.fx.dash = 0.35;
@@ -349,7 +352,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      let acc = 17 * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      let acc = 17 * (this.cfg.mode === 'race' ? 1.2 * (this.draft[i] ? 1.12 : 1) : 1) * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
       // counter-steering bites harder so low-grip tips can still turn and stop
       const vl = Math.hypot(t.vx, t.vz);
       if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
@@ -402,7 +405,8 @@ export class Sim {
       t.vx *= f; t.vz *= f;
     }
     const hs = Math.hypot(t.vx, t.vz);
-    const cap = 12.5 * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const race = this.cfg.mode === 'race';
+    const cap = (race ? 16 : 12.5) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
@@ -541,8 +545,10 @@ export class Sim {
           } else {
             const a = m.rot ?? 0, fx = Math.sin(a), fz = Math.cos(a);
             const along = dx * fx + dz * fz, side = dx * fz - dz * fx;
-            if (Math.abs(along) < 1.4 && Math.abs(side) < 0.9) {
-              top.vx += fx * 34 * dt; top.vz += fz * 34 * dt;
+            const race = this.cfg.mode === 'race';
+            if (Math.abs(along) < (race ? 1.8 : 1.4) && Math.abs(side) < (m.r ?? 0.9)) {
+              top.vx += fx * (race ? 62 : 34) * dt; top.vz += fz * (race ? 62 : 34) * dt;
+              if (race) top.fx.turbo = Math.max(top.fx.turbo, 1.0);
               const key = `b${mi}:${top.id}`;
               if (!this.hazardHitCd.has(key)) { this.hazardHitCd.set(key, 1); this.ev({ k: 'pickup', id: top.id, what: 'boost', x: top.x, y: top.y, z: top.z }); }
             }
@@ -1004,6 +1010,19 @@ export class Sim {
       } else if (prev < S.n * 0.15 && t.prog > S.n * 0.85) {
         // crossed the line backwards
         t.cp = -1;
+      }
+    }
+    // slipstream: within 8m directly behind another racer at speed
+    for (const t of s.tops) {
+      this.draft[t.id] = false;
+      const sp = Math.hypot(t.vx, t.vz);
+      if (!t.alive || !t.grounded || sp < 7) continue;
+      const fx = t.vx / sp, fz = t.vz / sp;
+      for (const o of s.tops) {
+        if (o === t || !o.alive) continue;
+        const rx = o.x - t.x, rz = o.z - t.z;
+        const ahead = rx * fx + rz * fz, side = Math.abs(rx * fz - rz * fx);
+        if (ahead > 1 && ahead < 8 && side < 1.4) { this.draft[t.id] = true; break; }
       }
     }
     // catch-up: CPUs behind the best human speed up, CPUs far ahead ease off (Mario Kart style)

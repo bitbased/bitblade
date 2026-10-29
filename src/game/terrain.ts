@@ -398,7 +398,8 @@ function trackArena(id: string, name: string, desc: string, theme: Theme, track:
   const S = sampleTrack(track);
   const markers: Marker[] = [];
   const at = (f: number) => Math.floor((((f % 1) + 1) % 1) * S.n);
-  for (const f of track.boosts) { const i = at(f); markers.push({ kind: 'boost', x: S.x[i], z: S.z[i], rot: Math.atan2(S.tx[i], S.tz[i]) }); }
+  // boost strips span most of the road so they're easy to hit
+  for (const f of track.boosts) { const i = at(f); markers.push({ kind: 'boost', x: S.x[i], z: S.z[i], rot: Math.atan2(S.tx[i], S.tz[i]), r: track.width * 0.36 }); }
   for (const f of track.items) {
     const i = at(f);
     for (const o of [-0.3, 0, 0.3]) markers.push({ kind: 'item', x: S.x[i] - S.tz[i] * o * track.width, z: S.z[i] + S.tx[i] * o * track.width });

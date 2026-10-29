@@ -200,7 +200,7 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
     if (gapK < 0 && k < 40 && sim.terrain.height(T.x[q], T.z[q]) <= VOID) gapK = k;
   }
   const grip = 8.5 + sim.st[t.id].tipFriction * 2.5;
-  let want = Math.min(14, Math.sqrt(grip / Math.max(0.004, worst))) * pace;
+  let want = Math.min(17, Math.sqrt(grip / Math.max(0.004, worst))) * pace;
   if (gapK >= 0) want = 99; // carry speed into jumps
   // racing line: drift to the inside of the coming bend, back to center on straights
   const lane = worst > 0.01 && worstK < window * 0.8 ? Math.sign(worstSigned) * Math.min(0.32, worst * 9) * T.width : 0;
@@ -230,7 +230,7 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   const dl = Math.hypot(dx, dz) || 1;
   dx /= dl; dz /= dl;
   // desired velocity along the line; steer by velocity error (handles drift and slides naturally)
-  const target = Math.min(want, 14) * (sim.rubber[t.id] ?? 1);
+  const target = Math.min(want, 17) * (sim.rubber[t.id] ?? 1);
   let ex = dx * target - t.vx, ez = dz * target - t.vz;
   // stay on the ribbon: pull hard back toward center when drifting wide
   const q0 = t.prog;
@@ -244,7 +244,7 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   // dash: on straights when slower than we could be, and right before jumps
   const straight = worst < 0.012;
   if (t.dashCd <= 0 && t.grounded) {
-    if (gapK >= 0 && gapK < 14 && speed < 12.5) c.dash = true;
+    if (gapK >= 0 && gapK < 14 && speed < 15) c.dash = true;
     else if (straight && speed < target - 1 && t.spin > 0.5 && Math.random() < dt * [0, 0.6, 1.5, 3][lv]) c.dash = true;
   }
   // items

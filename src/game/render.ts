@@ -587,7 +587,7 @@ export class GameView {
           break;
         }
         case 'boost': {
-          const pad = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.8), new THREE.MeshBasicMaterial({ map: chevronTexture('#ffe23a'), blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false }));
+          const pad = new THREE.Mesh(new THREE.PlaneGeometry((m.r ?? 0.9) * 2, this.terrain.track ? 3.6 : 2.8), new THREE.MeshBasicMaterial({ map: chevronTexture('#ffe23a'), blending: THREE.AdditiveBlending, transparent: true, toneMapped: false, depthWrite: false }));
           const r = m.rot ?? 0;
           pad.rotation.order = 'YXZ';
           pad.rotation.y = planeYaw(Math.sin(r), Math.cos(r)); // sim pushes along (sin rot, cos rot)
@@ -869,6 +869,7 @@ export class GameView {
     v.trail.mesh.visible = t.alive || t.out === 'over' || t.out === 'xtreme';
     v.trail.update(tp, t.alive ? Math.min(0.55, speed * 0.035) * t.scale + (t.fx.dash > 0 ? 0.25 : 0) : 0.1, dt);
     // turbo flames, low-spin smoke
+    if (t.alive && t.grounded && speed > 12 && Math.random() < 0.5) this.particles.emit(t.x + (Math.random() - 0.5) * 0.8, t.y + 0.3 + Math.random() * 0.5, t.z + (Math.random() - 0.5) * 0.8, -t.vx * 0.6, 0, -t.vz * 0.6, new THREE.Color('#ffffff'), 0.06, 0.25, 0);
     if (t.alive && t.fx.turbo > 0) this.particles.emit(t.x, t.y + 0.3, t.z, -t.vx * 0.2 + (Math.random() - 0.5), 1, -t.vz * 0.2 + (Math.random() - 0.5), new THREE.Color(Math.random() < 0.5 ? '#ff7b1c' : '#ffd23a'), 0.3, 0.35, -0.2);
     if (t.alive && t.spin < 0.25 && Math.random() < 0.3) this.particles.emit(t.x, t.y + 0.4, t.z, 0, 0.8, 0, new THREE.Color('#555'), 0.25, 0.8, -0.1);
     if (t.alive && t.fx.vortex > 0) { const a = this.time * 8; this.particles.emit(t.x + Math.cos(a) * 2.5, t.y + 0.3, t.z + Math.sin(a) * 2.5, -Math.cos(a) * 5, 0.5, -Math.sin(a) * 5, new THREE.Color('#b46bff'), 0.2, 0.4, 0); }
@@ -998,9 +999,10 @@ export function chaseCamera(T: TrackSamples, pts: TopState[], prevYaw: number | 
   while (d < -Math.PI) d += Math.PI * 2;
   yaw += d * Math.min(1, dt * 3);
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
-  const back = Math.min(28, 8.5 + spread * 1.2);
-  const up = 4 + spread * 0.5;
-  return { yaw, fx, fz, tx: cx + fx * 11, ty: cy + 0.4, tz: cz + fz * 11, px: cx - fx * back, py: cy + up, pz: cz - fz * back };
+  // pull back and look further ahead the faster we go
+  const back = Math.min(30, 8.5 + spread * 1.2 + sp * 0.25);
+  const up = 4 + spread * 0.5 + sp * 0.08;
+  return { yaw, fx, fz, tx: cx + fx * (11 + sp * 0.4), ty: cy + 0.4, tz: cz + fz * 11, px: cx - fx * back, py: cy + up, pz: cz - fz * back };
 }
 
 function sync<T extends { id: number }>(map: Map<number, THREE.Mesh>, list: T[], make: () => THREE.Mesh, scene: THREE.Scene) {
