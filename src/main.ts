@@ -2,6 +2,7 @@ import './style.css';
 import { Input } from './input/input';
 import { Sfx } from './game/audio';
 import { getRenderer } from './game/render';
+import { perf } from './core/settings';
 import { h, type App, type Screen, type ScreenName } from './ui/app';
 import { TitleScreen, MainMenu, ModeSelect, Results, SettingsScreen } from './ui/menus';
 import { LobbyScreen } from './ui/lobby';
@@ -81,6 +82,7 @@ function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   app.input.poll();
+  if (currentName === 'match' || !NO_BACKDROP.has(currentName)) perf.sample(dt);
   if (!NO_BACKDROP.has(currentName)) updateBackdrop(dt);
   try { current?.update?.(dt); } catch (e) { console.error(e); }
   app.sfx.update(dt);

@@ -13,19 +13,19 @@ import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
 import { ITEMS } from './types';
-import { settings } from '../core/settings';
+import { settings, perf } from '../core/settings';
 
 // ---------------------------------------------------------------- shared renderer
 let shared: { renderer: THREE.WebGLRenderer; env: THREE.Texture } | null = null;
 export function getRenderer(canvas: HTMLCanvasElement) {
   if (shared) return shared;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(settings.pixelRatio);
+  renderer.setPixelRatio(perf.ratio());
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is much heavier (esp. on Macs)
   const pm = new THREE.PMREMGenerator(renderer);
   const env = pm.fromScene(new RoomEnvironment(), 0.04).texture;
   shared = { renderer, env };
@@ -159,9 +159,11 @@ export function buildArenaMesh(terrain: Terrain, theme: Theme): THREE.Group {
       }
     }
   const idx: number[] = [];
-  for (let j = 0; j < nz - 1; j++)
-    for (let i = 0; i < nx - 1; i++) {
-      const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
+  // big arenas render at half grid resolution (physics keeps full resolution)
+  const st = nx * nz > 70000 ? 2 : 1;
+  for (let j = 0; j + st < nz; j += st)
+    for (let i = 0; i + st < nx; i += st) {
+      const a = j * nx + i, b = a + st, c = a + nx * st, d = c + st;
       const va = terrain.h[a] <= VOID, vb = terrain.h[b] <= VOID, vc = terrain.h[c] <= VOID, vd = terrain.h[d] <= VOID;
       if (va && vb && vc && vd) continue;
       idx.push(a, c, b, b, c, d);
@@ -222,7 +224,7 @@ export function buildSky(theme: Theme) {
 
 // ---------------------------------------------------------------- particles
 class Particles {
-  N = 4000;
+  N = 3000;
   pos = new Float32Array(this.N * 3);
   vel = new Float32Array(this.N * 3);
   col = new Float32Array(this.N * 3);
@@ -405,7 +407,7 @@ export class GameView {
     const S = this.terrain.size;
     sun.position.set(S * 0.4, S * 1.5, S * 0.6);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(1536, 1536);
     Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: S * 4 });
     sun.shadow.bias = -0.0005;
     this.scene.add(sun);
@@ -943,7 +945,15 @@ export class GameView {
     this.camFwd.x = fx / fl; this.camFwd.z = fz / fl;
   }
 
+  perfVersion = -1;
   render() {
+    if (this.perfVersion !== perf.version) {
+      this.perfVersion = perf.version;
+      this.renderer.setPixelRatio(perf.ratio());
+      this.renderer.setSize(innerWidth, innerHeight);
+      this.composer.setPixelRatio(perf.ratio());
+      this.composer.setSize(innerWidth, innerHeight);
+    }
     if (settings.bloom) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }

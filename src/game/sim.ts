@@ -249,6 +249,17 @@ export class Sim {
     }
   }
 
+  /** Client-side prediction: advance only blade i (terrain, hazards, abilities), no other blades. */
+  predictStep(i: number, dt: number) {
+    const t = this.s.tops[i];
+    if (!t) return;
+    this.updateTop(t, i, dt);
+    this.hazards(dt);
+    const c = this.controls[i];
+    c.dash = c.jump = c.item = c.special = false;
+    this.s.events.length = 0;
+  }
+
   clearEdges() {
     for (const c of this.controls) c.dash = c.jump = c.item = c.special = false;
   }

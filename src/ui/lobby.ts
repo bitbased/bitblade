@@ -77,6 +77,7 @@ export class LobbyScreen implements Screen {
   peerSlot = new Map<number, number>();
   broadcastT = 0;
   dirty = true;
+  iconT = 0;
   unsub: (() => void) | null = null;
 
   get mode() { return MODES.find((m) => m.id === L.mode)!; }
@@ -496,7 +497,8 @@ export class LobbyScreen implements Screen {
     }
     this.nav.update(dt);
     this.angle += dt * 2.5;
-    for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle * (ic.d.spinDir));
+    this.iconT += dt;
+    if (this.iconT > 0.05) { this.iconT = 0; for (const ic of this.icons) drawBladeIcon(ic.cv, ic.d, this.angle * (ic.d.spinDir)); }
     if (hostRoom.t) {
       this.broadcastT -= dt;
       if (this.dirty && this.broadcastT <= 0) {

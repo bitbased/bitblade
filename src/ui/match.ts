@@ -8,6 +8,7 @@ import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from 
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
 import { clientRoom, hostRoom } from '../net/room';
+import { NetClient } from '../net/netclient';
 
 export interface MatchArg {
   cfg: MatchConfig;
@@ -35,6 +36,8 @@ export class MatchScreen implements Screen {
   pendingEvents: GameEvent[] = [];
   lastSnapAt = 0;
   sendAcc = 0;
+  net: NetClient | null = null;
+  acks: Record<number, number> = {};
   lastSent = new Map<number, { mx: number; mz: number }>();
   ended = false;
   wrongT = 0;
@@ -65,8 +68,8 @@ export class MatchScreen implements Screen {
     };
     if (this.arg.client) {
       // mirror mode: wait for first snapshot; build a throwaway sim just for an initial state
-      const tmp = new Sim(cfg);
-      this.state = tmp.s;
+      this.net = new NetClient(cfg, this.arg.client.mine);
+      this.state = this.net.latest;
       clientRoom.handler = (m) => this.onHostMsg(m);
       clientRoom.closeHandler = (r) => { if (!this.ended) { this.ended = true; app.toast(`Disconnected: ${r}`); app.go('menu'); } };
     } else {
@@ -78,6 +81,7 @@ export class MatchScreen implements Screen {
           const idx = m.p as number;
           if (peerSlot.get(peer) !== idx) return;
           this.sim!.setControl(idx, m.c);
+          if (typeof m.seq === 'number') this.acks[idx] = m.seq;
         };
         this.unsubRoom = hostRoom.subscribe(() => {
           // a player who left the room spins out
@@ -114,10 +118,9 @@ export class MatchScreen implements Screen {
   }
 
   onHostMsg(m: any) {
-    if (m?.t === 'snap') {
-      const ev = m.s.events as GameEvent[];
-      this.state = m.s;
-      this.state.events = [];
+    if (m?.t === 'snap' && this.net) {
+      const ev = this.net.onSnap(m.s, m.ack);
+      this.state = this.net.latest;
       this.lastSnapAt = performance.now();
       this.consumeEvents(ev);
     } else if (m?.t === 'end') {
@@ -155,26 +158,12 @@ export class MatchScreen implements Screen {
         c.mz = f.x * mx - f.z * mz;
       }
       if (this.sim) this.sim.setControl(i, c);
-      else {
-        const prev = this.pendingCtl.get(i);
-        this.pendingCtl.set(i, prev ? { ...c, dash: c.dash || prev.dash, jump: c.jump || prev.jump, item: c.item || prev.item, special: c.special || prev.special } : c);
+      else if (this.net) {
+        // predict locally right away, and send every frame (tiny messages) with a sequence number for reconciliation
+        const seq = this.net.input(i, c, dt);
+        clientRoom.send({ t: 'in', p: i, c, seq });
       }
     });
-    if (this.arg.client) {
-      // send immediately on any change or button press (no batching delay), plus a 15 Hz keepalive
-      this.sendAcc += dt;
-      for (const [i, c] of this.pendingCtl) {
-        const last = this.lastSent.get(i);
-        const edge = c.dash || c.jump || c.item || c.special;
-        const changed = !last || Math.abs(last.mx - c.mx) > 0.04 || Math.abs(last.mz - c.mz) > 0.04;
-        if (edge || changed || this.sendAcc > 1 / 15) {
-          clientRoom.send({ t: 'in', p: i, c });
-          this.lastSent.set(i, { mx: c.mx, mz: c.mz });
-          this.pendingCtl.delete(i);
-        }
-      }
-      if (this.sendAcc > 1 / 15) this.sendAcc = 0;
-    }
     // simulate
     if (this.sim) {
       this.acc += Math.min(dt, 0.1);
@@ -187,22 +176,14 @@ export class MatchScreen implements Screen {
         this.snapAcc += dt;
         if (this.snapAcc > 1 / 45) {
           this.snapAcc = 0;
-          hostRoom.send('all', { t: 'snap', s: { ...this.sim.s, events: this.pendingEvents } });
+          hostRoom.send('all', { t: 'snap', s: { ...this.sim.s, events: this.pendingEvents }, ack: this.acks });
           this.pendingEvents = [];
         }
       }
     }
     // client dead-reckoning between snapshots
-    let renderState = this.state;
-    if (this.arg.client && this.lastSnapAt) {
-      const age = Math.min(0.1, (performance.now() - this.lastSnapAt) / 1000);
-      // dead-reckon everyone to "now"; lead our own blades a little further to hide the input round trip
-      const mine = this.arg.client.mine;
-      renderState = { ...this.state, tops: this.state.tops.map((t, i) => {
-        const a = age + (mine.includes(i) && t.alive ? 0.05 : 0);
-        return { ...t, x: t.x + t.vx * a, y: t.y + t.vy * a, z: t.z + t.vz * a };
-      }) };
-    }
+    // guests: interpolated remote blades + predicted own blades
+    const renderState = this.net && this.lastSnapAt ? this.net.frame(dt) : this.state;
     const launchPower = 0.5 - 0.5 * Math.cos(renderState.phaseT * 4.2);
     this.view.update(renderState, dt, launchPower);
     this.hud.update(renderState, dt);
