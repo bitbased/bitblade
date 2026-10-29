@@ -48,6 +48,8 @@ export interface MatchConfig {
   target: number;
   timeLimit: number;
   seed: number;
+  /** race only: CPU catch-up (0 off, 1 normal, 2 strong) */
+  rubber?: number;
 }
 
 export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }

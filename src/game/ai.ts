@@ -26,31 +26,12 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     ai.think = reaction * (0.6 + Math.random() * 0.8);
     chooseGoal(sim, t, ai);
   }
+  if (sim.terrain.track && sim.cfg.mode === 'race') return raceControl(sim, t, ai, dt, c);
   // steering toward goal (with lead on moving enemy)
   let gx = ai.tx, gz = ai.tz;
-  let raceBrake = 0;
-  const TS = sim.terrain.track;
-  if (TS && sim.cfg.mode === 'race') {
-    const look = Math.round((3 + Math.hypot(t.vx, t.vz) * 0.45) / 0.5);
-    const k = (t.prog + look) % TS.n;
-    const lane = Math.sin(s.t * 0.3 + ai.aimErr) * TS.width * 0.15;
-    gx = TS.x[k] - TS.tz[k] * lane; gz = TS.z[k] + TS.tx[k] * lane;
-    ai.target = -1;
-    // look further ahead for corners and gaps
-    let maxCurv = 0, gapAhead = false;
-    for (let j = 4; j < 30; j += 2) {
-      const q = (t.prog + j) % TS.n;
-      maxCurv = Math.max(maxCurv, Math.abs(TS.curv[q]));
-      if (j < 18 && sim.terrain.height(TS.x[q], TS.z[q]) <= VOID) gapAhead = true;
-    }
-    const speed = Math.hypot(t.vx, t.vz);
-    const want = gapAhead ? 99 : Math.max(5.5, 13.5 - maxCurv * [0, 160, 190, 220][ai.level]);
-    raceBrake = speed > want ? Math.min(1, (speed - want) / 3) : 0;
-    if (gapAhead && t.dashCd <= 0 && ai.level >= 1) c.dash = true;
-    else if (t.dashCd <= 0 && maxCurv < 0.015 && Math.random() < dt * [0, 0.3, 0.8, 1.5][ai.level]) c.dash = true;
-  }
+  const raceBrake = 0;
   const enemy = ai.target >= 0 ? s.tops[ai.target] : null;
-  if (enemy && enemy.alive && sim.cfg.mode !== 'race') {
+  if (enemy && enemy.alive) {
     const lead = 0.25 * ai.level;
     gx = enemy.x + enemy.vx * lead; gz = enemy.z + enemy.vz * lead;
   }
@@ -193,4 +174,77 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       pickEnemy();
     }
   }
+}
+
+/**
+ * Race driver: velocity-matching steering along a racing line.
+ * Picks a target speed from the curvature ahead (v = sqrt(grip / curvature)), aims for the inside of bends,
+ * brakes early, dashes on straights and into jumps, and uses items situationally. Level scales pace and polish.
+ */
+function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control): Control {
+  const T = sim.terrain.track!;
+  const s = sim.s;
+  const lv = ai.level;
+  const pace = [0, 0.8, 0.9, 1][lv];
+  const speed = Math.hypot(t.vx, t.vz);
+  const at = (k: number) => (((t.prog + k) % T.n) + T.n) % T.n;
+  // scan ahead: the tightest bend inside our braking window, and any jump gap
+  const window = Math.round((8 + speed * 1.4) / 0.5);
+  let worst = 0, worstSigned = 0, worstK = 0, gapK = -1;
+  for (let k = 4; k < window; k += 2) {
+    const q = at(k);
+    const cv = Math.abs(T.curv[q]);
+    // nearer bends matter more (we have less room to brake for them)
+    const w = cv * (1 - (k / window) * 0.45);
+    if (w > worst) { worst = w; worstSigned = T.curv[q]; worstK = k; }
+    if (gapK < 0 && k < 40 && sim.terrain.height(T.x[q], T.z[q]) <= VOID) gapK = k;
+  }
+  const grip = 8.5 + sim.st[t.id].tipFriction * 2.5;
+  let want = Math.min(14, Math.sqrt(grip / Math.max(0.004, worst))) * pace;
+  if (gapK >= 0) want = 99; // carry speed into jumps
+  // racing line: drift to the inside of the coming bend, back to center on straights
+  const lane = worst > 0.01 && worstK < window * 0.8 ? Math.sign(worstSigned) * Math.min(0.32, worst * 9) * T.width : 0;
+  const look = Math.max(6, Math.round((3 + speed * 0.55) / 0.5));
+  const k = at(look);
+  const gx = T.x[k] - T.tz[k] * lane, gz = T.z[k] + T.tx[k] * lane;
+  let dx = gx - t.x, dz = gz - t.z;
+  const dl = Math.hypot(dx, dz) || 1;
+  dx /= dl; dz /= dl;
+  // desired velocity along the line; steer by velocity error (handles drift and slides naturally)
+  const target = Math.min(want, 14) * (sim.rubber[t.id] ?? 1);
+  let ex = dx * target - t.vx, ez = dz * target - t.vz;
+  // stay on the ribbon: pull hard back toward center when drifting wide
+  const q0 = t.prog;
+  const lat = -(t.x - T.x[q0]) * T.tz[q0] + (t.z - T.z[q0]) * T.tx[q0];
+  const half = T.width / 2;
+  if (Math.abs(lat) > half * 0.62) { const pull = (Math.abs(lat) - half * 0.62) * 3; ex += T.tz[q0] * Math.sign(lat) * pull; ez -= T.tx[q0] * Math.sign(lat) * pull; }
+  const el = Math.hypot(ex, ez);
+  if (el > 0.05) { const m = Math.min(1, el / 2.5); c.mx = (ex / el) * m; c.mz = (ez / el) * m; }
+  // weaker drivers are a bit sloppy
+  if (lv < 3) { const wob = (3 - lv) * 0.12 * Math.sin(s.t * 2.1 + ai.aimErr); const cx = c.mx, cz = c.mz; c.mx = cx * Math.cos(wob) - cz * Math.sin(wob); c.mz = cx * Math.sin(wob) + cz * Math.cos(wob); }
+  // dash: on straights when slower than we could be, and right before jumps
+  const straight = worst < 0.012;
+  if (t.dashCd <= 0 && t.grounded) {
+    if (gapK >= 0 && gapK < 14 && speed < 12.5) c.dash = true;
+    else if (straight && speed < target - 1 && t.spin > 0.5 && Math.random() < dt * [0, 0.6, 1.5, 3][lv]) c.dash = true;
+  }
+  // items
+  if (t.item && t.roll <= 0) {
+    const prog = (o: TopState) => o.lap * T.n + o.prog;
+    const me = prog(t);
+    const rivals = s.tops.filter((o) => o !== t && o.alive && !o.drone);
+    const aheadNear = rivals.some((o) => prog(o) > me && prog(o) - me < 60);
+    const behindNear = rivals.some((o) => prog(o) < me && me - prog(o) < 20);
+    const close = rivals.some((o) => Math.hypot(o.x - t.x, o.z - t.z) < 3);
+    const r = Math.random() < dt * [0, 0.8, 2, 4][lv];
+    switch (t.item) {
+      case 'turbo': if (straight && gapK < 0) c.item = true; break;
+      case 'surge': if (t.spin < 0.65) c.item = true; break;
+      case 'comet': if (aheadNear && r) c.item = true; break;
+      case 'mine': case 'shield': if (behindNear && r) c.item = true; break;
+      case 'shock': case 'vortex': case 'titan': if (close) c.item = true; break;
+    }
+  }
+  if (t.special >= 1 && (t.specialKind === 'rush' ? straight : t.specialKind !== 'skydive') && Math.random() < dt) c.special = true;
+  return c;
 }

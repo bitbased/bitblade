@@ -145,6 +145,8 @@ export class Sim {
   }
 
   endT = -1;
+  /** per-blade speed multiplier from race catch-up (rubber banding) */
+  rubber: number[] = [];
   finishers = 0;
 
   /** Merge input; edge flags persist until consumed by a substep. */
@@ -307,7 +309,7 @@ export class Sim {
         if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
         const dl = Math.hypot(dx, dz) || 1;
         t.vx += (dx / dl) * 9; t.vz += (dz / dl) * 9;
-        t.spin -= 0.025;
+        t.spin -= this.cfg.mode === 'race' ? 0.01 : 0.025;
         t.dashCd = 1.1;
         t.fx.dash = 0.35;
         this.ev({ k: 'dash', id: t.id });
@@ -347,7 +349,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      let acc = 17 * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
+      let acc = 17 * (this.rubber[i] ?? 1) * st.control * (t.fx.turbo > 0 ? 1.7 : 1) * (t.flag >= 0 ? 0.8 : 1) * (t.grounded ? 1 : 0.3);
       // counter-steering bites harder so low-grip tips can still turn and stop
       const vl = Math.hypot(t.vx, t.vz);
       if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
@@ -400,7 +402,7 @@ export class Sim {
       t.vx *= f; t.vz *= f;
     }
     const hs = Math.hypot(t.vx, t.vz);
-    const cap = 12.5 * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const cap = 12.5 * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
@@ -649,7 +651,13 @@ export class Sim {
   rollItem(t: TopState) {
     // rubber-banding: weaker tops get stronger items
     const weak = t.spin < 0.45 || this.isLosing(t);
-    const pool: ItemKind[] = weak ? ['surge', 'surge', 'comet', 'vortex', 'turbo', 'titan', 'shock'] : ITEM_POOL;
+    let pool: ItemKind[] = weak ? ['surge', 'surge', 'comet', 'vortex', 'turbo', 'titan', 'shock'] : ITEM_POOL;
+    if (this.cfg.mode === 'race') {
+      // race items by position: the back of the pack gets speed and comets, the leader gets defence
+      const racers = this.s.tops.filter((x) => !x.drone).length || 1;
+      const pos = (t.place || racers) / racers;
+      pool = pos <= 0.2 ? ['mine', 'shield', 'shock', 'mine'] : pos < 0.6 ? ['turbo', 'shield', 'mine', 'comet', 'shock', 'surge'] : ['turbo', 'turbo', 'comet', 'comet', 'surge', 'titan', 'vortex'];
+    }
     t.item = pool[Math.floor(this.rnd() * pool.length)];
     t.roll = 1.2;
   }
@@ -996,6 +1004,18 @@ export class Sim {
         t.cp = -1;
       }
     }
+    // catch-up: CPUs behind the best human speed up, CPUs far ahead ease off (Mario Kart style)
+    const strength = [0, 1, 1.7][this.cfg.rubber ?? 0] ?? 0;
+    const humans = s.tops.filter((t) => !t.cpu && !t.drone);
+    if (strength > 0 && humans.length) {
+      const best = Math.max(...humans.map((t) => (t.finishT >= 0 ? 1e9 : t.lap * S.n + t.prog)));
+      for (const t of s.tops) {
+        if (!t.cpu) { this.rubber[t.id] = 1; continue; }
+        const gap = ((best - (t.lap * S.n + t.prog)) * 0.5); // metres the CPU is behind (+) or ahead (-)
+        const g = Math.max(-1, Math.min(1, gap / 45));
+        this.rubber[t.id] = 1 + g * (g > 0 ? 0.28 : 0.22) * strength;
+      }
+    } else this.rubber.length = 0;
     const order = s.tops.filter((t) => !t.drone).sort((a, b) => {
       if (a.finishT >= 0 || b.finishT >= 0) return (a.finishT < 0 ? 1e9 : a.finishT) - (b.finishT < 0 ? 1e9 : b.finishT);
       return b.lap * S.n + b.prog - (a.lap * S.n + a.prog);

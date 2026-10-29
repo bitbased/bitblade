@@ -21,6 +21,7 @@ const L = {
   arenaId: 'neon-stadium',
   items: true,
   sizeFilter: 'ALL' as 'ALL' | ArenaSize,
+  rubber: 1,
   target: 4,
   time: 90,
   slots: [] as Slot[],
@@ -181,6 +182,9 @@ export class LobbyScreen implements Screen {
       return el;
     };
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
+    const rubberNames = ['OFF', 'NORMAL', 'STRONG'];
+    const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => { L.rubber = (L.rubber + 1) % 3; this.rebuild(); } }, 'CPU CATCH-UP ', h('b', null, rubberNames[L.rubber]));
+    rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.rebuild(); });
     items.classList.toggle('on', L.items);
 
     this.onlineEl = h('div.online-box.panel');
@@ -198,6 +202,7 @@ export class LobbyScreen implements Screen {
       h('div.lobby-bottom', null,
         h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ Add CPU'),
         m.id !== 'gauntlet' && m.id !== 'rush' ? items : null,
+        m.id === 'race' ? rubber : null,
         m.target > 0 ? num(m.id === 'koth' ? 'HOLD SECS' : m.id === 'gauntlet' ? 'GEMS' : 'TARGET', () => L.target, (v) => (L.target = v), m.id === 'koth' ? 5 : 1, 1) : null,
         num('TIME', () => L.time, (v) => (L.time = v), 15, 30, (v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`),
         h('div.spacer'),
@@ -476,7 +481,7 @@ export class LobbyScreen implements Screen {
     if (L.slots.length < m.minPlayers) { this.app.toast(`${m.name} needs ${m.minPlayers} players`); return; }
     this.assignTeams();
     const cfg: MatchConfig = {
-      mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0,
+      mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0, rubber: L.rubber,
       players: L.slots.slice(0, m.maxPlayers).map((s, i) => ({ slot: i, name: s.name, team: s.team, blade: this.bladeOf(s), ctrl: s.ctrl })),
     };
     // compact team indices (ffa etc.)
