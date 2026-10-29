@@ -3,8 +3,8 @@ import { h, MenuNav, type App, type Screen } from './app';
 import { Hud } from './hud';
 import { Sim } from '../game/sim';
 import { GameView } from '../game/render';
-import { TouchControls } from '../input/input';
-import type { GameEvent, GameState, MatchConfig } from '../game/types';
+import { Input, TouchControls } from '../input/input';
+import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from '../game/types';
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
 import { clientRoom, hostRoom } from '../net/room';
@@ -52,7 +52,8 @@ export class MatchScreen implements Screen {
     this.wrap = h('div', { style: { position: 'absolute', inset: '0', pointerEvents: 'none' } });
     app.root.append(this.wrap);
     this.hud = new Hud(this.wrap, cfg);
-    if (cfg.players.some((p) => p.ctrl.type === 'touch' && this.isLocal(cfg.players.indexOf(p)))) {
+    const clientTouch = !!this.arg.client && this.arg.client.mine.length > 0 && Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches;
+    if (clientTouch || cfg.players.some((p) => p.ctrl.type === 'touch' && this.isLocal(cfg.players.indexOf(p)))) {
       this.touch = new TouchControls(this.wrap);
       app.input.touch = this.touch;
     }
@@ -84,6 +85,24 @@ export class MatchScreen implements Screen {
       }
     }
     app.sfx.music(true);
+  }
+
+  /** merge every local device (keyboards, pads, touch, mouse) into one control */
+  readAnyLocal(top: { x: number; z: number } | undefined): Control {
+    const inp = this.app.input;
+    const specs: ControllerSpec[] = [{ type: 'kb1' }, { type: 'kb2' }, { type: 'touch', gyro: inp.gyro.on }, ...inp.connectedPads().map((index) => ({ type: 'pad' as const, index }))];
+    const out: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
+    for (const sp of specs) {
+      const c = inp.read(sp, top);
+      if (Math.hypot(c.mx, c.mz) > Math.hypot(out.mx, out.mz)) { out.mx = c.mx; out.mz = c.mz; }
+      out.dash ||= c.dash; out.jump ||= c.jump; out.item ||= c.item; out.special ||= c.special;
+    }
+    if (inp.mouseButtons & 7 || inp.mousePressed & 6) {
+      const c = inp.read({ type: 'mouse' }, top);
+      if (Math.hypot(c.mx, c.mz) > 0) { out.mx = c.mx; out.mz = c.mz; }
+      out.dash ||= c.dash;
+    }
+    return out;
   }
 
   isLocal(i: number) {
@@ -124,8 +143,10 @@ export class MatchScreen implements Screen {
     cfg.players.forEach((p, i) => {
       if (!this.isLocal(i) || this.paused) return;
       const top = this.state.tops[i];
-      const c = inp.read(p.ctrl, top);
-      if (p.ctrl.type !== 'mouse') {
+      // online guests: their slot is 'remote' from the host's point of view; drive it with any local device
+      const usingMouse = !!this.arg.client && !!(inp.mouseButtons & 7);
+      const c = this.arg.client ? this.readAnyLocal(top) : inp.read(p.ctrl, top);
+      if (p.ctrl.type !== 'mouse' && !usingMouse) {
         // camera-relative steering: stick up = away from the camera
         const f = this.view.camFwd;
         const mx = c.mx, mz = c.mz;
