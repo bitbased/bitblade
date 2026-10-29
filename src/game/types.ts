@@ -149,5 +149,5 @@ export interface GameState {
     /** a drone swarm out of a hive (flying drones: smash them fast — slow balls get zapped) */
     swarm: { x: number; z: number; vx: number; vz: number; hp: number; zap: number; ph: number }[]; swarmT: number; swarmHive: number;
     /** an arena duel under way (marker, ball, time left) and the guardian blade's top id (-1 = none yet) */
-    duel: { mi: number; ball: number; t: number } | null; foe: number };
+    duel: { mi: number; ball: number; t: number; game: 'duel' | 'koth'; hold: [number, number] } | null; foe: number };
 }

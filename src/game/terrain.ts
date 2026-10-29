@@ -1,6 +1,6 @@
 import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
-import { pinballTables, flyLift, rampLiftAt, tiltLift, type PinRamp, type Rail } from './pinball';
+import { pinballTables, arenaRing, flyLift, rampLiftAt, tiltLift, ARENA_WALL_W, type PinRamp, type Rail } from './pinball';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -34,7 +34,8 @@ export type MarkerKind = 'spawn' | 'item' | 'bumper' | 'arm' | 'saw' | 'boost' |
 export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; team?: number; r?: number; len?: number; speed?: number; /** road height it sits on (tracks with bridges) */ y?: number;
   /** pinball: sits on the flyover deck above it, not the floor */ fly?: boolean;
   /** pinball saucer: an aimable lock — the half-arc (rad) you can swing the shot through around `rot` */ aim?: number;
-  /** pinball aim lock: seconds before it fires by itself */ hold?: number }
+  /** pinball aim lock: seconds before it fires by itself */ hold?: number;
+  /** pinball arena bowl: what's played inside — a 1v1 battle, 1v1 king of the hill, or either at random (default) */ game?: 'duel' | 'koth' | 'random' }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }
 
@@ -135,17 +136,23 @@ export class Terrain {
         }
       }
     }
-    // arena bowls (pinball): a level battle dish sunk into the playfield, its rim at the floor height of its centre
+    // arena bowls (pinball): a real battle stadium set level into the playfield — the same bowl and curved outer wall
+    // as a stadium arena, its rim at the floor height of its centre; at the gate the wall is notched down to the table
     for (const m of def.markers) {
       if (m.kind !== 'arena') continue;
-      const r = m.r ?? 2.6, depth = 1.4;
+      const P: StadiumParams = { radius: m.r ?? 6, depth: m.len ?? 1.8, wall: 1.3, pockets: 0, pocketWidth: 0, sides: 0 };
       const c = courseHeight(def.course!, m.x, m.z) + tiltLift(def, m.z);
+      const { g, gap } = arenaRing(m), out = P.radius + ARENA_WALL_W;
       for (let j = 0; j < this.nz; j++)
         for (let i = 0; i < this.nx; i++) {
           const x = this.minX + i * this.cell, z = this.minZ + j * this.cell, d = Math.hypot(x - m.x, z - m.z);
-          if (d >= r + 0.05) continue;
-          const k = j * this.nx + i, u = Math.min(1, d / r);
-          if (this.h[k] > VOID) this.h[k] = Math.min(this.h[k], c - depth * (1 - u * u));
+          if (d >= out) continue;
+          const k = j * this.nx + i;
+          if (this.h[k] <= VOID) continue;
+          let h = c + stadiumHeight(P, x - m.x, z - m.z);
+          const da = Math.abs(((Math.atan2(z - m.z, x - m.x) - g + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+          if (da < gap * 1.1) h = Math.min(h, this.h[k]); // the gate: a notch through the wall at table level
+          this.h[k] = h;
         }
     }
   }

@@ -35,7 +35,7 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   }
   if (sim.terrain.track && sim.cfg.mode === 'race') return raceControl(sim, t, ai, dt, c);
   if (sim.cfg.mode === 'quest' && !t.drone) return questControl(sim, t, ai, dt, c);
-  if (sim.cfg.mode === 'pinball' && !t.drone) return pinballControl(sim, t, ai, dt, c);
+  if (sim.cfg.mode === 'pinball' && !t.drone && !t.duel) return pinballControl(sim, t, ai, dt, c);
   // steering toward goal (with lead on moving enemy)
   let gx = ai.tx, gz = ai.tz;
   const raceBrake = 0;
@@ -46,7 +46,7 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   }
   // courses with levels: take the route (ramps, round walls) when the goal isn't straight ahead on our level
   let climbing = false;
-  if (sim.terrain.def.course) {
+  if (sim.terrain.def.course && !t.duel) { // (a pinball arena duel: the bowl is the whole stadium)
     const T = sim.terrain.def.course.tile;
     const route = questRoute(sim, t.x, t.z, gx, gz);
     if (route && route.length > 1) {
@@ -73,8 +73,9 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   if (ahead <= VOID || (here > VOID && ahead < here - 1.2)) {
     // steer back toward safety (opposite of velocity + toward arena center)
     const vl = Math.hypot(t.vx, t.vz) || 1;
-    mx = -t.vx / vl * 1.4 - t.x * 0.05;
-    mz = -t.vz / vl * 1.4 - t.z * 0.05;
+    const home = arenaHome(sim, t);
+    mx = -t.vx / vl * 1.4 - (t.x - home.x) * 0.05;
+    mz = -t.vz / vl * 1.4 - (t.z - home.z) * 0.05;
   }
   // hazard avoidance
   for (const m of sim.markers) {
@@ -151,16 +152,6 @@ function pinballControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Contr
     return c;
   }
   ai.aimGoal = undefined;
-  // an arena duel: battle like a blade — go at the guardian, dash when close
-  if (t.duel) {
-    const f = sim.s.tops[sim.s.pin?.foe ?? -1];
-    if (f?.alive) {
-      const dx = f.x - t.x, dz = f.z - t.z, d = Math.hypot(dx, dz) || 1;
-      c.mx = dx / d; c.mz = dz / d;
-      if (d < 2.6 && t.dashCd <= 0 && sim.rnd() < 0.05 * ai.level) c.dash = true;
-    }
-    return c;
-  }
   const look = [0, 0.03, 0.06, 0.09][ai.level];
   let wantL = false, wantR = false;
   for (const m of sim.markers) {
@@ -209,10 +200,18 @@ function unstick(t: TopState, ai: AIState, dt: number, c: Control, goalD: number
   }
 }
 
+/** the middle of the stadium you're fighting in: a pinball arena bowl in a duel, else the arena's centre */
+function arenaHome(sim: Sim, t: TopState) {
+  const d = sim.s.pin?.duel;
+  if (t.duel && d) { const m = sim.markers[d.mi]; return { x: m.x, z: m.z }; }
+  return { x: 0, z: 0 };
+}
+
 function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
   const s = sim.s;
   ai.target = -1;
-  const enemies = s.tops.filter((o) => o.alive && o.team !== t.team);
+  // (in a pinball arena duel the only enemy is the one in the bowl with you)
+  const enemies = s.tops.filter((o) => o.alive && o.team !== t.team && (!t.duel || o.duel));
   const nearest = (pts: { x: number; z: number }[]) => {
     let best: { x: number; z: number } | null = null, bd = 1e9;
     for (const p of pts) { const d = Math.hypot(p.x - t.x, p.z - t.z); if (d < bd) { bd = d; best = p; } }
@@ -233,7 +232,7 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
     ai.tx = cx + Math.cos(ai.wander) * r; ai.tz = cz + Math.sin(ai.wander) * r;
   };
 
-  switch (sim.cfg.mode) {
+  switch (t.duel ? (s.pin?.duel?.game === 'koth' ? 'koth' : 'duel') : sim.cfg.mode) {
     case 'ctf': {
       const own = s.flags.find((f) => f.team === t.team);
       const theirs = s.flags.find((f) => f.team !== t.team);

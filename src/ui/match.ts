@@ -264,7 +264,7 @@ export class MatchScreen implements Screen {
     // hum from the fastest local top
     let hum = 0;
     renderState.tops.forEach((t, i) => { if (t.alive && this.isLocal(i)) hum = Math.max(hum, t.spin); });
-    app.sfx.setHum(renderState.phase === 'battle' ? hum : 0);
+    app.sfx.setHum(renderState.phase === 'battle' && !this.pauseEl ? hum : 0); // (quiet while the pause menu is open)
     this.view.render();
     if (renderState.phase === 'matchEnd' && renderState.phaseT > 3.5 && !this.ended) {
       if (this.arg.host) hostRoom.send('all', { t: 'end' });

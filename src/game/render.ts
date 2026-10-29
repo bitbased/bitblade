@@ -274,8 +274,19 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
   };
   const segs = railSegments(rails);
   const deckRails = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
+  const wireMat = new THREE.MeshBasicMaterial({ color: theme.glow, toneMapped: false });
   for (const r of rails) {
-    if (r.deck) { addRail(r, deckRails, new THREE.Color(theme.glow)); continue; }
+    if (r.deck && !r.below) {
+      // a flyover's side: two thin glowing wires following the deck (a wireform — you can see the play under it)
+      const pl = railPolyline(r);
+      for (const hh of [0.3, 1.05]) {
+        const pts = pl.map(([x, z]) => new THREE.Vector3(x, groundY(x, z) + flyLiftAlong(r.deck!, x, z) + hh, z));
+        if (pts.length < 2) continue;
+        group.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), Math.max(8, pts.length * 2), 0.055, 6, false), wireMat));
+      }
+      continue;
+    }
+    if (r.deck) { addRail(r, deckRails, new THREE.Color(theme.wall)); continue; }
     if (!r.kick) { addRail(r, plain, new THREE.Color(r.oneWay ? '#ffd23a' : theme.glow)); continue; } // (gates in gold)
     const one = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
     addRail(r, one, new THREE.Color('#ffffff'));
@@ -584,6 +595,7 @@ export class GameView {
     this.slings = b.slings;
     // ramp decks: a glowing deck over the raised path with chevrons pointing up it (so it reads as a ramp)
     for (const rp of this.cfg.arena.ramps ?? []) {
+      if (rp.fly) { this.buildFlyover(rp); continue; }
       const pl = railPolyline({ pts: rp.pts });
       const half = (rp.w ?? 3) / 2;
       const pos: number[] = [], uv: number[] = [], idx: number[] = [];
@@ -607,7 +619,6 @@ export class GameView {
       const deck = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(this.cfg.arena.theme.glow, 2), transparent: true, opacity: rp.fly ? 0.18 : 0.4, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
       this.scene.add(deck);
       this.boostMeshes.push(deck); // (the chevrons scroll up the ramp)
-      if (rp.fly) this.buildFlyover(rp, geo);
     }
   }
   /** a swarm drone: a dark quad body, four arms with spinning rotors, a red glow */
@@ -638,14 +649,23 @@ export class GameView {
   }
 
   /** a flyover's body under its chevrons: a tinted see-through deck (so balls rolling beneath stay visible) and posts */
-  buildFlyover(rp: import('./pinball').PinRamp, top: THREE.BufferGeometry) {
-    const glow = new THREE.Color(this.cfg.arena.theme.glow);
-    const under = top.clone();
-    under.translate(0, -0.05, 0);
-    const slab = new THREE.Mesh(under, new THREE.MeshBasicMaterial({ color: glow.clone().multiplyScalar(0.3), transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
-    this.scene.add(slab);
+  buildFlyover(rp: import('./pinball').PinRamp) {
     const pl = railPolyline({ pts: rp.pts });
     const half = (rp.w ?? 3) / 2 + 0.3;
+    // the deck: thin cross ties under the ball's path (a wireform), dark with a faint glow
+    const tieMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(this.cfg.arena.theme.glow).multiplyScalar(0.45), toneMapped: false });
+    let acc = 0;
+    for (let i = 1; i < pl.length; i++) {
+      acc += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]);
+      if (acc < 1.4) continue;
+      acc = 0;
+      const [x, z] = pl[i], L = flyLift(rp, x, z, 0);
+      if (L < 0.15) continue;
+      const tie = new THREE.Mesh(new THREE.BoxGeometry(half * 2, 0.06, 0.12), tieMat);
+      tie.position.set(x, this.groundY(x, z) + L + 0.02, z);
+      tie.rotation.y = -Math.atan2(pl[i][1] - pl[i - 1][1], pl[i][0] - pl[i - 1][0]) + Math.PI / 2;
+      this.scene.add(tie);
+    }
     const postMat = new THREE.MeshStandardMaterial({ color: '#2a3140', metalness: 0.7, roughness: 0.35 });
     let since = 0;
     for (let i = 1; i < pl.length; i++) {
@@ -1585,7 +1605,7 @@ export class GameView {
         if (b) { a.beam.rotation.y = -(b.aimA ?? 0); for (const c of a.beam.children) ((c as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.6 + 0.35 * Math.sin(this.time * 10); }
       }
       // the swarm
-      for (const z of this.hiveZones) z.visible = s.pin.swarmT > 0;
+      // (on a table the drones show where the swarm is; the hive's big patrol circle would hang off the table)
       const sw = s.pin.swarm;
       while (this.droneMeshes.length < sw.length) this.droneMeshes.push(this.makeDrone());
       this.droneMeshes.forEach((dm, k) => {
@@ -1663,6 +1683,7 @@ export class GameView {
       v.orb.position.y = f.carrier >= 0 ? 0.3 : 1.0 + Math.sin(this.time * 2) * 0.15;
       (v.base.material as THREE.MeshBasicMaterial).opacity = f.home ? 0.75 : 0.25 + 0.2 * Math.sin(this.time * 6);
     });
+    if (this.zoneMesh) this.zoneMesh.visible = !!s.zone;
     if (s.zone && this.zoneMesh) {
       const z = s.zone;
       this.zoneMesh.position.set(z.x, z.y + 1.25, z.z);

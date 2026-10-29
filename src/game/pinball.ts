@@ -226,7 +226,10 @@ export function rampRails(r: PinRamp): Rail[] {
     const sk = [pl[i - 1], pl[Math.min(pl.length - 1, i + 1)]];
     let tx = sk[1][0] - sk[0][0], tz = sk[1][1] - sk[0][1];
     const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-    const p = pl[i], skirt: Rail = { pts: [[p[0] - tz * half, p[1] + tx * half], [p[0] + tz * half, p[1] - tx * half]], t: 0.3, deck: r, below: true };
+    // (a V pointing up the ramp, not a flat shelf, whose arms reach out past the side walls: a ball rolling down
+    // underneath slides off it and out onto open floor, never into a corner)
+    const p = pl[i], ap: [number, number] = [p[0] + tx * 1.6, p[1] + tz * 1.6], wide = half + 0.4;
+    const skirt: Rail = { pts: [[p[0] - tz * wide - tx * 0.8, p[1] + tx * wide - tz * 0.8], ap, [p[0] + tz * wide - tx * 0.8, p[1] - tx * wide - tz * 0.8]], t: 0.3, deck: r, below: true };
     return [{ pts: [...L, edgeAt(pl, half, 1)], h, t: 0.35, deck: r }, { pts: [...R, edgeAt(pl, half, -1)], h, t: 0.35, deck: r }, skirt];
   }
   // close round the pad: a half circle from the left wall's end to the right wall's end, beyond the end point
@@ -242,12 +245,20 @@ export function rampRails(r: PinRamp): Rail[] {
  * flippers), closed by a gate that opens when the arena is unlocked. Light its drop bank (team) to open it; roll in
  * and a guardian blade drops in for a 1v1 battle.
  */
+/** an arena bowl's ring: its radius (outside the stadium's curved wall), the gate's direction and half-angle */
+export function arenaRing(m: Marker) {
+  const R = (m.r ?? 6) + ARENA_WALL_W + 0.3;
+  return { R, g: m.rot ?? Math.PI / 2, gap: 1.4 / R };
+}
+/** the width of an arena bowl's curved outer wall (the same as a stadium's) */
+export const ARENA_WALL_W = 1.3;
 export function arenaRails(m: Marker, mi: number): Rail[] {
-  const R = (m.r ?? 2.6) + 0.3, g = m.rot ?? Math.PI / 2, gap = 1.4 / R;
+  const { R, g, gap } = arenaRing(m);
   const ring: [number, number][] = [];
   for (let k = 0; k <= 16; k++) { const a = g + gap + (k / 16) * (Math.PI * 2 - 2 * gap); ring.push([m.x + Math.cos(a) * R, m.z + Math.sin(a) * R]); }
   const e = (a: number): [number, number] => [m.x + Math.cos(a) * R, m.z + Math.sin(a) * R];
-  return [{ pts: ring, h: 1.6, t: 0.45 }, { pts: [e(g - gap), e(g + gap)], h: 1.6, t: 0.3, gate: mi }];
+  // (tall: it stands on the table floor, which on the low side is well below the stadium's rim)
+  return [{ pts: ring, h: 4, t: 0.45 }, { pts: [e(g - gap), e(g + gap)], h: 4, t: 0.3, gate: mi }];
 }
 
 /** the point `half` to one side of a polyline's last point */
@@ -503,24 +514,23 @@ function starCadet(): ArenaDef {
 const CYBER = { floor: '#03120e', wall: '#0b3a2c', glow: '#39ff9c', sky1: '#010605', sky2: '#04221a', grid: '#00e08f' };
 
 /**
- * Swarm Protocol — a cyber table built round two CROSSING FLYOVER ramps (the general shape of the big 90s ramp
- * tables, in its own skin):
- *  · UPLINK (left entry, high) climbs over the top and drops the ball into the right inlane; DOWNLINK (right entry,
- *    lower) passes underneath it and drops into the left inlane. A deck rollover on each lights the DRONE BAY —
- *    make both and the swarm launches: flying drones hunt your ball round the top (smash them fast; slow balls get
- *    zapped and lose spin)
- *  · the CORE: an arena bowl in the middle behind a firewall gate. Knock down the FIREWALL drop bank to unlock it,
- *    roll in, and a guardian blade drops in for a 1v1 battle
- *  · TARGET LOCK top left: an aimable lock — swing the shot with the flippers, fire with SPACE
- *  · re-entry ports across the top, three pop bumpers (server nodes), flag rollovers, kickback, center post
+ * Swarm Protocol — a cyber table built round the CORE: a full-size battle stadium in the middle of the table.
+ *  · the CORE: knock down the FIREWALL (the drop bank standing right in front of its gate) to open it; roll in and a
+ *    guardian blade drops in — a real 1v1 (a battle or king of the hill, at random) with a spin pad and a power-up
+ *  · UPLINK: one wireform flyover round the outside — up the left wall, over the top, down the right wall (flying over
+ *    the right orbit) into the right inlane. Its deck rollover + the right orbit's rollover light the DRONE BAY: the
+ *    swarm launches and hunts your ball (smash drones fast; slow balls get zapped and lose spin)
+ *  · TARGET LOCK low right: aim with the flippers, fire with SPACE — into the open core, the firewall or the uplink
+ *  · re-entry ports across the top, pop bumpers (server nodes), flag rollovers, kickback, center post
  */
 function swarmProtocol(): ArenaDef {
   const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
   const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0, outlanes: 'L', kickback: 'L' });
   const xc = low.xc;
   const lane = (x: number): Rail => ({ pts: [[x, -22.0], [x, -18.4]], t: 0.3, h: 1.1 });
+  const C = { x: xc, z: -7.6 }, CORE_R = 6.2; // (the bowl; with its curved wall and ring it's ~15.6m across)
   return {
-    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table: two crossing flyover ramps, a drone swarm to smash, an arena core with a guardian duel, and an aimable target lock.',
+    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table round a full-size battle core: 1v1 guardian battles and king of the hill, a wireform flyover, a drone swarm and an aimable target lock.',
     theme: CYBER, custom: false, pinball: true, tilt: 0.15,
     course: flat(5, 8),
     rails: [
@@ -532,10 +542,8 @@ function swarmProtocol(): ArenaDef {
       ...low.rails,
     ],
     ramps: [
-      // UPLINK: high, enters left of the core, sweeps over the top, comes down the right side into the right inlane
-      { pts: [[-6.6, 4], [-7.2, -3], [-5.8, -9], [-1.5, -13.4], [4, -13.4], [8.4, -9.6], [10.3, -3], [10.6, 3], [10.7, 8]], w: 2.2, rise: 4.0, fly: true, end: 1.8 },
-      // DOWNLINK: lower, enters right of the core, crosses UNDER the uplink, comes down the left into the left inlane
-      { pts: [[4.6, 3], [5.0, -3.5], [1.5, -9.5], [-4, -12], [-9, -10.5], [-11.2, -4], [-11, 2.5], [-10.7, 7.5]], w: 2.2, rise: 2.2, fly: true, end: 1.8 },
+      // UPLINK: up the left wall, over the top, down the right wall (over the right orbit) into the right inlane
+      { pts: [[-9.8, 3.5], [-10.5, -3], [-10.6, -10], [-9.0, -16.4], [-3.5, -18.6], [3.5, -18.4], [8.6, -15.2], [10.3, -9], [10.5, -2], [10.6, 3.5], [10.7, 8]], w: 2.0, rise: 4.4, fly: true, end: 1.8 },
     ],
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
@@ -546,21 +554,25 @@ function swarmProtocol(): ArenaDef {
       { kind: 'rollover', x: xc - 2.2, z: -19.7, r: 0.8, team: 1 },
       { kind: 'rollover', x: xc, z: -19.7, r: 0.8, team: 1 },
       { kind: 'rollover', x: xc + 2.2, z: -19.7, r: 0.8, team: 1 },
-      // server nodes: pop bumpers up the right
-      { kind: 'bumper', x: 4.6, z: -18.6, r: 1.0 },
-      { kind: 'bumper', x: 8.6, z: -17.6, r: 1.0 },
-      { kind: 'bumper', x: 6.4, z: -15.6, r: 0.95 },
-      // the ramps' deck rollovers (group 2) light the drone bay: both made = the swarm launches
-      { kind: 'rollover', x: 1.2, z: -13.45, r: 1.2, team: 2, fly: true }, // (as wide as the deck)
-      { kind: 'rollover', x: -6.5, z: -11.25, r: 1.2, team: 2, fly: true },
-      { kind: 'hive', x: xc + 0.2, z: -16.6, r: 10, len: 5, team: 2 }, // (the drone bay, between the ports and the uplink)
-      // the core: arena bowl (unlocked by the firewall bank, team 1)
-      { kind: 'arena', x: xc - 0.9, z: -5.4, r: 3.0, rot: Math.PI / 2, team: 1 }, // (the flyovers arch over it; its gate faces the flippers)
-      { kind: 'drop', x: 7.2, z: -4.6, r: 0.75, rot: 2.91, team: 1 },
-      { kind: 'drop', x: 7.6, z: -2.9, r: 0.75, rot: 2.91, team: 1 },
-      { kind: 'drop', x: 8.0, z: -1.2, r: 0.75, rot: 2.91, team: 1 },
-      // target lock: aim it with the flippers, fire with SPACE (fires itself after 7s)
-      { kind: 'saucer', x: -10.2, z: -15.5, r: 1.0, rot: 0.85, len: 22, aim: 0.7, hold: 7 },
+      // server nodes: pop bumpers top right, and the core node on top of the core (nothing rests on its rim)
+      { kind: 'bumper', x: 5.4, z: -20.2, r: 1.0 },
+      { kind: 'bumper', x: 9.0, z: -18.8, r: 1.0 },
+      { kind: 'bumper', x: C.x, z: C.z - CORE_R - 2.85, r: 1.0 },
+      // the uplink's deck rollover + the right orbit (on the floor, under the uplink) light the drone bay (group 2)
+      { kind: 'rollover', x: -10.6, z: -10, r: 1.1, team: 2, fly: true },
+      { kind: 'rollover', x: 10.5, z: -6, r: 1.0, team: 2 },
+      { kind: 'hive', x: -6.6, z: -20.6, r: 13, len: 5, team: 2 },
+      // the CORE: a battle stadium; the firewall bank (team 1) opens it; inside: a spin pad and a power-up
+      { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random' }, // (+1.6m of wall and ring round it)
+      { kind: 'spinpad', x: C.x + 3.0, z: C.z, r: 1.1 },
+      { kind: 'item', x: C.x - 3.0, z: C.z },
+      // the FIREWALL: a drop bank standing right in front of the core's gate — knock it down to get in
+      { kind: 'drop', x: xc - 1.6, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: xc, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: xc + 1.6, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
+      // target lock, low right: aim it with the flippers, fire with SPACE (fires itself after 7s) — the core's gate,
+      // the firewall and the uplink's entrance are all in its arc
+      { kind: 'saucer', x: 4.8, z: 5.0, r: 1.0, rot: -2.49, len: 22, aim: 0.75, hold: 7 },
       // flag rollovers above the drain (group 4)
       { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
       { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },
@@ -568,6 +580,7 @@ function swarmProtocol(): ArenaDef {
     ],
   } as ArenaDef;
 }
+
 
 export function pinballTables(): ArenaDef[] { return [starCadet(), swarmProtocol(), neonClassic(), synthCathedral()]; }
 export const PINBALL_IDS = ['pin-star-cadet', 'pin-swarm-protocol', 'pin-neon-classic', 'pin-synth-cathedral'];

@@ -2,7 +2,7 @@
 import { computeStats, type BladeStats } from '../core/blade';
 import { Terrain, VOID, type Marker } from './terrain';
 import { hazardPose, closestOnSeg } from './hazards';
-import { arenaRails, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
+import { arenaRails, arenaRing, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
 import { aiControl, newAI, type AIState } from './ai';
 import { globalNearest, nearestSample } from './track';
 import {
@@ -66,7 +66,7 @@ export class Sim {
     this.buildSpawns();
     cfg.players.forEach((p, i) => this.addTop(p.name, p.team, p.blade, p.ctrl.type === 'cpu' ? p.ctrl.level : 0, i));
     // objects
-    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest') {
+    if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest' || (cfg.mode === 'pinball' && this.markers.some((m) => m.kind === 'item'))) {
       let items = this.markers.filter((m) => m.kind === 'item');
       if (items.length === 0) items = [0, 1, 2].map(() => ({ kind: 'item', ...this.terrain.randomSafePoint(this.rnd) }) as Marker);
       for (const m of items) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
@@ -345,14 +345,14 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      if (this.cfg.mode === 'pinball') {
+      if (this.cfg.mode === 'pinball' && !t.duel) {
         c.jump = false; c.hold = false;
         if (c.flipL || c.flipR) c.dash = false; // (RT is a flipper on pads)
         if (c.dash && this.inPlunger(t)) { this.plunge(t, 1); c.dash = false; }
       }
       if (c.dash && t.dashCd <= 0 && t.spin > 0.08) {
         let dx = ix, dz = iz;
-        if (this.cfg.mode === 'pinball') { const a = this.pinAim(t); if (a) { dx = a.x - t.x; dz = a.z - t.z; } }
+        if (this.cfg.mode === 'pinball' && !t.duel) { const a = this.pinAim(t); if (a) { dx = a.x - t.x; dz = a.z - t.z; } }
         if (Math.hypot(dx, dz) < 0.2) { const v = Math.hypot(t.vx, t.vz) || 1; dx = t.vx / v; dz = t.vz / v; }
         const dl = Math.hypot(dx, dz) || 1;
         const dashV = (this.cfg.mode === 'race' ? 11 : 9) * this.rpmK(t);
@@ -377,7 +377,7 @@ export class Sim {
 
     // spin decay
     const decay = st.spinDecay * (0.55 + 0.45 * t.spin) * (t.grounded ? 1 : 0.25) * (this.cfg.mode === 'gauntlet' ? 1.25 : this.cfg.mode === 'race' ? 0.3 : this.cfg.mode === 'quest' ? 0.45 : 1) + (t.spin < 0.25 ? 0.006 : 0);
-    if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * (t.fx.surge > 0 ? 0.3 : 1) * (t.duel ? 0.6 : 1) * dt + (t.spin > 1 && t.fx.surge <= 0 ? (t.spin - 1) * 0.6 * dt : 0);
+    if (!(t.fx.special > 0 && t.specialKind === 'vortex')) t.spin -= decay * (t.fx.surge > 0 ? 0.3 : 1) * dt + (t.spin > 1 && t.fx.surge <= 0 ? (t.spin - 1) * 0.6 * dt : 0);
     else t.spin = Math.max(t.spin, Math.min(1.1, t.spin + 0.12 * dt));
     t.angle += t.dir * (6 + t.spin * 34) * dt;
 
@@ -443,7 +443,7 @@ export class Sim {
       az += t.tx * drift;
       const slope = Math.hypot(grad.gx, grad.gz);
       // wall riding: steep surface + spin = grind along it (xtreme dash)
-      if (slope > 1.2 && this.cfg.mode !== 'pinball') { // (no wall-riding on a pinball table: walls just bounce)
+      if (slope > 1.2 && (this.cfg.mode !== 'pinball' || t.duel)) { // (no wall-riding on a pinball table: walls just bounce)
         const nx = -grad.gx / slope, nz = -grad.gz / slope; // horizontal normal (pointing downhill)
         const ride = t.spin * (st.tipFriction + 0.35) * 9 * t.dir;
         ax += -nz * ride; az += nx * ride;
@@ -579,7 +579,6 @@ export class Sim {
     // pinball: your own balls bounce off each other, no battle damage
     const friendly = this.cfg.mode === 'pinball' && A.team === B.team;
     if (friendly) { A.spin = before[0]; B.spin = before[1]; }
-    else if (A.duel && B.duel) { A.spin = before[0] - (before[0] - A.spin) * 0.6; B.spin = before[1] - (before[1] - B.spin) * 0.6; } // (arena duel: a tight bowl means constant contact)
     const lossA = Math.max(0, before[0] - A.spin), lossB = Math.max(0, before[1] - B.spin);
     A.dmg += lossB; B.dmg += lossA;
     A.special = Math.min(1, A.special + lossB * 2.2 + 0.015);
@@ -1295,8 +1294,23 @@ export class Sim {
    * drops in — a real 1v1 battle (normal grip and steering inside). Spin it out (or out-spin it when the 25s run
    * out) for the jackpot; either way the gate opens and the ball is fired back out onto the table.
    */
+  /** fire a ball out of an arena bowl: set down just outside its gate, rolling away down the table */
+  arenaEject(b: TopState, m: Marker, mi: number) {
+    const { R, g } = arenaRing(m);
+    b.x = m.x + Math.cos(g) * (R + 1.0); b.z = m.z + Math.sin(g) * (R + 1.0); b.y = this.ground(b.x, b.z) + 0.1;
+    b.vx = Math.cos(g) * 8; b.vy = 0; b.vz = Math.sin(g) * 8;
+    b.duel = false;
+    this.s.pin!.tm[mi] = Math.max(this.s.pin!.tm[mi], 0.6);
+  }
+
   arenaUpdate(dt: number) {
     const s = this.s, pin = s.pin!, ms = this.markers;
+    // (safety net: a ball inside a locked bowl with no duel on — say a multiball ball that slipped in — is let out)
+    ms.forEach((m, mi) => {
+      if (m.kind !== 'arena' || pin.lit[mi] || pin.duel?.mi === mi) return;
+      const R = arenaRing(m).R - 0.5;
+      for (const t of s.tops) if (t.alive && !t.drone && t.held === undefined && Math.hypot(t.x - m.x, t.z - m.z) < R) this.arenaEject(t, m, mi);
+    });
     if (!pin.duel) {
       ms.forEach((m, mi) => {
         if (m.kind !== 'arena' || !pin.lit[mi] || pin.duel) return;
@@ -1304,7 +1318,9 @@ export class Sim {
         const t = s.tops.find((b) => b.alive && !b.drone && b.held === undefined && Math.hypot(b.x - m.x, b.z - m.z) < R * 0.7);
         if (!t) return;
         pin.lit[mi] = false;
-        pin.duel = { mi, ball: t.id, t: 25 };
+        const game = m.game === 'duel' || m.game === 'koth' ? m.game : this.rnd() < 0.5 ? 'duel' : 'koth';
+        pin.duel = { mi, ball: t.id, t: game === 'koth' ? 30 : 25, game, hold: [0, 0] };
+        if (game === 'koth') s.zone = { x: m.x, y: this.ground(m.x, m.z), z: m.z, r: (m.r ?? 3) * 0.38, owner: -1, t: 0 };
         t.duel = true; t.spin = Math.max(t.spin, 1); // (a fresh, full-spin battle)
         let f = s.tops[pin.foe];
         if (!f) {
@@ -1316,7 +1332,7 @@ export class Sim {
         f.alive = true; f.out = ''; f.spin = 1; f.duel = true; f.burst = 0; f.fx.frozen = 0;
         this.placeTop(f, m.x - (ax / al) * R * 0.55, m.z - (az / al) * R * 0.55, 1.2);
         t.vx *= 0.3; t.vz *= 0.3;
-        this.ev({ k: 'announce', text: 'ARENA DUEL!', sub: 'steer freely in here — spin the guardian out', color: '#ff2a6d' });
+        this.ev({ k: 'announce', text: game === 'koth' ? 'KING OF THE CORE!' : 'ARENA DUEL!', sub: game === 'koth' ? 'hold the ring in the middle for 8s — steer freely in here' : 'steer freely in here — spin the guardian out', color: '#ff2a6d' });
         this.ev({ k: 'pin', what: 'duel', x: m.x, y: t.y, z: m.z });
       });
       return;
@@ -1324,21 +1340,27 @@ export class Sim {
     const d = pin.duel, m = ms[d.mi], b = s.tops[d.ball], f = s.tops[pin.foe];
     d.t -= dt;
     let res = 0;
-    if (!b?.alive) res = -1;
+    if (d.game === 'koth' && s.zone && b?.alive && f?.alive) {
+      // king of the hill: whoever has the ring to themselves banks time; 8s wins
+      const inB = Math.hypot(b.x - s.zone.x, b.z - s.zone.z) < s.zone.r, inF = Math.hypot(f.x - s.zone.x, f.z - s.zone.z) < s.zone.r;
+      s.zone.owner = inB && !inF ? b.team : inF && !inB ? f.team : inB && inF ? -2 : -1;
+      if (inB && !inF) d.hold[0] += dt;
+      if (inF && !inB) d.hold[1] += dt;
+      if (d.hold[0] >= 8) res = 1; else if (d.hold[1] >= 8) res = -1;
+    }
+    if (res) { /* decided on the ring */ }
+    else if (!b?.alive) res = -1;
     else if (!f?.alive || f.spin < 0.1) res = 1;
     else if (b.spin < 0.12) res = -1;
-    else if (d.t <= 0) res = b.spin >= f.spin ? 1 : -1;
+    else if (d.t <= 0) res = d.game === 'koth' ? (d.hold[0] >= d.hold[1] ? 1 : -1) : b.spin >= f.spin ? 1 : -1;
     if (!res) return;
+    s.zone = null;
     if (f) { f.alive = false; f.out = 'spin'; f.duel = false; f.x = m.x; f.z = m.z; f.y = -60; f.vx = f.vy = f.vz = 0; }
     pin.duel = null;
     pin.tm[d.mi] = 1.5; // the gate lets the ball out, then locks again (light the bank to reopen it)
     if (!b) return;
     b.duel = false;
-    const g = m.rot ?? Math.PI / 2, R = m.r ?? 2.6;
-    if (b.alive) {
-      b.x = m.x + Math.cos(g) * R * 0.5; b.z = m.z + Math.sin(g) * R * 0.5;
-      b.vx = Math.cos(g) * 15; b.vz = Math.sin(g) * 15;
-    }
+    if (b.alive) this.arenaEject(b, m, d.mi);
     if (res > 0) {
       b.spin = Math.max(b.spin, 1);
       this.addScore(b, 30000);
