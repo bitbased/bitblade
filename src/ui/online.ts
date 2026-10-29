@@ -1,6 +1,6 @@
 // Online hub: host (goes to lobby) or join a room by code / invite link. Joined players wait in the room
 // and follow the room leader into every match; with Open Control they can drive the room too.
-import { h, MenuNav, type App, type Screen } from './app';
+import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { allBlades, findBlade, type BladeDesign } from '../core/blade';
 import { joinAny } from '../net/transport';
 import { clientRoom } from '../net/room';
@@ -54,6 +54,7 @@ export class OnlineScreen implements Screen {
           h('div.field', null, h('label', null, 'YOUR NAME'), name),
           h('div.field', null, h('label', null, 'ROOM CODE OR INVITE LINK'), code),
           h('button.btn.primary.nav', { onclick: () => this.join(code.value) }, 'JOIN ▶'),
+          clientRoom.lastJoin ? h('button.btn.small.nav', { onclick: () => this.join(clientRoom.lastJoin!), title: clientRoom.lastJoin }, `↻ Rejoin last room (${clientRoom.lastJoin.slice(-5).toUpperCase()})`) : null,
           this.roomEl)),
     );
   }
@@ -77,6 +78,7 @@ export class OnlineScreen implements Screen {
     try {
       const t = await joinAny(input, settings.playerName || 'Guest');
       clientRoom.attach(t);
+      clientRoom.remember(input.trim());
       this.listen();
       clientRoom.send({ t: 'hello', name: settings.playerName || 'Guest', blade: this.myBlade });
       this.renderRoom();
@@ -126,11 +128,12 @@ export class OnlineScreen implements Screen {
       canCtl ? h('button.btn.primary.nav', { onclick: () => clientRoom.send({ t: 'ctl', a: 'start' }) }, '▶ START MATCH') : null,
       h('div.hint', null, `PLAYERS (${lobby.slots.length})`),
       ...lobby.slots.map((s: any) => h('div', { style: { color: s.color, fontFamily: 'var(--font-h)', fontSize: '13px' } }, `● ${s.name} — ${s.blade?.name ?? ''}${String(s.ctrl).startsWith('CPU') ? ' (CPU)' : ''}`)),
-      h('button.btn.small.nav', { onclick: () => { clientRoom.leave(); this.renderRoom(); this.app.toast('Left the room'); } }, 'Leave Room'),
+      h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return; clientRoom.leave(); this.renderRoom(); this.app.toast('Left the room — use Rejoin to come back'); } }, 'Leave Room'),
     ].filter(Boolean) as Node[]));
   }
 
   leave() {
+    if (clientRoom.t && !confirmTwice(this.app, 'leave-room', `You're in room ${clientRoom.t.code} — press again to leave it`)) return;
     clientRoom.leave();
     this.app.go('menu');
   }

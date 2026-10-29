@@ -1,5 +1,5 @@
 // Title, main menu, mode select, results and settings screens.
-import { h, MenuNav, type App, type Screen } from './app';
+import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
@@ -136,12 +136,12 @@ export class Results extends Base {
       h('div.screen-sub', null, state.lastFinish),
       h('table.res-table', null, h('tr', null, ...['BLADER', 'SCORE', 'KOs', 'DAMAGE DEALT', 'FINAL'].map((x) => h('th', null, x))), ...rows),
       online === 'client'
-        ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
+        ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return; clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
         : h('div.lobby-bottom', null,
           again ? h('button.btn.primary.nav', { onclick: () => this.app.go('match', again) }, '↻ Rematch') : null,
           h('button.btn.nav' + (online === 'host' ? '.primary' : ''), { onclick: () => this.app.go('lobby', { mode: cfg.mode, keep: true }) }, online === 'host' ? 'Back to Room' : 'Lobby'),
           online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
-          h('button.btn.nav', { onclick: () => { if (online === 'host') hostRoom.close(); this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
+          h('button.btn.nav', { onclick: () => { if (online === 'host') { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); } this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
     );
   }
   online?: 'host' | 'client';

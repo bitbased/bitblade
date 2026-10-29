@@ -100,3 +100,15 @@ export class MenuNav {
     if (back && this.onBack) { this.onBack(); this.app.sfx.play('back'); }
   }
 }
+
+const confirms = new Map<string, number>();
+/** Destructive actions need a second press within 2.5s. Returns true when confirmed. */
+export function confirmTwice(app: App, key: string, msg: string): boolean {
+  const now = performance.now();
+  const t = confirms.get(key);
+  if (t && now - t < 2500) { confirms.delete(key); return true; }
+  confirms.set(key, now);
+  app.toast(msg);
+  app.sfx.play('back');
+  return false;
+}

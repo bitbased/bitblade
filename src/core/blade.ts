@@ -43,9 +43,28 @@ export interface BladeDesign {
   emblem: string;
   emblemColor: string;
   decals: Decal[];
+  /** manual tuning-point allocation; absent = follow the shape (auto) */
+  tune?: Tune;
 }
 
+export type StatKey = 'attack' | 'defense' | 'stamina' | 'speed' | 'weight' | 'burst';
+export type Tune = Record<StatKey, number>;
+export const STAT_KEYS: StatKey[] = ['attack', 'defense', 'stamina', 'speed', 'weight', 'burst'];
+/** every blade gets the same budget: shapes and tips change HOW points are spread, never how many */
+export const TUNE_BUDGET = 30;
+export const TUNE_MAX = 10;
+export const TUNE_MIN = 2;
+export const STAT_INFO: Record<StatKey, { label: string; short: string; color: string; desc: string }> = {
+  attack: { label: 'Attack', short: 'ATK', color: '#ff4d4d', desc: 'Harder hits: more spin damage, knockback and burst damage dealt' },
+  defense: { label: 'Defense', short: 'DEF', color: '#4da6ff', desc: 'Take less spin damage and get knocked around less' },
+  stamina: { label: 'Stamina', short: 'STA', color: '#38ff7a', desc: 'Spin lasts longer — wins the waiting game and races' },
+  speed: { label: 'Speed', short: 'SPD', color: '#ffd23a', desc: 'Acceleration and handling — how fast you get where you steer' },
+  weight: { label: 'Weight', short: 'WGT', color: '#c77dff', desc: 'Heavier = harder to push around, but a little slower to accelerate' },
+  burst: { label: 'Burst Resist', short: 'BRS', color: '#ff9e3d', desc: 'Resists BURST finishes from big hits' },
+};
+
 export interface BladeStats {
+  points: Tune;
   attack: number; // all 0..1-ish normalised for UI
   defense: number;
   stamina: number;
@@ -75,32 +94,72 @@ export const EMBLEMS = ['', 'star', 'bolt', 'skull', 'crown', 'sparkle', 'yinyan
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-export function computeStats(d: BladeDesign): BladeStats {
+/** What the SHAPE suggests (0..1 each) — used to auto-spread the tuning budget. */
+export function rawProfile(d: BladeDesign): Tune {
   const tip = TIPS[d.tip];
   const wingMass = d.wings * (0.2 + d.wingLength * 0.6) * (0.25 + d.wingWidth * 0.75);
   const mass = 0.75 + d.discWeight * 0.55 + d.discSize * 0.2 + d.ringThickness * 0.2 + wingMass * 0.08;
   // fewer, longer, sharper, curved wings = more attack
-  let attack = 0.15 + d.wingLength * 0.35 + d.wingSharp * 0.25 + Math.abs(d.wingCurve) * 0.12 + (d.wings <= 3 ? 0.12 : d.wings >= 6 ? -0.08 : 0) + tip.friction * 0.12;
+  const attack = 0.15 + d.wingLength * 0.35 + d.wingSharp * 0.25 + Math.abs(d.wingCurve) * 0.12 + (d.wings <= 3 ? 0.12 : d.wings >= 6 ? -0.08 : 0) + tip.friction * 0.12;
   // many wide wings, thick ring, heavy disc = defense
-  let defense = 0.12 + d.wingWidth * 0.2 + d.ringThickness * 0.25 + d.discWeight * 0.25 + (d.wings >= 5 ? 0.1 : 0) - d.wingSharp * 0.08 + (d.tip === 'ball' ? 0.08 : 0);
+  const defense = 0.12 + d.wingWidth * 0.2 + d.ringThickness * 0.25 + d.discWeight * 0.25 + (d.wings >= 5 ? 0.1 : 0) - d.wingSharp * 0.08 + (d.tip === 'ball' ? 0.08 : 0);
   // outward weight and low drag = stamina
-  let stamina = 0.25 + d.discSize * 0.25 + (1 / tip.decay) * 0.25 - d.wingLength * 0.12 - d.wingSharp * 0.05 - (d.wings > 5 ? 0.06 : 0) + d.discWeight * 0.06;
-  let speed = 0.2 + tip.control * 0.4 - (mass - 1) * 0.35 + (1 - d.wingLength) * 0.1;
-  const burstRes = clamp01(0.3 + d.ringThickness * 0.3 + (1 - d.wingLength) * 0.15 + d.discWeight * 0.15 + (d.discNotches < 3 ? 0.1 : 0));
-  attack = clamp01(attack); defense = clamp01(defense); stamina = clamp01(stamina); speed = clamp01(speed);
+  const stamina = 0.25 + d.discSize * 0.25 + (1 / tip.decay) * 0.25 - d.wingLength * 0.12 - d.wingSharp * 0.05 - (d.wings > 5 ? 0.06 : 0) + d.discWeight * 0.06;
+  const speed = 0.2 + tip.control * 0.4 - (mass - 1) * 0.35 + (1 - d.wingLength) * 0.1;
+  const burst = 0.3 + d.ringThickness * 0.3 + (1 - d.wingLength) * 0.15 + d.discWeight * 0.15 + (d.discNotches < 3 ? 0.1 : 0);
+  const weight = (mass - 0.75) / 1.1;
+  const c = (v: number) => Math.max(0.05, Math.min(1, v));
+  return { attack: c(attack), defense: c(defense), stamina: c(stamina), speed: c(speed), weight: c(weight), burst: c(burst) };
+}
+
+/** Spread exactly TUNE_BUDGET points in proportion to a profile (each 1..10). */
+export function spreadPoints(profile: Tune): Tune {
+  // exaggerate differences a little so shapes feel distinct
+  const w = STAT_KEYS.map((k) => Math.pow(profile[k], 1.3));
+  const sum = w.reduce((a, b) => a + b, 0) || 1;
+  // everyone gets the floor; the rest is spread by the shape
+  const spare = TUNE_BUDGET - TUNE_MIN * STAT_KEYS.length;
+  const pts = w.map((v) => Math.max(TUNE_MIN, Math.min(TUNE_MAX, TUNE_MIN + (v / sum) * spare)));
+  const out = pts.map((v) => Math.floor(v));
+  let left = TUNE_BUDGET - out.reduce((a, b) => a + b, 0);
+  const order = pts.map((v, i) => [v - Math.floor(v), i] as const).sort((x, y) => y[0] - x[0]);
+  for (let k = 0; left > 0 && k < 60; k++) { const i = order[k % 6][1]; if (out[i] < TUNE_MAX) { out[i]++; left--; } }
+  for (let k = 0; left < 0 && k < 60; k++) { const i = order[5 - (k % 6)][1]; if (out[i] > TUNE_MIN) { out[i]--; left++; } }
+  return Object.fromEntries(STAT_KEYS.map((k, i) => [k, out[i]])) as Tune;
+}
+
+export function autoTune(d: BladeDesign): Tune { return spreadPoints(rawProfile(d)); }
+
+/** The allocation actually used: the manual tune if valid (never over budget), else auto from the shape. */
+export function effectiveTune(d: BladeDesign): Tune {
+  const t = d.tune;
+  if (!t) return autoTune(d);
+  const out = Object.fromEntries(STAT_KEYS.map((k) => [k, Math.max(TUNE_MIN, Math.min(TUNE_MAX, Math.round(t[k] ?? 5)))])) as Tune;
+  let over = STAT_KEYS.reduce((a, k) => a + out[k], 0) - TUNE_BUDGET;
+  for (let k = 0; over > 0 && k < 200; k++) { const key = STAT_KEYS[k % 6]; if (out[key] > TUNE_MIN) { out[key]--; over--; } }
+  return out;
+}
+
+export function pointsUsed(t: Tune) { return STAT_KEYS.reduce((a, k) => a + t[k], 0); }
+
+export function computeStats(d: BladeDesign): BladeStats {
+  const tip = TIPS[d.tip];
+  const p = effectiveTune(d);
+  const f = (k: StatKey) => p[k] / TUNE_MAX; // 0.1 .. 1
   const ringR = 0.55 + d.ringRadius * 0.15 + d.wingLength * 0.25;
   const radius = 0.55 + ringR * 0.22;
   return {
-    attack, defense, stamina, speed,
-    weight: clamp01((mass - 0.75) / 1.1),
-    burstRes,
-    mass,
+    points: p,
+    attack: f('attack'), defense: f('defense'), stamina: f('stamina'), speed: f('speed'), weight: f('weight'),
+    burstRes: 0.2 + p.burst * 0.07,
+    mass: 0.9 + p.weight * 0.09, // 0.99 .. 1.8
     radius,
     height: 0.55 + d.tipHeight * 0.25,
     tipFriction: tip.friction,
-    spinDecay: 0.011 * tip.decay * (1.25 - stamina * 0.6),
-    // tip sets the feel, but keep every blade drivable: ~0.85x .. 1.25x
-    control: (0.85 + (tip.control - 0.6) * 0.55) * (0.92 + speed * 0.16),
+    // stamina points set spin life; the tip still matters a bit
+    spinDecay: 0.011 * (0.75 + tip.decay * 0.25) * (1.3 - p.stamina * 0.065),
+    // speed points set acceleration (~0.85x..1.25x); weight trims it slightly; tip adds a little flavour
+    control: (0.82 + p.speed * 0.04 + (tip.control - 0.95) * 0.15) * (1.05 - p.weight * 0.012),
   };
 }
 
@@ -123,14 +182,14 @@ export function defaultDesign(): BladeDesign {
 const P = (o: Partial<BladeDesign>): BladeDesign => ({ ...defaultDesign(), ...o });
 
 export const PRESETS: BladeDesign[] = [
-  P({ id: 'preset-pyro', name: 'Pyro Drake', wings: 3, wingLength: 0.85, wingWidth: 0.45, wingCurve: 0.7, wingSharp: 0.8, ringThickness: 0.4, discWeight: 0.6, tip: 'flat', primary: '#ff3b1f', secondary: '#2a0800', accent: '#ffc530', glow: '#ff6a00', pattern: 'flames', emblem: 'sun', metal: 0.5 }),
-  P({ id: 'preset-frost', name: 'Frost Fang', spinDir: -1, wings: 6, wingLength: 0.4, wingWidth: 0.75, wingCurve: -0.3, wingSharp: 0.5, ringThickness: 0.8, discWeight: 0.85, discSize: 0.6, tip: 'ball', primary: '#9fe8ff', secondary: '#0b2a44', accent: '#ffffff', glow: '#5fd6ff', pattern: 'scales', emblem: 'sparkle', metal: 0.85, rough: 0.15 }),
-  P({ id: 'preset-volt', name: 'Volt Viper', wings: 2, wingLength: 1.0, wingWidth: 0.35, wingCurve: 0.9, wingSharp: 1.0, ringThickness: 0.3, discWeight: 0.45, tip: 'rubber', primary: '#ffe600', secondary: '#151515', accent: '#00ffa2', glow: '#e8ff3a', pattern: 'lightning', emblem: 'bolt', metal: 0.3 }),
-  P({ id: 'preset-terra', name: 'Terra Golem', wings: 5, wingLength: 0.3, wingWidth: 0.95, wingCurve: 0.1, wingSharp: 0.1, ringThickness: 1, discWeight: 1, discSize: 0.8, discNotches: 0, tip: 'ball', primary: '#7a5a3a', secondary: '#2b2b2b', accent: '#9cff6b', glow: '#6bff8f', pattern: 'camo', emblem: 'hex', metal: 0.7, rough: 0.6 }),
-  P({ id: 'preset-nebula', name: 'Nebula Wraith', spinDir: -1, wings: 4, wingLength: 0.6, wingWidth: 0.5, wingCurve: -0.8, wingSharp: 0.6, ringThickness: 0.5, discSize: 1, discWeight: 0.7, tip: 'needle', primary: '#7b2cff', secondary: '#10002b', accent: '#ff5cf4', glow: '#c77dff', pattern: 'stars', emblem: 'moon', metal: 0.6 }),
-  P({ id: 'preset-kraken', name: 'Solar Kraken', wings: 8, wingLength: 0.55, wingWidth: 0.3, wingCurve: 0.5, wingSharp: 0.7, ringThickness: 0.6, discWeight: 0.6, tip: 'wheel', primary: '#ff8c00', secondary: '#003049', accent: '#00f5d4', glow: '#ffb703', pattern: 'radial', emblem: 'target', metal: 0.75 }),
-  P({ id: 'preset-onyx', name: 'Onyx Reaper', wings: 3, wingLength: 0.7, wingWidth: 0.55, wingCurve: -0.5, wingSharp: 0.9, ringThickness: 0.7, discWeight: 0.8, tip: 'sharp', primary: '#1a1a1a', secondary: '#000000', accent: '#ff0044', glow: '#ff0044', pattern: 'carbon', emblem: 'skull', metal: 0.9, rough: 0.2 }),
-  P({ id: 'preset-circuit', name: 'Cyber Mantis', spinDir: -1, wings: 4, wingLength: 0.75, wingWidth: 0.4, wingCurve: 0.6, wingSharp: 0.85, ringThickness: 0.45, discWeight: 0.55, tip: 'flat', primary: '#00ff9d', secondary: '#04140c', accent: '#00b3ff', glow: '#00ff9d', pattern: 'circuit', emblem: 'diamond', metal: 0.4 }),
+  P({ id: 'preset-pyro', tune: { attack: 9, defense: 3, stamina: 3, speed: 6, weight: 5, burst: 4 }, name: 'Pyro Drake', wings: 3, wingLength: 0.85, wingWidth: 0.45, wingCurve: 0.7, wingSharp: 0.8, ringThickness: 0.4, discWeight: 0.6, tip: 'flat', primary: '#ff3b1f', secondary: '#2a0800', accent: '#ffc530', glow: '#ff6a00', pattern: 'flames', emblem: 'sun', metal: 0.5 }),
+  P({ id: 'preset-frost', tune: { attack: 3, defense: 8, stamina: 5, speed: 4, weight: 6, burst: 4 }, name: 'Frost Fang', spinDir: -1, wings: 6, wingLength: 0.4, wingWidth: 0.75, wingCurve: -0.3, wingSharp: 0.5, ringThickness: 0.8, discWeight: 0.85, discSize: 0.6, tip: 'ball', primary: '#9fe8ff', secondary: '#0b2a44', accent: '#ffffff', glow: '#5fd6ff', pattern: 'scales', emblem: 'sparkle', metal: 0.85, rough: 0.15 }),
+  P({ id: 'preset-volt', tune: { attack: 9, defense: 2, stamina: 3, speed: 8, weight: 4, burst: 4 }, name: 'Volt Viper', wings: 2, wingLength: 1.0, wingWidth: 0.35, wingCurve: 0.9, wingSharp: 1.0, ringThickness: 0.3, discWeight: 0.45, tip: 'rubber', primary: '#ffe600', secondary: '#151515', accent: '#00ffa2', glow: '#e8ff3a', pattern: 'lightning', emblem: 'bolt', metal: 0.3 }),
+  P({ id: 'preset-terra', tune: { attack: 3, defense: 9, stamina: 5, speed: 3, weight: 7, burst: 3 }, name: 'Terra Golem', wings: 5, wingLength: 0.3, wingWidth: 0.95, wingCurve: 0.1, wingSharp: 0.1, ringThickness: 1, discWeight: 1, discSize: 0.8, discNotches: 0, tip: 'ball', primary: '#7a5a3a', secondary: '#2b2b2b', accent: '#9cff6b', glow: '#6bff8f', pattern: 'camo', emblem: 'hex', metal: 0.7, rough: 0.6 }),
+  P({ id: 'preset-nebula', tune: { attack: 4, defense: 3, stamina: 9, speed: 5, weight: 5, burst: 4 }, name: 'Nebula Wraith', spinDir: -1, wings: 4, wingLength: 0.6, wingWidth: 0.5, wingCurve: -0.8, wingSharp: 0.6, ringThickness: 0.5, discSize: 1, discWeight: 0.7, tip: 'needle', primary: '#7b2cff', secondary: '#10002b', accent: '#ff5cf4', glow: '#c77dff', pattern: 'stars', emblem: 'moon', metal: 0.6 }),
+  P({ id: 'preset-kraken', tune: { attack: 5, defense: 5, stamina: 5, speed: 5, weight: 5, burst: 5 }, name: 'Solar Kraken', wings: 8, wingLength: 0.55, wingWidth: 0.3, wingCurve: 0.5, wingSharp: 0.7, ringThickness: 0.6, discWeight: 0.6, tip: 'wheel', primary: '#ff8c00', secondary: '#003049', accent: '#00f5d4', glow: '#ffb703', pattern: 'radial', emblem: 'target', metal: 0.75 }),
+  P({ id: 'preset-onyx', tune: { attack: 8, defense: 4, stamina: 5, speed: 4, weight: 5, burst: 4 }, name: 'Onyx Reaper', wings: 3, wingLength: 0.7, wingWidth: 0.55, wingCurve: -0.5, wingSharp: 0.9, ringThickness: 0.7, discWeight: 0.8, tip: 'sharp', primary: '#1a1a1a', secondary: '#000000', accent: '#ff0044', glow: '#ff0044', pattern: 'carbon', emblem: 'skull', metal: 0.9, rough: 0.2 }),
+  P({ id: 'preset-circuit', tune: { attack: 8, defense: 3, stamina: 4, speed: 7, weight: 4, burst: 4 }, name: 'Cyber Mantis', spinDir: -1, wings: 4, wingLength: 0.75, wingWidth: 0.4, wingCurve: 0.6, wingSharp: 0.85, ringThickness: 0.45, discWeight: 0.55, tip: 'flat', primary: '#00ff9d', secondary: '#04140c', accent: '#00b3ff', glow: '#00ff9d', pattern: 'circuit', emblem: 'diamond', metal: 0.4 }),
 ];
 
 const LS_KEY = 'bitblade.blades.v1';
@@ -225,6 +284,7 @@ export function randomizeDesign(base: BladeDesign, part: RandomPart = 'all', sty
     d.ringRadius = r();
     if (r() < 0.3) d.spinDir = d.spinDir === 1 ? -1 : 1;
   }
+  if (part === 'all' || part === 'shape' || part === 'core') delete d.tune;
   if (part === 'all' || part === 'core') {
     const tips = tipsFor[style];
     d.tip = tips[Math.floor(r() * tips.length)];

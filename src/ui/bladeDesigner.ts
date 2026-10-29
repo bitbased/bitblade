@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import './bladeDesigner.css';
 import { h, MenuNav, type App, type Screen } from './app';
 import { icon, ICONS } from './icons';
-import type { RandomPalette, RandomPart, RandomStyle } from '../core/blade';
+import type { RandomPalette, RandomPart, RandomStyle, StatKey } from '../core/blade';
+import { autoTune, effectiveTune, pointsUsed, STAT_INFO, STAT_KEYS, TUNE_BUDGET, TUNE_MAX, TUNE_MIN } from '../core/blade';
 import { getRenderer } from '../game/render';
 import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import {
@@ -11,8 +12,8 @@ import {
   type BladeDesign, type Decal, type TipType,
 } from '../core/blade';
 
-type Tab = 'shape' | 'core' | 'paint' | 'decals';
-type NumKey = { [K in keyof BladeDesign]: BladeDesign[K] extends number ? K : never }[keyof BladeDesign];
+type Tab = 'tune' | 'shape' | 'core' | 'paint' | 'decals';
+type NumKey = Exclude<{ [K in keyof BladeDesign]-?: BladeDesign[K] extends number ? K : never }[keyof BladeDesign], undefined>;
 
 const SPECIALS = { attack: 'METEOR RUSH', defense: 'IRON FORTRESS', stamina: 'ETERNAL VORTEX', speed: 'SKY DIVE' } as const;
 const STAT_COLORS: Record<string, string> = { attack: '#ff4a5e', defense: '#47b6ff', stamina: '#38ffb0', speed: '#ffe23a', weight: '#c9a2ff', burstRes: '#ff9e3d' };
@@ -28,7 +29,7 @@ class BladeDesigner implements Screen {
   custom: BladeDesign[] = [];
   cur: BladeDesign = clone(PRESETS[0]);
   isPreset = true;
-  tab: Tab = 'shape';
+  tab: Tab = 'tune';
   placing = false;
   // 3d
   scene = new THREE.Scene();
@@ -359,7 +360,7 @@ class BladeDesigner implements Screen {
     this.bindStage();
     // editor
     const tabs = h('div.bd-tabs');
-    for (const t of ['shape', 'core', 'paint', 'decals'] as Tab[]) {
+    for (const t of ['tune', 'shape', 'core', 'paint', 'decals'] as Tab[]) {
       const b = h('button.bd-mini.nav', { onclick: () => { this.tab = t; this.renderTab(); app.sfx.play('tick'); } }, t) as HTMLButtonElement;
       this.tabBtns[t] = b;
       tabs.append(b);
@@ -442,28 +443,60 @@ class BladeDesigner implements Screen {
   renderStats() {
     if (!this.statsEl) return;
     const st = computeStats(this.cur);
-    if (!this.statsEl.childElementCount) {
-      for (const k of Object.keys(STAT_LABEL)) {
-        this.statsEl.append(h('div.bd-stat', { 'data-k': k },
-          h('span', null, STAT_LABEL[k]),
-          h('div.bd-bar', null, h('i', { style: { background: STAT_COLORS[k], color: STAT_COLORS[k] } })),
-          h('output'),
-        ));
-      }
-      this.statsEl.append(h('div.bd-special', null, h('b'), h('span')));
-    }
-    for (const k of Object.keys(STAT_LABEL)) {
-      const row = this.statsEl.querySelector(`[data-k="${k}"]`)!;
-      const v = st[k as keyof typeof st] as number;
-      (row.querySelector('i') as HTMLElement).style.width = `${Math.round(v * 100)}%`;
-      row.querySelector('output')!.textContent = String(Math.round(v * 100));
+    this.statsEl.innerHTML = '';
+    for (const k of STAT_KEYS) {
+      const info = STAT_INFO[k];
+      const v = st.points[k];
+      const pips = h('div.bd-pips');
+      for (let n = 1; n <= TUNE_MAX; n++) pips.append(h('i' + (n <= v ? '.on' : ''), { style: n <= v ? { background: info.color, boxShadow: `0 0 6px ${info.color}` } : null }));
+      this.statsEl.append(h('div.bd-stat', { title: info.desc }, h('span', null, info.label), pips, h('output', null, String(v))));
     }
     const kinds = ['attack', 'defense', 'stamina', 'speed'] as const;
     let best: (typeof kinds)[number] = kinds[0];
-    for (const k of kinds) if (st[k] > st[best]) best = k;
-    const sp = this.statsEl.querySelector('.bd-special')!;
-    sp.querySelector('b')!.textContent = `SPECIAL: ${SPECIALS[best]}`;
-    sp.querySelector('span')!.textContent = `${TIPS[this.cur.tip].label} tip — ${TIPS[this.cur.tip].desc}`;
+    for (const k of kinds) if (st.points[k] > st.points[best]) best = k;
+    this.statsEl.append(h('div.bd-special', null,
+      h('b', null, `SPECIAL: ${SPECIALS[best]}`),
+      h('span', null, `${TIPS[this.cur.tip].label} tip — ${TIPS[this.cur.tip].desc} · ${this.cur.tune ? 'manual tuning' : 'auto-tuned from shape'} · accel ${st.control.toFixed(2)}x · mass ${st.mass.toFixed(2)}`)));
+  }
+
+  tuneTab(body: HTMLElement) {
+    const d = this.cur;
+    const t = effectiveTune(d);
+    const used = pointsUsed(t);
+    const set = (k: StatKey, v: number) => {
+      const cur = effectiveTune(this.cur);
+      const next = { ...cur, [k]: Math.max(TUNE_MIN, Math.min(TUNE_MAX, v)) };
+      if (pointsUsed(next) > TUNE_BUDGET) { this.app.toast('Out of points — take some from another stat'); this.app.sfx.play('back'); return; }
+      this.modify((x) => { x.tune = next; }, true);
+      this.app.sfx.play('tick');
+    };
+    body.append(
+      h('div.bd-tune-head', null,
+        h('div', null, h('b', null, `${used}`), ` / ${TUNE_BUDGET} POINTS`),
+        h('div.bd-tune-left' + (used < TUNE_BUDGET ? '.spare' : ''), null, used < TUNE_BUDGET ? `${TUNE_BUDGET - used} unspent!` : 'all spent')),
+      h('div.bd-tipdesc', null, 'Every blade gets the same budget. Spend it on what you want your blade to be good at — the shape only suggests a spread.'),
+      h('div.bd-lib-btns', null,
+        h('button.bd-mini.nav' + (d.tune ? '' : '.bd-on'), { onclick: () => this.modify((x) => { delete x.tune; }, true), title: 'Let the shape decide the spread' }, 'Auto from shape'),
+        h('button.bd-mini.nav', { onclick: () => this.modify((x) => { x.tune = autoTune(x); }, true), title: 'Start manual tuning from the shape suggestion' }, 'Copy auto → manual'),
+        h('button.bd-mini.nav', { onclick: () => this.modify((x) => { x.tune = { attack: 5, defense: 5, stamina: 5, speed: 5, weight: 5, burst: 5 }; }, true) }, 'Even 5s')),
+    );
+    for (const k of STAT_KEYS) {
+      const info = STAT_INFO[k];
+      const v = t[k];
+      const pips = h('div.bd-pips.big');
+      for (let n = 1; n <= TUNE_MAX; n++) {
+        const pip = h('i.nav' + (n <= v ? '.on' : ''), { title: `Set ${info.label} to ${n}`, onclick: () => set(k, n) });
+        if (n <= v) Object.assign(pip.style, { background: info.color, boxShadow: `0 0 8px ${info.color}` });
+        pips.append(pip);
+      }
+      const row = h('div.bd-tune-row.nav', { 'data-navx': '' },
+        h('div.bd-tune-top', null, h('b', { style: { color: info.color } }, info.label), h('span.bd-tune-val', null, `${v}`)),
+        h('div.bd-tune-ctl', null,
+          h('button.bd-mini', { onclick: () => set(k, v - 1) }, '−'), pips, h('button.bd-mini', { onclick: () => set(k, v + 1) }, '+')),
+        h('div.bd-tune-desc', null, info.desc));
+      row.addEventListener('navx', (e) => set(k, v + (e as CustomEvent).detail));
+      body.append(row);
+    }
   }
 
   slider(label: string, key: NumKey, min: number, max: number, step: number) {
@@ -492,6 +525,9 @@ class BladeDesigner implements Screen {
     body.innerHTML = '';
     const d = this.cur;
     switch (this.tab) {
+      case 'tune':
+        this.tuneTab(body);
+        break;
       case 'shape':
         body.append(
           h('div.bd-sub', null, 'Attack Ring'),

@@ -1,5 +1,5 @@
 // Match screen: runs the sim (local / host) or mirrors snapshots (client), renders, HUD, pause.
-import { h, MenuNav, type App, type Screen } from './app';
+import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { Hud } from './hud';
 import { Sim } from '../game/sim';
 import { GameView } from '../game/render';
@@ -56,6 +56,10 @@ export class MatchScreen implements Screen {
     this.wrap = h('div', { style: { position: 'absolute', inset: '0', pointerEvents: 'none' } });
     app.root.append(this.wrap);
     this.hud = new Hud(this.wrap, cfg);
+    if (this.arg.host || this.arg.client) {
+      const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
+      this.wrap.append(h('div.online-badge', null, h('span.dot'), `ROOM ${code ?? ''}`, h('small', null, this.arg.host ? 'YOU LEAD' : 'ESC: MENU')));
+    }
     const clientTouch = !!this.arg.client && this.arg.client.mine.length > 0 && Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches;
     if (clientTouch || cfg.players.some((p) => p.ctrl.type === 'touch' && this.isLocal(cfg.players.indexOf(p)))) {
       this.touch = new TouchControls(this.wrap);
@@ -82,6 +86,11 @@ export class MatchScreen implements Screen {
           if (peerSlot.get(peer) !== idx) return;
           this.sim!.setControl(idx, m.c);
           if (typeof m.seq === 'number') this.acks[idx] = m.seq;
+        };
+        hostRoom.onQuitMatch = (peer) => {
+          const idx = peerSlot.get(peer);
+          const top = idx !== undefined ? this.sim!.s.tops[idx] : undefined;
+          if (top?.alive) { top.spin = 0; this.app.toast(`${top.name} left the match (still in the room)`); }
         };
         this.unsubRoom = hostRoom.subscribe(() => {
           // a player who left the room spins out
@@ -248,9 +257,25 @@ export class MatchScreen implements Screen {
     this.paused = !this.paused;
     if (this.paused) {
       const resume = h('button.btn.nav', { onclick: () => this.togglePause() }, 'Resume');
-      const restart = h('button.btn.nav', { onclick: () => this.restart(), disabled: !!this.arg.client }, 'Restart');
-      const quit = h('button.btn.nav', { onclick: () => { this.quit(); } }, this.arg.host || this.arg.client ? 'Leave Match' : 'Quit to Menu');
-      this.pauseEl = h('div.pause', null, h('h2', null, this.arg.host || this.arg.client ? 'MENU' : 'PAUSED'), resume, restart, quit, this.hud.controlsHelp());
+      let buttons: HTMLElement[];
+      if (this.arg.host) {
+        buttons = [
+          h('button.btn.nav', { onclick: () => this.quit() }, 'End Match — everyone back to room'),
+          h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) this.closeRoomAndQuit(); } }, 'Close Room & Quit'),
+        ];
+      } else if (this.arg.client) {
+        buttons = [
+          h('button.btn.nav', { onclick: () => this.leaveMatchStayInRoom() }, 'Leave Match — stay in room'),
+          h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) this.quit(); } }, 'Leave Room'),
+        ];
+      } else {
+        buttons = [h('button.btn.nav', { onclick: () => this.restart() }, 'Restart'), h('button.btn.nav', { onclick: () => this.quit() }, 'Quit to Menu')];
+      }
+      const online = this.arg.host || this.arg.client;
+      const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
+      this.pauseEl = h('div.pause', null, h('h2', null, online ? 'MENU' : 'PAUSED'),
+        online ? h('div.hint', null, `ONLINE ROOM ${code ?? ''} · the match keeps running while this menu is open`) : null,
+        resume, ...buttons, this.hud.controlsHelp());
       this.wrap.append(this.pauseEl);
       this.pauseNav = new MenuNav(this.app, this.pauseEl);
       this.pauseNav.focus(0);
@@ -264,6 +289,20 @@ export class MatchScreen implements Screen {
   restart() {
     const arg = { ...this.arg, cfg: { ...this.arg.cfg, seed: (Math.random() * 1e9) | 0 } };
     this.app.go('match', arg);
+  }
+
+  leaveMatchStayInRoom() {
+    this.ended = true;
+    clientRoom.send({ t: 'quitmatch' });
+    clientRoom.busy = true;
+    this.app.go('online', { resume: true });
+  }
+
+  closeRoomAndQuit() {
+    this.ended = true;
+    hostRoom.send('all', { t: 'end' });
+    hostRoom.close();
+    this.app.go('menu');
   }
 
   quit() {
@@ -297,7 +336,7 @@ export class MatchScreen implements Screen {
     this.wrap.remove();
     this.view.dispose();
     this.unsubRoom?.();
-    if (this.arg.host) hostRoom.onInput = null;
+    if (this.arg.host) { hostRoom.onInput = null; hostRoom.onQuitMatch = null; }
     if (this.arg.client) { clientRoom.handler = null; clientRoom.closeHandler = null; }
   }
 }

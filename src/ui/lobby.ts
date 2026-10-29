@@ -1,6 +1,6 @@
 // Local + online-host lobby: press-to-join slots, blades, teams, arena, rules, invite codes.
-import { h, MenuNav, type App, type Screen } from './app';
-import { allBlades, computeStats, findBlade, PRESETS, type BladeDesign } from '../core/blade';
+import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
+import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
 import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
 import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
@@ -188,7 +188,7 @@ export class LobbyScreen implements Screen {
 
     return h('div.screen', null,
       h('div.screen-head', null,
-        h('button.btn.small.nav', { onclick: () => this.leave() }, '◀ Back'),
+        h('button.btn.small.nav', { onclick: () => this.leave() }, hostRoom.t ? '◀ Close Room' : '◀ Back'),
         h('div.screen-title', null, 'LOBBY'),
         h('div.screen-sub', null, m.desc),
         h('div.spacer'),
@@ -366,10 +366,12 @@ export class LobbyScreen implements Screen {
 
   statLine(d: BladeDesign) {
     const st = computeStats(d);
-    const pip = (v: number) => Math.max(1, Math.round(v * 10));
-    const ctl = Math.round(((st.control - 0.8) / 0.5) * 10);
-    return h('div.slot-stats', { title: `Attack / Defense / Stamina / Control (acceleration)` },
-      ...([['ATK', pip(st.attack)], ['DEF', pip(st.defense)], ['STA', pip(st.stamina)], ['CTL', Math.max(1, Math.min(10, ctl))]] as const).map(([k, v]) => h('span', null, h('b', null, k), ` ${v}`)));
+    return h('div.slot-stats', null, ...STAT_KEYS.map((k) => {
+      const info = STAT_INFO[k];
+      return h('div.ss', { title: `${info.label} ${st.points[k]}/10 — ${info.desc}` },
+        h('b', null, info.short),
+        h('span.ssbar', null, h('i', { style: { width: `${st.points[k] * 10}%`, background: info.color } })));
+    }));
   }
 
   removeSlot(i: number) {
@@ -429,7 +431,7 @@ export class LobbyScreen implements Screen {
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
         h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, ctl,
-          h('button.btn.small.nav', { onclick: () => { hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
+          h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
       return;
     }
@@ -494,7 +496,11 @@ export class LobbyScreen implements Screen {
   }
 
   leave() {
-    if (hostRoom.t) { hostRoom.close(); L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote'); }
+    if (hostRoom.t) {
+      if (!confirmTwice(this.app, 'close-room', `Room ${hostRoom.t.code} is open — press again to CLOSE it for everyone`)) return;
+      hostRoom.close();
+      L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
+    }
     this.app.go('menu');
   }
 

@@ -13,6 +13,7 @@ class HostRoom {
   inMatch = false;
   onCtl: ((peer: number, m: any) => void) | null = null; // lobby: remote room control
   onInput: ((peer: number, m: any) => void) | null = null; // match: remote player input
+  onQuitMatch: ((peer: number) => void) | null = null; // match: a guest stepped out (still in the room)
   private subs = new Set<() => void>();
 
   open(t: HostTransport) {
@@ -33,6 +34,7 @@ class HostRoom {
         this.notify();
       } else if (m.t === 'ctl') this.onCtl?.(peer, m);
       else if (m.t === 'in') this.onInput?.(peer, m);
+      else if (m.t === 'quitmatch') this.onQuitMatch?.(peer);
     });
     this.notify();
   }
@@ -56,6 +58,13 @@ class ClientRoom {
   busy = false;
   handler: ((m: any) => void) | null = null;
   closeHandler: ((reason: string) => void) | null = null;
+  /** what we joined with last, so a dropped/left room can be rejoined in one click */
+  lastJoin: string | null = (() => { try { return localStorage.getItem('bitblade.lastRoom'); } catch { return null; } })();
+
+  remember(input: string) {
+    this.lastJoin = input;
+    try { localStorage.setItem('bitblade.lastRoom', input); } catch { /* ignore */ }
+  }
 
   attach(t: ClientTransport) {
     this.leave();

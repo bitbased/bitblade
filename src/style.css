@@ -206,5 +206,12 @@ body.ingame .hide-ingame { display: none; }
 .title-foot .ico { width: 18px; height: 18px; color: var(--accent); }
 .wrong-way { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font-family: var(--font-h); font-weight: 900; font-size: 54px; letter-spacing: 0.15em; color: var(--red); text-shadow: 0 0 30px var(--red); display: none; animation: blink 0.5s infinite; pointer-events: none; }
 .wrong-way.on { display: block; }
-.slot .slot-stats { display: flex; gap: 8px; font-size: 12px; color: var(--muted); }
-.slot .slot-stats b { font-family: var(--font-h); font-size: 9px; letter-spacing: 0.1em; color: var(--accent); }
+.slot .slot-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; width: 100%; padding: 0 4px; }
+.slot .slot-stats .ss { display: flex; align-items: center; gap: 5px; }
+.slot .slot-stats b { font-family: var(--font-h); font-size: 8px; letter-spacing: 0.08em; color: var(--muted); width: 26px; }
+.slot .ssbar { flex: 1; height: 5px; background: rgba(255,255,255,0.08); position: relative; overflow: hidden; }
+.slot .ssbar i { position: absolute; left: 0; top: 0; bottom: 0; }
+
+.online-badge { position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--line); font-family: var(--font-h); font-size: 12px; letter-spacing: 0.15em; pointer-events: none; }
+.online-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #38ff7a; box-shadow: 0 0 8px #38ff7a; animation: blink 1.6s infinite; }
+.online-badge small { color: var(--muted); font-size: 10px; letter-spacing: 0.12em; }
