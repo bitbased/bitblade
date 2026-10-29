@@ -524,6 +524,9 @@ class BladeDesigner implements Screen {
     const body = this.tabBody;
     body.innerHTML = '';
     const d = this.cur;
+    const label: Record<Tab, string> = { tune: 'points', shape: 'shape', core: 'core & tip', paint: 'paint', decals: 'decals' };
+    body.append(h('div.bd-tabrand', null,
+      h('button.bd-mini.nav', { onclick: () => this.randomize(this.tab), title: `Re-roll only the ${label[this.tab]} (uses the Style / Palette pickers below the preview)` }, icon('dice'), ` Randomize ${label[this.tab]}`)));
     switch (this.tab) {
       case 'tune':
         this.tuneTab(body);

@@ -248,7 +248,7 @@ export function hslToHex(h: number, s: number, l: number) {
 }
 
 // ---------------------------------------------------------------- randomizer
-export type RandomPart = 'all' | 'shape' | 'core' | 'paint' | 'decals';
+export type RandomPart = 'all' | 'tune' | 'shape' | 'core' | 'paint' | 'decals';
 export type RandomStyle = 'any' | 'attack' | 'defense' | 'stamina' | 'balance';
 export type RandomPalette = 'any' | 'neon' | 'fire' | 'ice' | 'toxic' | 'royal' | 'mono' | 'metal' | 'complement';
 
@@ -319,6 +319,23 @@ export function randomizeDesign(base: BladeDesign, part: RandomPart = 'all', sty
         d.decals.push({ glyph: g, x: Math.cos(aa) * rad, y: Math.sin(aa) * rad, size, rot: aa + Math.PI / 2, color });
       }
     }
+  }
+  if (part === 'tune') {
+    // random spread of the budget, nudged toward the chosen battle style
+    const bias: Record<RandomStyle, Partial<Tune>> = {
+      any: {}, attack: { attack: 3, speed: 1.5 }, defense: { defense: 3, weight: 2, burst: 1.5 }, stamina: { stamina: 3, burst: 1 }, balance: { attack: 1, defense: 1, stamina: 1, speed: 1 },
+    };
+    const t = Object.fromEntries(STAT_KEYS.map((k) => [k, TUNE_MIN])) as Tune;
+    let left = TUNE_BUDGET - TUNE_MIN * STAT_KEYS.length;
+    while (left > 0) {
+      const w = STAT_KEYS.map((k) => (t[k] >= TUNE_MAX ? 0 : 1 + (bias[style][k] ?? 0) + r() * 2));
+      let x = r() * w.reduce((a, b) => a + b, 0);
+      let pick = 0;
+      while (x > w[pick]) { x -= w[pick]; pick++; }
+      t[STAT_KEYS[Math.min(pick, 5)]]++;
+      left--;
+    }
+    d.tune = t;
   }
   if (!keepName || part === 'all') d.name = `${NAME_A[Math.floor(r() * NAME_A.length)]} ${NAME_B[Math.floor(r() * NAME_B.length)]}`;
   return d;
