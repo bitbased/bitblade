@@ -383,6 +383,21 @@ export class GameView {
   focus: number[] = []; // local player ids the camera should follow (race)
   camFwd = { x: 0, z: -1 }; // camera forward on the ground plane (controls are camera-relative)
   chaseYaw: number | null = null;
+  /** split-screen: one chase camera per local racer */
+  splits: { id: number; cam: THREE.PerspectiveCamera; pos: THREE.Vector3; tgt: THREE.Vector3; yaw: number | null; fwd: { x: number; z: number } }[] = [];
+
+  enableSplit(ids: number[]) {
+    this.splits = ids.slice(0, 4).map((id) => ({ id, cam: new THREE.PerspectiveCamera(62, 1, 0.1, 800), pos: this.camPos.clone(), tgt: this.camTarget.clone(), yaw: null, fwd: { x: 0, z: -1 } }));
+  }
+
+  camFwdOf(id: number) { return this.splits.find((v) => v.id === id)?.fwd ?? this.camFwd; }
+
+  /** viewport rects (CSS px, origin bottom-left like WebGL): 2 = top/bottom, 3-4 = quadrants */
+  splitRects() {
+    const W = innerWidth, H = innerHeight, n = this.splits.length;
+    if (n === 2) return [[0, H / 2, W, H / 2], [0, 0, W, H / 2]];
+    return [[0, H / 2, W / 2, H / 2], [W / 2, H / 2, W / 2, H / 2], [0, 0, W / 2, H / 2], [W / 2, 0, W / 2, H / 2]].slice(0, n);
+  }
   sun: THREE.DirectionalLight;
   private shared = {
     crystalGeo: new THREE.OctahedronGeometry(0.28),
@@ -666,9 +681,18 @@ export class GameView {
   }
 
   /** world point on a horizontal plane at height y under screen ndc */
-  groundPoint(ndc: { x: number; y: number }, y = 0) {
+  groundPoint(ndc: { x: number; y: number }, y = 0, id = -1) {
     const ray = new THREE.Raycaster();
-    ray.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+    let cam: THREE.Camera = this.camera, nx = ndc.x, ny = ndc.y;
+    const k = this.splits.findIndex((v) => v.id === id);
+    if (k >= 0 && this.splits.length > 1 && this.terrain.track) {
+      // remap full-screen NDC into this player's viewport
+      const [vx, vy, vw, vh] = this.splitRects()[k];
+      const px = ((ndc.x + 1) / 2) * innerWidth, py = ((ndc.y + 1) / 2) * innerHeight;
+      nx = ((px - vx) / vw) * 2 - 1; ny = ((py - vy) / vh) * 2 - 1;
+      cam = this.splits[k].cam;
+    }
+    ray.setFromCamera(new THREE.Vector2(nx, ny), cam);
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -y);
     const p = new THREE.Vector3();
     return ray.ray.intersectPlane(plane, p) ? { x: p.x, z: p.z } : null;
@@ -924,6 +948,24 @@ export class GameView {
   }
 
   updateCamera(s: GameState, dt: number) {
+    const T0 = this.terrain.track;
+    if (T0 && this.splits.length > 1) {
+      for (const v of this.splits) {
+        const t = s.tops[v.id];
+        if (!t) continue;
+        const c = chaseCamera(T0, [t], v.yaw, 0, dt);
+        v.yaw = c.yaw;
+        v.tgt.lerp(new THREE.Vector3(c.tx, c.ty, c.tz), Math.min(1, dt * 6));
+        v.pos.lerp(new THREE.Vector3(c.px, c.py, c.pz), Math.min(1, dt * 5));
+        v.cam.position.copy(v.pos);
+        if (this.shake > 0) { v.cam.position.x += (Math.random() - 0.5) * this.shake * 0.4; v.cam.position.y += (Math.random() - 0.5) * this.shake * 0.4; }
+        v.cam.lookAt(v.tgt);
+        const fx = v.tgt.x - v.pos.x, fz = v.tgt.z - v.pos.z, fl = Math.hypot(fx, fz) || 1;
+        v.fwd.x = fx / fl; v.fwd.z = fz / fl;
+      }
+      this.shake = Math.max(0, this.shake - dt * 3);
+      return;
+    }
     let pts = s.tops.filter((t) => t.alive || (s.phase !== 'battle' && t.out !== 'over' && t.out !== 'xtreme'));
     if (this.terrain.track) {
       const f = this.focus.length ? this.focus.map((i) => s.tops[i]).filter(Boolean) : [...s.tops].sort((a, b) => a.place - b.place).slice(0, 1);
@@ -974,6 +1016,32 @@ export class GameView {
       this.renderer.setSize(innerWidth, innerHeight);
       this.composer.setPixelRatio(perf.ratio());
       this.composer.setSize(innerWidth, innerHeight);
+    }
+    if (this.splits.length > 1 && this.terrain.track) {
+      // split-screen: render each racer's camera into its own viewport (no bloom — it's full-screen only)
+      const r = this.renderer;
+      r.setScissorTest(true);
+      this.splitRects().forEach(([x, y, w, h], k) => {
+        const cam = this.splits[k].cam;
+        if (Math.abs(cam.aspect - w / h) > 1e-3) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
+        r.setViewport(x, y, w, h);
+        r.setScissor(x, y, w, h);
+        r.render(this.scene, cam);
+      });
+      if (this.splits.length === 3) {
+        // spare quadrant: overhead map of the whole track
+        const W = innerWidth / 2, H = innerHeight / 2, S = this.terrain.size;
+        this.camera.aspect = W / H; this.camera.updateProjectionMatrix();
+        const cx = this.terrain.minX + (this.terrain.nx * this.terrain.cell) / 2, cz = this.terrain.minZ + (this.terrain.nz * this.terrain.cell) / 2;
+        this.camera.position.set(cx, S * 1.9, cz + S * 0.35);
+        this.camera.lookAt(cx, 0, cz);
+        r.setViewport(W, 0, W, H);
+        r.setScissor(W, 0, W, H);
+        r.render(this.scene, this.camera);
+      }
+      r.setScissorTest(false);
+      r.setViewport(0, 0, innerWidth, innerHeight);
+      return;
     }
     if (settings.bloom) this.composer.render();
     else this.renderer.render(this.scene, this.camera);

@@ -41,6 +41,8 @@ export class MatchScreen implements Screen {
   lastSent = new Map<number, { mx: number; mz: number }>();
   ended = false;
   wrongT = 0;
+  splitTags: HTMLElement[] = [];
+  splitLines: HTMLElement | null = null;
   unsubRoom: (() => void) | null = null;
   wrap!: HTMLElement;
   private pendingCtl = new Map<number, { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean }>();
@@ -53,9 +55,22 @@ export class MatchScreen implements Screen {
     document.body.classList.add('ingame');
     this.view = new GameView(app.canvas, cfg);
     this.view.focus = cfg.players.map((_, i) => i).filter((i) => this.isLocal(i));
+    // local multiplayer races: split-screen, one chase camera each
+    if (cfg.arena.track && this.view.focus.length > 1) {
+      this.view.enableSplit(this.view.focus);
+      this.splitTags = this.view.focus.slice(0, 4).map((id, k) => {
+        const n = Math.min(4, this.view.focus.length);
+        const pos = n === 2 ? ['split-top', 'split-bottom'][k] : ['split-tl', 'split-tr', 'split-bl', 'split-br'][k];
+        const el = h('div.split-tag.' + pos, null, `P${id + 1} ${cfg.players[id].name}`);
+        el.style.setProperty('--c', cfg.players[id].blade.glow);
+        return el;
+      });
+      this.splitLines = h('div.split-lines' + (this.view.focus.length > 2 ? '.quad' : ''));
+    }
     this.wrap = h('div', { style: { position: 'absolute', inset: '0', pointerEvents: 'none' } });
     app.root.append(this.wrap);
     this.hud = new Hud(this.wrap, cfg);
+    if (this.splitLines) this.wrap.append(this.splitLines, ...this.splitTags);
     if (this.arg.host || this.arg.client) {
       const code = this.arg.host ? hostRoom.t?.code : clientRoom.t?.code;
       this.wrap.append(h('div.online-badge', null, h('span.dot'), `ROOM ${code ?? ''}`, h('small', null, this.arg.host ? 'YOU LEAD' : 'ESC: MENU')));
@@ -68,7 +83,7 @@ export class MatchScreen implements Screen {
     app.input.mouseWorld = () => {
       const me = cfg.players.findIndex((p) => p.ctrl.type === 'mouse');
       const y = me >= 0 ? this.state.tops[me]?.y ?? 0 : 0;
-      return this.view.groundPoint(app.input.mouseNdc, y);
+      return this.view.groundPoint(app.input.mouseNdc, y, me);
     };
     if (this.arg.client) {
       // mirror mode: wait for first snapshot; build a throwaway sim just for an initial state
@@ -161,7 +176,7 @@ export class MatchScreen implements Screen {
       const c = this.arg.client ? this.readAnyLocal(top) : inp.read(p.ctrl, top);
       if (p.ctrl.type !== 'mouse' && !usingMouse) {
         // camera-relative steering: stick up = away from the camera
-        const f = this.view.camFwd;
+        const f = this.view.camFwdOf(i);
         const mx = c.mx, mz = c.mz;
         c.mx = -f.z * mx - f.x * mz;
         c.mz = f.x * mx - f.z * mz;
@@ -198,16 +213,24 @@ export class MatchScreen implements Screen {
     this.hud.update(renderState, dt);
     const TS = this.view.terrain.track;
     if (TS && renderState.phase === 'battle') {
-      let wrong = false, off = 0;
+      let wrong = false, off = 0, who = '';
       for (const i of this.view.focus) {
         const t = renderState.tops[i];
         if (!t?.alive) continue;
-        if (t.off > 0) { off = Math.max(off, t.off); continue; }
+        if (t.off > 0) { off = Math.max(off, t.off); who = `P${i + 1} `; continue; }
         const along = t.vx * TS.tx[t.prog] + t.vz * TS.tz[t.prog];
-        if (along < -2.5) wrong = true;
+        if (along < -2.5) { wrong = true; who = who || `P${i + 1} `; }
       }
       this.wrongT = wrong ? this.wrongT + dt : 0;
-      this.hud.wrongWay(this.wrongT > 0.8, off);
+      this.hud.wrongWay(this.wrongT > 0.8, off, this.view.splits.length > 1 ? who : '');
+      // split-screen tags show live race position
+      this.splitTags.forEach((el, k) => {
+        const id = this.view.focus[k];
+        const t = renderState.tops[id];
+        if (!t) return;
+        const txt = `P${id + 1} ${cfg.players[id].name} · ${t.finishT >= 0 ? 'FINISHED' : `POS ${t.place} · LAP ${Math.min(t.lap + 1, cfg.target)}/${cfg.target}`}`;
+        if (el.textContent !== txt) el.textContent = txt;
+      });
     }
     // hum from the fastest local top
     let hum = 0;

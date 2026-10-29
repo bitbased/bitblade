@@ -243,3 +243,15 @@ input[type=range]:hover::-webkit-slider-thumb, input[type=range].focus::-webkit-
 input[type=color] { -webkit-appearance: none; appearance: none; width: 34px; height: 24px; border: 1px solid var(--line); background: transparent; padding: 0; cursor: pointer; }
 input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
 input[type=color]::-webkit-color-swatch { border: none; }
+
+/* split-screen */
+.split-lines { position: absolute; inset: 0; pointer-events: none; }
+.split-lines::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 3px; transform: translateY(-50%); background: linear-gradient(90deg, var(--accent), var(--accent2)); box-shadow: 0 0 12px var(--accent); }
+.split-lines.quad::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; transform: translateX(-50%); background: linear-gradient(180deg, var(--accent), var(--accent2)); box-shadow: 0 0 12px var(--accent); }
+.split-tag { position: absolute; padding: 4px 12px; font-family: var(--font-h); font-size: 12px; letter-spacing: 0.12em; background: var(--panel); border-left: 4px solid var(--c); color: var(--c); pointer-events: none; }
+.split-top { top: 12px; left: 12px; }
+.split-bottom { top: calc(50% + 12px); left: 12px; }
+.split-tl { top: 12px; left: 12px; }
+.split-tr { top: 12px; left: calc(50% + 12px); }
+.split-bl { top: calc(50% + 12px); left: 12px; }
+.split-br { top: calc(50% + 12px); left: calc(50% + 12px); }
