@@ -733,42 +733,183 @@ function questLevel(id: string, name: string, desc: string, theme: Theme, rows: 
   return { id, name, desc, theme, course: c, markers };
 }
 
+
+/**
+ * Walked quest levels: the path is a string of steps, so heights and ramp directions are always consistent —
+ * every ramp/stair rises in the direction you travel and the level count follows it. One char = one tile (6m):
+ *   .  flat      /  ramp up       s  stairs up      \  ramp down      k  kicker (launch ahead)
+ *   (space) gap  D  drop one level (cliff down, next tile)   L / R  turn left / right (no tile)
+ *   b bumps  p pit  y pyramid  h funbox
+ *   C checkpoint  G goal  H drone hive  E gem  I item box  Z spin pad   (all on flat tiles)
+ * width 2 adds a second lane on the right; walls: rail walls on the outer edges of flat tiles.
+ */
+function walkLevel(id: string, name: string, desc: string, theme: Theme, opts: { width?: 1 | 2; walls?: boolean; hive?: number; heading?: 'E' | 'W' | 'N' | 'S' }, walk: string): ArenaDef {
+  const T = 6;
+  const DIRS: Record<string, [number, number]> = { E: [1, 0], S: [0, 1], W: [-1, 0], N: [0, -1] };
+  const ORDER = ['E', 'S', 'W', 'N'];
+  let head = opts.heading ?? 'E';
+  let L = 0;
+  let pos: [number, number] = [0, 0];
+  let last: [number, number] | null = null;
+  const width = opts.width ?? 1;
+  const tiles: { i: number; j: number; kind: PieceKind; level: number; face?: [number, number]; wall?: [number, number] }[] = [];
+  const marks: { kind: MarkerKind; i: number; j: number; side: boolean; head: string; extra?: Partial<Marker> }[] = [];
+  const right = (d: [number, number]): [number, number] => [-d[1], d[0]];
+  const place = (kind: PieceKind, level: number, face?: [number, number]) => {
+    const d = DIRS[head], r = right(d);
+    tiles.push({ i: pos[0], j: pos[1], kind, level, face, wall: opts.walls && kind === 'flat' ? [-r[0], -r[1]] : undefined });
+    if (width === 2) tiles.push({ i: pos[0] + r[0], j: pos[1] + r[1], kind, level, face, wall: opts.walls && kind === 'flat' ? r : undefined });
+    last = [pos[0], pos[1]];
+    pos = [pos[0] + d[0], pos[1] + d[1]];
+  };
+  const MK: Record<string, MarkerKind> = { C: 'checkpoint', G: 'goal', H: 'hive', E: 'gem', I: 'item', Z: 'spinpad' };
+  for (const ch of walk) {
+    const d = DIRS[head];
+    if (ch === 'L' || ch === 'R') {
+      head = ORDER[(ORDER.indexOf(head) + (ch === 'R' ? 1 : 3)) % 4] as typeof head;
+      const nd = DIRS[head];
+      if (last) pos = [last[0] + nd[0], last[1] + nd[1]];
+      continue;
+    }
+    if (ch === 'D') { L -= 1; continue; }
+    if (ch === ' ') { last = [pos[0], pos[1]]; pos = [pos[0] + d[0], pos[1] + d[1]]; continue; }
+    if (ch === '/') { place('ramp', L, d); L += 1; continue; }
+    if (ch === 's') { place('stairs', L, d); L += 1; continue; }
+    if (ch === '\\') { L -= 1; place('ramp', L, [-d[0], -d[1]]); continue; }
+    if (ch === 'k') { place('kicker', L, d); continue; }
+    const feat: Record<string, PieceKind> = { b: 'bumps', p: 'pit', y: 'pyramid', h: 'hump' };
+    if (feat[ch]) { place(feat[ch], L); continue; }
+    if (MK[ch]) {
+      marks.push({ kind: MK[ch], i: pos[0], j: pos[1], side: width === 2, head, extra: ch === 'H' ? { r: opts.hive ?? 7, len: 2 } : ch === 'Z' ? { r: 1.3 } : ch === 'G' ? { r: 2.6 } : ch === 'C' ? { r: 2.2 } : undefined });
+      place('flat', L);
+      continue;
+    }
+    place('flat', L);
+  }
+  // later tiles win if a path crosses itself; normalise to a grid starting at 0
+  const byKey = new Map<string, (typeof tiles)[number]>();
+  for (const t of tiles) byKey.set(`${t.i},${t.j}`, t);
+  const all = [...byKey.values()];
+  const minI = Math.min(...all.map((t) => t.i)), minJ = Math.min(...all.map((t) => t.j));
+  const w = Math.max(...all.map((t) => t.i)) - minI + 1, h = Math.max(...all.map((t) => t.j)) - minJ + 1;
+  const c: CourseDef = { tile: T, w, h, pieces: [] };
+  const faceRot = (kind: PieceKind, dx: number, dz: number) => {
+    let best = 0, bv = -Infinity;
+    for (let r = 0; r < 4; r++) {
+      const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
+      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      if (val > bv) { bv = val; best = r; }
+    }
+    return best;
+  };
+  for (const t of all) {
+    let kind = t.kind, rot = 0;
+    if (t.face) rot = faceRot(kind, t.face[0], t.face[1]);
+    if (t.wall && kind === 'flat') {
+      // only wall edges that look out over nothing (or a lower tile), never between path tiles at the same height
+      const nb = byKey.get(`${t.i + t.wall[0]},${t.j + t.wall[1]}`);
+      if (!nb || nb.level < t.level) { kind = 'wall'; rot = faceRot('wall', t.wall[0], t.wall[1]); }
+    }
+    c.pieces.push({ kind, x: t.i - minI, y: t.j - minJ, rot, level: t.level });
+  }
+  const tx = (i: number) => (i - minI + 0.5) * T - (w * T) / 2, tz = (j: number) => (j - minJ + 0.5) * T - (h * T) / 2;
+  const markers: Marker[] = [];
+  // spawns on the first two path tiles (both lanes)
+  for (const t of tiles.slice(0, width * 2)) markers.push({ kind: 'spawn', x: tx(t.i), z: tz(t.j) });
+  for (const m of marks) {
+    const d = DIRS[m.head], r = right(d);
+    // markers sit between the two lanes on wide paths; gates turn across the direction of travel
+    const ox = m.side ? r[0] * T / 2 : 0, oz = m.side ? r[1] * T / 2 : 0;
+    const rot = m.kind === 'checkpoint' ? (d[0] !== 0 ? Math.PI / 2 : 0) : undefined;
+    const mk: Marker = { kind: m.kind, x: tx(m.i) + ox, z: tz(m.j) + oz, ...(rot !== undefined ? { rot } : {}), ...m.extra };
+    if (m.kind === 'checkpoint' && width === 2) mk.r = 4.2;
+    markers.push(mk);
+  }
+  return { id, name, desc, theme, course: c, markers };
+}
+
+
+/**
+ * Titan Peak: a 16x16 mountain of 8 one-tile tiers. Each tier's ramp up is on the next side round (E, S, W, N…),
+ * so you spiral up; some tiers have a kicker gap, hives guard two of them, gems hide on the far sides.
+ */
+function titanPeak(): ArenaDef {
+  // 22x22 tiles; rings two tiles wide; ring r (0 = summit) sits at level 5 - r. Each ramp is on the inner half
+  // of its ring (so you drive at it head-on from the outer half) and rises onto the next ring up.
+  const n = 22, c = (n - 1) / 2, T = 6;
+  const course: CourseDef = { tile: T, w: n, h: n, pieces: [] };
+  const ringOf = (i: number, j: number) => Math.floor((Math.max(Math.abs(i - c), Math.abs(j - c)) + 0.5) / 2);
+  const sideOf = [[1, 0], [0, 1], [-1, 0], [0, -1]] as const; // E, S, W, N
+  const faceRot = (kind: PieceKind, dx: number, dz: number) => {
+    let best = 0, bv = -Infinity;
+    for (let r = 0; r < 4; r++) {
+      const at = (fu: number, fv: number) => { let u = fu, v = fv; for (let k = 0; k < r; k++) { const nu = v, nv = 1 - u; u = nu; v = nv; } return pieceHeight(kind, u, v, T); };
+      const val = at(0.5 + dx * 0.3, 0.5 + dz * 0.3) - at(0.5 - dx * 0.3, 0.5 - dz * 0.3) + (kind === 'wall' ? at(0.5 + dx * 0.47, 0.5 + dz * 0.47) : 0);
+      if (val > bv) { bv = val; best = r; }
+    }
+    return best;
+  };
+  const special = new Map<string, { kind: PieceKind; rot: number } | null>();
+  const tx = (i: number) => (i + 0.5) * T - (n * T) / 2, tz = (j: number) => (j + 0.5) * T - (n * T) / 2;
+  const rampTops: [number, number][] = [];
+  for (let r = 5; r >= 1; r--) {
+    const s = sideOf[(5 - r) % 4];
+    const m = 2 * r - 0.5; // inner tile of ring r
+    const along = (5 - r) % 2 ? 1 : -1; // stagger along the side so ramps don't line up
+    const i = s[0] ? c + s[0] * m : c + along * 0.5, j = s[1] ? c + s[1] * m : c - along * 0.5;
+    special.set(`${i},${j}`, { kind: 'ramp', rot: faceRot('ramp', -s[0], -s[1]) });
+    rampTops.push([i - s[0], j - s[1]]);
+  }
+  // a two-tile hole across rings 4 and 2: those tiers have to be walked round the other way
+  for (const r of [4, 2]) {
+    const a = sideOf[(5 - r + 2) % 4];
+    for (const m of [2 * r - 0.5, 2 * r + 0.5]) {
+      const gi = a[0] ? c + a[0] * m : c + 2.5, gj = a[1] ? c + a[1] * m : c + 2.5;
+      if (!special.has(`${gi},${gj}`)) special.set(`${gi},${gj}`, null);
+    }
+  }
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const sp = special.get(`${i},${j}`);
+    if (sp === null) continue;
+    const L = 5 - Math.min(5, ringOf(i, j));
+    const outer = i === 0 || j === 0 || i === n - 1 || j === n - 1;
+    if (sp) course.pieces.push({ kind: sp.kind, x: i, y: j, rot: sp.rot, level: L });
+    else if (outer) {
+      const out: [number, number] = i === 0 ? [-1, 0] : i === n - 1 ? [1, 0] : j === 0 ? [0, -1] : [0, 1];
+      course.pieces.push({ kind: 'wall', x: i, y: j, rot: faceRot('wall', out[0], out[1]), level: L });
+    } else course.pieces.push({ kind: (i * 7 + j * 3) % 13 === 0 && L < 5 ? 'bumps' : 'flat', x: i, y: j, rot: 0, level: L });
+  }
+  const markers: Marker[] = [];
+  markers.push({ kind: 'spawn', x: tx(2), z: tz(n - 2) }, { kind: 'spawn', x: tx(3), z: tz(n - 2) }, { kind: 'spawn', x: tx(2), z: tz(n - 3) }, { kind: 'spawn', x: tx(4), z: tz(n - 2) });
+  rampTops.forEach(([i, j]) => markers.push({ kind: 'checkpoint', x: tx(i), z: tz(j), r: 2.2 }));
+  markers.push({ kind: 'hive', x: tx(3), z: tz(3), r: 9, len: 2 }, { kind: 'hive', x: tx(n - 6), z: tz(n - 6), r: 8, len: 2 });
+  for (const [i, j] of [[n - 2, 1], [1, 1], [n - 2, n - 2], [5, 10], [14, 7], [7, 14], [9, 6], [11, 11], [10, 9]] as [number, number][]) markers.push({ kind: 'gem', x: tx(i), z: tz(j) });
+  markers.push({ kind: 'item', x: tx(10), z: tz(1) }, { kind: 'item', x: tx(1), z: tz(10) }, { kind: 'item', x: tx(13), z: tz(13) }, { kind: 'spinpad', x: tx(n - 3), z: tz(10), r: 1.3 }, { kind: 'spinpad', x: tx(6), z: tz(6), r: 1.3 });
+  markers.push({ kind: 'goal', x: 0, z: 0, r: 2.6 });
+  return { id: 'quest-titan-peak', name: 'Titan Peak', desc: 'Huge open mountain: six tiers, spiral up to the summit (about 8m). Each ramp is on the next side round; holes block the short way on two tiers, and two drone hives patrol.', theme: THEMES.royal, course, markers };
+}
+
 const R0 = '0', LV = (s: string) => s; // readability helpers for level grids
 void R0; void LV;
 
 BUILTIN_ARENAS.push(
-  // 1. a Mario-style left-to-right run: kicker jumps over gaps, a climb, a drone hive, pits and a final leap
-  questLevel('quest-neon-run', 'Neon Run', 'Linear run: jump the gaps, climb the ramps, slip past the drone hive and reach the goal.', THEMES.neon,
-    [
-      '==...>. ../...=.... >. .bb...ppp..==',
-      '==...>. ../........ >. .bb...ppp..==',
-    ],
-    [
-      '000000000111111111111111110000001111',
-      '000000000111111111111111110000001111',
-    ],
-    [
-      ['spawn', 1, 0], ['spawn', 1, 1], ['spawn', 2, 0], ['spawn', 2, 1],
-      ['gem', 4, 0], ['gem', 8, 1], ['item', 11, 0], ['gem', 13, 1],
-      ['checkpoint', 12, 1, { r: 2.2 }],
-      ['hive', 16, 0, { r: 9, len: 2 }],
-      ['gem', 17, 1], ['spinpad', 18, 0, { r: 1.3 }],
-      ['checkpoint', 23, 0, { r: 2.2 }], ['gem', 24, 1], ['gem', 25, 0],
-      ['gem', 28, 1], ['item', 31, 0],
-      ['checkpoint', 32, 1, { r: 2.2 }],
-      ['goal', 34, 0, { r: 2.6 }],
-    ]),
-  // 2. a climb: stairs and ramps up five levels, kicker jumps between ledges, a hive on the middle shelf
-  questLevel('quest-sky-steps', 'Sky Steps', 'Climb five levels of floating ledges: stairs, ramps and kicker jumps. Fall and you drop back to your checkpoint.', THEMES.sunset,
-    ['.==s==> .=/==bs==> .=/==y=> ..', '.==s==> .=/==bs==> .=/==y=> ..'],
-    ['000011111111222233333334444444', '000011111111222233333334444444'],
-    [
-      ['spawn', 0, 0], ['spawn', 0, 1], ['spawn', 1, 0], ['spawn', 1, 1],
-      ['gem', 5, 1], ['item', 4, 0], ['checkpoint', 9, 0, { r: 2.2 }], ['gem', 12, 0],
-      ['hive', 12, 1, { r: 7, len: 2 }], ['checkpoint', 16, 1, { r: 2.2 }], ['gem', 16, 0], ['item', 19, 1],
-      ['checkpoint', 20, 0, { r: 2.2 }], ['spinpad', 22, 1, { r: 1.3 }], ['gem', 23, 0], ['gem', 25, 1],
-      ['goal', 29, 0, { r: 2.6, z: 0 }],
-    ]),
+  // 1. Neon Run: a Mario-style run with jumps, two climbs, a drop and a pit field (width 2, walled)
+  walkLevel('quest-neon-run', 'Neon Run', 'Linear run: kicker jumps over gaps, ramps and stairs up, a drop into the pit field, a drone hive and a high finish.', THEMES.neon,
+    { width: 2, walls: true, hive: 9 },
+    '...E.k E..I/.C...H.E.Z.s..k ..E.DDbb..ppp..C/..s.E.G.'),
+  // 2. Sky Spire: a switchback climb up ~8 levels; narrow ledges, kicker gaps, a hive halfway up
+  walkLevel('quest-sky-steps', 'Sky Spire', 'Switchback climb up a floating spire: ramps, stairs and kicker gaps on narrow ledges, about 13m of height to the top.', THEMES.sunset,
+    { width: 1, hive: 7 },
+    '..E./..k .s..C' + 'R.R' + './.E.k .H..s.Z.C' + 'L.L' + '/.k .E.s..C..' + 'R.R' + '..s.E.k ./..E.G'),
+  // 4. Glacier Ascent: a wide icy staircase climbing north-east, with jumps between terraces
+  walkLevel('quest-glacier', 'Glacier Ascent', 'Climb an icy staircase of terraces: stairs and ramps up, kicker leaps between ledges, two hives — about 14m up.', THEMES.ice,
+    { width: 2, walls: true, hive: 8 },
+    '...E.s..k .I.s.C' + 'L' + '.E/..H..s.Z' + 'R' + '..k E.k ..s.C' + 'L' + './.E.y..s..C' + 'R' + '..E.k ..H.s..E.G'),
+  // 5. Rollercoaster Run: constant ups and downs — ramps up and down, stairs, drops and kicker jumps
+  walkLevel('quest-coaster', 'Rollercoaster Run', 'Linear thrill ride: up ramps, down ramps, stairs, cliff drops and kicker jumps — never on the level for long.', THEMES.inferno,
+    { width: 2, walls: true, hive: 8 },
+    '...E/.s.\\.k .E.s/.C.\\\\.k .H.E/..s.Z.\\.D.k D.E.C.s/.s..\\.k .E/s.G.'),
+  titanPeak(),
   // 3. an open world: circle the valley floor, climb to the middle tier, jump the north gap, ramp up to the summit
   questLevel('quest-hive-valley', 'Hive Valley', 'Open world: work round the valley, up through three tiers to the summit goal. Two drone hives hunt anyone in their zones.', THEMES.toxic,
     [

@@ -21,7 +21,7 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   const s = sim.s;
   const c: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
   ai.think -= dt;
-  const reaction = [0, 0.7, 0.35, 0.12][ai.level];
+  const reaction = [0, 0.7, 0.35, 0.12][ai.level] * (sim.cfg.mode === 'quest' && !t.drone ? 0.5 : 1);
   if (ai.think <= 0) {
     ai.think = reaction * (0.6 + Math.random() * 0.8);
     chooseGoal(sim, t, ai);
@@ -174,7 +174,12 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       const g = nearest(s.gems.filter((g) => Math.abs(g.y - t.y) < 1.5 && Math.hypot(g.x - t.x, g.z - t.z) < 7));
       const wp = questWaypoint(sim, t);
       if (g && wp && Math.hypot(g.x - wp.x, g.z - wp.z) < Math.hypot(t.x - wp.x, t.z - wp.z) + 2) { ai.tx = g.x; ai.tz = g.z; return; }
-      if (wp) { ai.tx = wp.x; ai.tz = wp.z; }
+      if (wp) {
+        // follow the tile route (ramps, around cliffs, over kicker gaps); aim at the tile after next when close
+        const route = questRoute(sim, t.x, t.z, wp.x, wp.z);
+        const step = route ? (route.length > 1 && Math.hypot(route[0].x - t.x, route[0].z - t.z) < sim.terrain.def.course!.tile * 0.45 ? route[1] : route[0]) : wp;
+        ai.tx = step.x; ai.tz = step.z;
+      }
       return;
     }
     case 'gauntlet': {
@@ -194,6 +199,76 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       pickEnemy();
     }
   }
+}
+
+/**
+ * Quest navigation graph over course tiles: you can roll to a neighbour whose surface meets yours at the shared
+ * edge (or drop down to a lower one), and jump a one-tile gap from a kicker. Built once per sim.
+ */
+interface QuestNav { T: number; w: number; h: number; ox: number; oz: number; next: number[][] }
+const navCache = new WeakMap<object, QuestNav | null>();
+function questNav(sim: Sim): QuestNav | null {
+  if (navCache.has(sim)) return navCache.get(sim)!;
+  const c = sim.terrain.def.course;
+  if (!c) { navCache.set(sim, null); return null; }
+  const T = c.tile, w = c.w, h = c.h, ox = -(w * T) / 2, oz = -(h * T) / 2;
+  const ter = sim.terrain;
+  const has = new Set(c.pieces.map((p) => p.y * w + p.x));
+  const kick = new Set(c.pieces.filter((p) => p.kind === 'kicker').map((p) => p.y * w + p.x));
+  // ramps / stairs / kickers are only entered and left head-on (their sides are a lip, not a way on)
+  const sloped = new Set(c.pieces.filter((p) => p.kind === 'ramp' || p.kind === 'stairs' || p.kind === 'kicker').map((p) => p.y * w + p.x));
+  const next: number[][] = Array.from({ length: w * h }, () => []);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const a = j * w + i;
+    if (!has.has(a)) continue;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ni = i + di, nj = j + dj, b = nj * w + ni;
+      if (ni < 0 || nj < 0 || ni >= w || nj >= h) continue;
+      if (has.has(b)) {
+        // compare the surfaces either side of the shared edge (centre and two offsets: ramps vary across)
+        let ok = false;
+        for (const f of sloped.has(a) || sloped.has(b) ? [0] : [0, -0.25, 0.25]) {
+          const ex = ox + (i + 0.5 + di * 0.5) * T + (dj ? f * T : 0), ez = oz + (j + 0.5 + dj * 0.5) * T + (di ? f * T : 0);
+          const ha = ter.height(ex - di * 0.25, ez - dj * 0.25), hb = ter.height(ex + di * 0.25, ez + dj * 0.25);
+          if (ha > VOID && hb > VOID && hb - ha < 0.55) { ok = true; break; } // level, gently up, or any drop down
+        }
+        if (ok) next[a].push(b);
+      } else if (kick.has(a)) {
+        const fi = i + di * 2, fj = j + dj * 2, f = fj * w + fi;
+        if (fi >= 0 && fj >= 0 && fi < w && fj < h && has.has(f)) next[a].push(f);
+      }
+    }
+  }
+  const nav = { T, w, h, ox, oz, next };
+  navCache.set(sim, nav);
+  return nav;
+}
+
+/** breadth-first route over the tile graph; returns the tile centres to roll through (excluding the start) */
+function questRoute(sim: Sim, fx: number, fz: number, tx: number, tz: number): { x: number; z: number }[] | null {
+  const nav = questNav(sim);
+  if (!nav) return null;
+  const tile = (x: number, z: number) => {
+    const i = Math.floor((x - nav.ox) / nav.T), j = Math.floor((z - nav.oz) / nav.T);
+    return i < 0 || j < 0 || i >= nav.w || j >= nav.h ? -1 : j * nav.w + i;
+  };
+  const s0 = tile(fx, fz), goal = tile(tx, tz);
+  if (s0 < 0 || goal < 0) return null;
+  if (s0 === goal) return [{ x: tx, z: tz }];
+  const prev = new Int32Array(nav.w * nav.h).fill(-2);
+  prev[s0] = -1;
+  const q = [s0];
+  for (let k = 0; k < q.length; k++) {
+    const a = q[k];
+    if (a === goal) break;
+    for (const b of nav.next[a]) if (prev[b] === -2) { prev[b] = a; q.push(b); }
+  }
+  if (prev[goal] === -2) return null;
+  const path: { x: number; z: number }[] = [];
+  for (let a = goal; a !== s0 && a >= 0; a = prev[a]) path.push({ x: nav.ox + ((a % nav.w) + 0.5) * nav.T, z: nav.oz + (Math.floor(a / nav.w) + 0.5) * nav.T });
+  path.reverse();
+  path[path.length - 1] = { x: tx, z: tz };
+  return path;
 }
 
 /** the next thing a quest runner should head for: the next checkpoint after the last one touched, else the goal */
