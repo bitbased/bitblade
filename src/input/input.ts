@@ -249,8 +249,12 @@ export class TouchControls {
       const t = e.changedTouches[0];
       this.stickId = t.identifier;
       this.cx = t.clientX; this.cy = t.clientY;
-      this.base.style.left = `${t.clientX - 60}px`;
-      this.base.style.top = `${t.clientY - 60}px`;
+      // the base is positioned inside the stick zone, so convert from viewport to zone coordinates
+      const r = zone.getBoundingClientRect();
+      const half = this.base.offsetWidth / 2 || 60;
+      this.base.style.left = `${t.clientX - r.left - half}px`;
+      this.base.style.top = `${t.clientY - r.top - half}px`;
+      this.base.style.bottom = 'auto';
       this.base.classList.add('on');
     }, { passive: false });
     zone.addEventListener('touchmove', (e) => {
