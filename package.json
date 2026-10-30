@@ -17,8 +17,8 @@
     "electron:dev": "bun run scripts/dev-electron.ts",
     "dist:win": "vite build && electron-builder --win nsis",
     "dist:mac": "vite build && electron-builder --mac dmg",
-    "worker:dev": "vite build && cd worker && bunx wrangler dev",
-    "worker:deploy": "vite build && cd worker && bunx wrangler deploy"
+    "worker:dev": "vite build && cd worker && bun x wrangler dev",
+    "worker:deploy": "vite build && cd worker && bun x wrangler deploy"
   },
   "build": {
     "appId": "net.bitbased.bitblade",
