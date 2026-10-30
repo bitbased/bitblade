@@ -32,6 +32,10 @@ class MusicStudio {
   private cells: HTMLElement[][] = []; // [lane][step]
   private rollCells: HTMLElement[][] = []; // [row][step]
   private lastHead = -2;
+  /** song mode: the pattern chip and song part that are sounding right now (green; the selection stays pink) */
+  private patChips: HTMLElement[] = [];
+  private partBtns: HTMLElement[] = [];
+  private lastPlay = '';
 
   constructor(private app: App) {
     setBackdropVisible(true, app.canvas);
@@ -171,15 +175,18 @@ class MusicStudio {
     const s = this.song, M = this.el.main;
     M.innerHTML = '';
     // patterns
+    this.patChips = s.patterns.map((_, i) => h('button.ms-chip.nav' + (i === this.pat ? '.on' : ''), { onclick: () => { this.pat = i; if (this.app.sfx.player && this.loopPattern) this.app.sfx.player.solo = i; this.renderMain(); } }, PLETTER[i]));
     const pats = h('div.ms-row', null, h('span.ms-lbl', null, 'PATTERN'),
-      ...s.patterns.map((_, i) => h('button.ms-chip.nav' + (i === this.pat ? '.on' : ''), { onclick: () => { this.pat = i; if (this.app.sfx.player && this.loopPattern) this.app.sfx.player.solo = i; this.renderMain(); } }, PLETTER[i])),
+      ...this.patChips,
       s.patterns.length < 4 ? h('button.ms-chip.nav', { title: 'New pattern (a copy of this one)', onclick: () => { this.editable(); this.song.patterns.push(clone(this.song.patterns[this.pat])); this.pat = this.song.patterns.length - 1; this.changed(); this.renderMain(); } }, '+') : null,
       h('button.ms-chip.nav', { title: 'Clear this pattern', onclick: () => { if (!confirmTwice(this.app, 'ms-clear', 'Press again to clear this pattern')) return; this.editable(); this.song.patterns[this.pat] = emptyPattern(); this.changed(); this.renderMain(); } }, 'Clear'),
     );
     // arrangement
     const cur = s.arrange[this.part] ?? s.arrange[0];
+    this.partBtns = s.arrange.map((a, i) => h('button.ms-part.nav' + (i === this.part ? '.on' : ''), { onclick: () => { this.part = i; this.pat = a.p; this.renderMain(); } }, h('b', null, PLETTER[a.p]), h('span', null, SHIFT(a.t))));
+    this.lastPlay = ''; // (fresh buttons: mark what's playing again)
     const arr = h('div.ms-row', null, h('span.ms-lbl', null, 'SONG'),
-      ...s.arrange.map((a, i) => h('button.ms-part.nav' + (i === this.part ? '.on' : ''), { onclick: () => { this.part = i; this.pat = a.p; this.renderMain(); } }, h('b', null, PLETTER[a.p]), h('span', null, SHIFT(a.t)))),
+      ...this.partBtns,
       s.arrange.length < 32 ? h('button.ms-chip.nav', { title: 'Add a part', onclick: () => { this.editable(); this.song.arrange.splice(this.part + 1, 0, { ...cur }); this.part++; this.changed(); this.renderMain(); } }, '+') : null,
     );
     const partTools = h('div.ms-row.ms-sub', null, h('span.ms-lbl', null, `PART ${this.part + 1}`),
@@ -367,6 +374,13 @@ class MusicStudio {
       for (const row of this.cells) { row[this.lastHead]?.classList.remove('head'); row[head]?.classList.add('head'); }
       for (const row of this.rollCells) { row?.[this.lastHead]?.classList.remove('head'); row?.[head]?.classList.add('head'); }
       this.lastHead = head;
+    }
+    // song mode: light the pattern and the song part that are playing
+    const playing = pos && !this.loopPattern ? `${pos.part}:${pos.p}` : '-';
+    if (playing !== this.lastPlay) {
+      this.lastPlay = playing;
+      this.patChips.forEach((c, i) => c.classList.toggle('play', !!pos && !this.loopPattern && pos.p === i));
+      this.partBtns.forEach((c, i) => c.classList.toggle('play', !!pos && !this.loopPattern && pos.part === i));
     }
   }
 

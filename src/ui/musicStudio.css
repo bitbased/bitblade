@@ -43,6 +43,11 @@
 .ms-part span { font-size: 9px; color: var(--muted); }
 .ms-part.on { border-color: #ff5cf4; background: rgba(255, 92, 244, 0.18); }
 .ms-part.focus { box-shadow: inset 0 0 0 2px var(--accent); }
+/* song mode: what's playing right now — green (the selection stays pink; selected + playing gets a green underline) */
+.ms-chip.play, .ms-part.play { border-color: #39ff9c; box-shadow: inset 0 -3px 0 #39ff9c, 0 0 10px rgba(57, 255, 156, 0.45); }
+.ms-chip.play:not(.on) { background: rgba(57, 255, 156, 0.22); color: #39ff9c; }
+.ms-part.play:not(.on) { background: rgba(57, 255, 156, 0.2); }
+.ms-part.play:not(.on) b { color: #39ff9c; }
 .ms-shift { font-family: var(--font-h); font-size: 12px; color: var(--gold); min-width: 70px; text-align: center; }
 .ms-grid { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 3px 6px; align-items: stretch; }
 .ms-lane { display: flex; flex-direction: column; justify-content: center; text-align: left; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); color: var(--text); padding: 3px 8px; cursor: pointer; }
