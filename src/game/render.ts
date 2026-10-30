@@ -2025,7 +2025,7 @@ export class GameView {
     if (t.alive && t.grounded && speed > 12 && Math.random() < 0.5) this.particles.emit(t.x + (Math.random() - 0.5) * 0.8, t.y + 0.3 + Math.random() * 0.5, t.z + (Math.random() - 0.5) * 0.8, -t.vx * 0.6, 0, -t.vz * 0.6, new THREE.Color('#ffffff'), 0.06, 0.25, 0);
     // overdrive: a stream of blue-white sparks behind you
     if (t.alive && t.od && Math.random() < 0.7) this.particles.emit(t.x, t.y + 0.25, t.z, -t.vx * 0.25 + (Math.random() - 0.5), 0.6, -t.vz * 0.25 + (Math.random() - 0.5), new THREE.Color(Math.random() < 0.5 ? '#3cf2ff' : '#ffffff'), 0.25, 0.3, -0.1);
-    if (t.alive && t.fx.turbo > 0) this.particles.emit(t.x, t.y + 0.3, t.z, -t.vx * 0.2 + (Math.random() - 0.5), 1, -t.vz * 0.2 + (Math.random() - 0.5), new THREE.Color(Math.random() < 0.5 ? '#ff7b1c' : '#ffd23a'), 0.3, 0.35, -0.2);
+    if (t.alive && (t.fx.turbo > 0 || (t.flipT ?? 0) > 0)) this.particles.emit( /* (Turbo — and a ball fired by a flipper or plunger: it's hot) */t.x, t.y + 0.3, t.z, -t.vx * 0.2 + (Math.random() - 0.5), 1, -t.vz * 0.2 + (Math.random() - 0.5), new THREE.Color(Math.random() < 0.5 ? '#ff7b1c' : '#ffd23a'), 0.3, 0.35, -0.2);
     // Spin Surge: green sparks flung off the rim while overcharged
     if (t.alive && t.fx.surge > 0 && Math.random() < 0.8) { const a = Math.random() * Math.PI * 2; this.particles.emit(t.x + Math.cos(a) * 0.7, t.y + 0.35, t.z + Math.sin(a) * 0.7, Math.cos(a + 1.4 * t.dir) * 6, 0.6 + Math.random(), Math.sin(a + 1.4 * t.dir) * 6, new THREE.Color(Math.random() < 0.6 ? '#38ffb0' : '#ffffff'), 0.14, 0.3, 0.2); }
     if (t.alive && t.spin < 0.25 && Math.random() < 0.3) this.particles.emit(t.x, t.y + 0.4, t.z, 0, 0.8, 0, new THREE.Color('#555'), 0.25, 0.8, -0.1);

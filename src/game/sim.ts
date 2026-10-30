@@ -1005,6 +1005,7 @@ export class Sim {
     const pl = this.markers.find((m) => m.kind === 'plunger');
     if (!pl) return;
     t.plunged = true; t.plungeWait = 0;
+    t.flipT = 1.5; t.dashX = pl.x; t.dashZ = pl.z; // (a plunger shot hits like a dash too: its run counts from the plunger)
     // launch speed: speed..40*len (speed = the weakest launch: set it just above what reaches the top, and the
     // whole pull is a skill-shot range); default 15..40
     const lo = pl.speed ?? 15 * (pl.len ?? 1), hi = 40 * (pl.len ?? 1), v = lo + (hi - lo) * k;
@@ -1085,6 +1086,9 @@ export class Sim {
         const near = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.8);
         const st = (this.flipBrain[mi] ??= { t: -1, miss: false, hold: 0, cool: 0 });
         st.hold = Math.max(0, st.hold - dt); st.cool = Math.max(0, st.cool - dt);
+        // (a ball that dashes at a flipper sets it off straight away — no reaction time, no whiff)
+        const dashed = st.cool <= 0 && s.tops.some((t) => t.alive && t.fx.dash > 0 && segDist(P0, t.x, t.z).d < 2.6);
+        if (dashed && st.hold <= 0) { st.hold = 0.3; st.cool = 0.55; st.t = -1; }
         if (st.hold > 0) up = true;
         else {
           up = false;
