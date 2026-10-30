@@ -29,7 +29,7 @@ interface Card {
 interface Sel { el: HTMLElement; set(title: string, sub: string): void }
 interface LobbyUI {
   back: HTMLButtonElement; desc: HTMLElement; mode: Sel; size: Sel; arena: Sel;
-  items: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement;
+  items: HTMLElement; nudge: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement;
 }
 
 const L = {
@@ -38,6 +38,8 @@ const L = {
   items: true,
   sizeFilter: 'ALL' as 'ALL' | ArenaSize,
   rubber: 1,
+  /** pinball: steering nudges the table (fills the tilt meter); off = flippers only, like a classic table */
+  nudge: true,
   target: 4,
   time: 90,
   slots: [] as Slot[],
@@ -229,11 +231,12 @@ export class LobbyScreen implements Screen {
     const target = stepper(targetLbl, targetVal, (d) => { L.target = Math.max(1, L.target + d * (L.mode === 'koth' ? 5 : 1)); this.refresh(); });
     const time = stepper(h('span', null, 'TIME'), timeVal, (d) => { L.time = Math.max(30, L.time + d * 15); this.refresh(); });
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
+    const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => { L.nudge = !L.nudge; this.refresh(); } }, h('span.dot'), 'NUDGE');
     const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => { L.rubber = (L.rubber + 1) % 3; this.refresh(); } }, 'CPU CATCH-UP ', rubberVal);
     rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.refresh(); });
     const back = h<HTMLButtonElement>('button.btn.small.nav.back-btn', { onclick: () => this.leave(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back');
     const desc = h('div.screen-sub');
-    this.ui = { back, desc, mode, size, arena, items, rubber, rubberVal, target, targetLbl, targetVal, timeVal };
+    this.ui = { back, desc, mode, size, arena, items, nudge, rubber, rubberVal, target, targetLbl, targetVal, timeVal };
 
     this.slotsEl = h('div.slots');
     const hint = Input.isTouchDevice() ? 'TAP + ADD CPU' : 'PRESS SPACE · ENTER · Ⓐ';
@@ -254,7 +257,7 @@ export class LobbyScreen implements Screen {
       h('div.lobby-bottom', null,
         h('div.rules', null,
           h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ CPU'),
-          items, rubber, target, time),
+          items, nudge, rubber, target, time),
         this.onlineEl),
     );
     this.el = el;
@@ -280,6 +283,8 @@ export class LobbyScreen implements Screen {
     u.items.style.display = m.id !== 'gauntlet' && m.id !== 'rush' ? '' : 'none';
     u.items.classList.toggle('on', L.items);
     u.rubber.style.display = m.id === 'race' ? '' : 'none';
+    u.nudge.style.display = m.id === 'pinball' ? '' : 'none';
+    u.nudge.classList.toggle('on', L.nudge);
     u.rubberVal.textContent = ['OFF', 'NORMAL', 'STRONG'][L.rubber];
     u.target.style.display = m.target > 0 ? '' : 'none';
     u.targetLbl.textContent = m.id === 'koth' ? 'HOLD SECS' : m.id === 'gauntlet' ? 'GEMS' : m.id === 'race' ? 'LAPS' : 'TARGET';
@@ -691,7 +696,7 @@ export class LobbyScreen implements Screen {
     if (L.slots.length < m.minPlayers) { this.app.toast(`${m.name} needs ${m.minPlayers} players`); return; }
     this.assignTeams();
     const cfg: MatchConfig = {
-      mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0, rubber: L.rubber,
+      mode: L.mode, arena: findArena(L.arenaId), items: L.items || L.mode === 'rush', target: L.target, timeLimit: L.time, seed: (Math.random() * 1e9) | 0, rubber: L.rubber, nudge: L.nudge,
       players: L.slots.slice(0, m.maxPlayers).map((s, i) => ({ slot: i, name: s.name, team: s.team, blade: this.bladeOf(s), ctrl: s.ctrl })),
       song: hostRoom.t && L.song ? L.song : undefined,
     };

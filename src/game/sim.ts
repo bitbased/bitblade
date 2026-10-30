@@ -406,7 +406,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      if (this.cfg.mode === 'pinball' && !t.duel) { const k = this.s.pin?.tilted || t.extra ? 0 : 0.33; ix *= k; iz *= k; }
+      if (this.cfg.mode === 'pinball' && !t.duel) { const k = this.s.pin?.tilted || t.extra || this.cfg.nudge === false ? 0 : 0.33; ix *= k; iz *= k; }
       if (t.od) {
         // wider turns: the part of your input across your travel direction is weaker
         const vl0 = Math.hypot(t.vx, t.vz);
@@ -947,7 +947,7 @@ export class Sim {
     const c0 = this.controls[owner] ?? NO_CONTROL;
     // tilt meter: steering is a nudge — a little is fine, too much and the machine TILTs (flippers die until
     // the ball drains)
-    if (table && s.phase === 'battle' && !pin.tilted) {
+    if (table && s.phase === 'battle' && !pin.tilted && this.cfg.nudge !== false) {
       const main = s.tops[owner];
       const steer = main && main.alive && !this.inPlunger(main) && main.held === undefined && !main.duel ? Math.min(1, Math.hypot(c0.mx, c0.mz)) : 0; // (pulling the plunger isn't a nudge)
       pin.tilt = Math.max(0, pin.tilt + (steer > 0.15 ? steer * 0.45 : -0.3) * dt);
