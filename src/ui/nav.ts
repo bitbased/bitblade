@@ -248,9 +248,10 @@ export class MenuNav {
       const sp = scrollParent(el);
       if (sp) {
         const pr = sp.getBoundingClientRect(), er = el.getBoundingClientRect();
-        const pad = Math.min(40, pr.height * 0.12); // (keep a little of what's next in view)
-        if (er.top < pr.top + pad) sp.scrollTop -= pr.top + pad - er.top;
-        else if (er.bottom > pr.bottom - pad) sp.scrollTop += er.bottom - (pr.bottom - pad);
+        // only when it's (partly) out of view — then bring it in with a little of what's next showing
+        const pad = Math.min(40, pr.height * 0.12);
+        if (er.top < pr.top) sp.scrollTop -= pr.top + pad - er.top;
+        else if (er.bottom > pr.bottom) sp.scrollTop += er.bottom - (pr.bottom - pad);
       } else {
         const er = el.getBoundingClientRect();
         if (er.bottom > innerHeight || er.top < 0 || er.right > innerWidth || er.left < 0) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });

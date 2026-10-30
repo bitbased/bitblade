@@ -162,7 +162,9 @@ class MusicStudio {
         h('div.ms-muted', null, 'Pick a song for a track or course in Track Studio / Course Builder. Settings chooses menu & match music.'),
       ),
     );
-    L.querySelector('.ms-item.on')?.scrollIntoView({ block: 'nearest' });
+    // show the selected song: scroll just its list panel (scrollIntoView would scroll the whole studio page too)
+    const on = L.querySelector<HTMLElement>('.ms-item.on'), box = on?.closest<HTMLElement>('.ms-scroll');
+    if (on && box) { const r = on.getBoundingClientRect(), b = box.getBoundingClientRect(); if (r.top < b.top) box.scrollTop -= b.top - r.top; else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom; }
   }
 
   renderMain() {

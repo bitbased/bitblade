@@ -73,3 +73,21 @@
 .ts-issue { cursor: pointer; }
 .ts-issue:hover { color: #fff; }
 .ts-goto { color: var(--accent); font-size: 11px; }
+
+/* short landscape (phones on their side): keep the three columns, compact — the map stays the big middle piece */
+@media (max-height: 560px) and (min-width: 600px) {
+  .ts-root { grid-template-columns: 170px minmax(0, 1fr) 230px; grid-template-rows: auto minmax(0, 1fr) 64px; overflow: hidden; gap: 6px; padding: 6px; }
+  .ts-left { grid-column: 1; grid-row: 2 / 4; }
+  .ts-right { grid-column: 3; grid-row: 2 / 4; }
+  .ts-stage { grid-column: 2; grid-row: 2; height: auto; }
+  .ts-profwrap { grid-column: 2; grid-row: 3; }
+  .ts-top { overflow-x: auto; overflow-y: hidden; padding: 4px 8px; gap: 6px; scrollbar-width: none; }
+  .ts-top::-webkit-scrollbar { display: none; }
+  .ts-title { display: none; } /* (you know where you are: room for TEST)*/
+  .ts-name { width: 120px; font-size: 11px; padding: 4px 8px; }
+  .ts-top .btn { padding: 5px 9px; font-size: 10px; }
+  .ts-stats { display: none; }
+  .ts-tab { padding: 5px 9px; font-size: 10px; }
+  .ts-panel { padding: 6px; gap: 6px; }
+  .ts-help { font-size: 10px; }
+}
