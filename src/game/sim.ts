@@ -549,6 +549,7 @@ export class Sim {
   }
 
   flipWas = [false, false];
+  links?: ReturnType<typeof pinLinks>;
   laneChange(dir: number) {
     const pin = this.s.pin!;
     for (const team of new Set(this.markers.filter((m) => m.kind === 'rollover' && m.laneChange).map((m) => m.team))) {
@@ -1281,6 +1282,20 @@ export class Sim {
     }
     if (pin.swarmT > 0) this.swarmUpdate(dt);
     this.arenaUpdate(dt);
+    // ALL LIT: every link's shot open at the same moment pays a jackpot (once, until one closes and they're relit)
+    const links = (this.links ??= pinLinks(ms));
+    if (links.length >= 2) {
+      const all = links.every((l) => (l.ch !== undefined ? !!pin.armed?.[l.ch] : ms[l.targets[0]].kind === 'arena' ? pin.lit[l.targets[0]] || pin.duel?.mi === l.targets[0] : pin.swarmHive === l.targets[0] && pin.swarm.length > 0));
+      const main = s.tops.find((o) => !o.drone && !o.extra && o.alive);
+      if (all && !pin.allLit && main) {
+        const pts = 10000 * links.length;
+        this.addScore(main, pts);
+        main.spin = Math.max(main.spin, 1);
+        this.ev({ k: 'announce', text: 'ALL LIT!', sub: `every shot open at once · +${pts} · full spin`, color: '#ffd23a' });
+        this.ev({ k: 'pin', what: 'bank', x: main.x, y: main.y, z: main.z, pts });
+      }
+      pin.allLit = all;
+    }
   }
 
   /** an arena gate is passable while the arena is unlocked, or for a moment while a ball is let out */

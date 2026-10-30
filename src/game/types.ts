@@ -156,6 +156,8 @@ export interface GameState {
     duel: { mi: number; ball: number; t: number; game: 'duel' | 'koth'; hold: [number, number] } | null; foe: number;
     /** link channels that are lit (by channel number): their shooters work until used */
     armed?: boolean[];
+    /** every link's shot was open at once last frame (the ALL LIT jackpot pays once per time) */
+    allLit?: boolean;
     /** the skill shot: the lane (marker) lit by the last launch, and how long it stays lit */
     skill?: { mi: number; t: number; best?: number } | null };
 }
