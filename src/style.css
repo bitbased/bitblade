@@ -599,20 +599,7 @@ body.hints-on .music-chip { bottom: 56px; }
   .music-chip { bottom: 8px; right: 10px; transform: scale(0.8); transform-origin: bottom right; }
   body.hints-on .music-chip { bottom: 34px; }
   body.hints-on .menu-foot { bottom: 34px; }
-  /* in game: small cards stacked top-left */
-  .hud:not(.split):not(.hud-pin) .hud-cards { top: 8px; left: 8px; right: auto; bottom: auto; flex-direction: column; flex-wrap: nowrap; align-items: flex-start; gap: 4px; justify-content: flex-start; }
-  .pcard { width: 148px; padding: 3px 8px 4px; }
-  .pcard::before { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%); }
-  .pcard .nm { font-size: 10px; }
-  .pcard .rpm { font-size: 8px; }
-  .pcard .bar { height: 5px; margin-top: 3px; }
-  .pcard .bar.thin { height: 3px; margin-top: 2px; }
-  .pcard .meta { font-size: 9px; margin-top: 1px; gap: 6px; }
-  .pcard .meta .place { font-size: 11px; }
-  .pcard .item { width: 28px; height: 28px; font-size: 16px; right: -32px; top: 0; }
-  .pcard .item .ico { width: 18px; height: 18px; }
-  .hud-top { top: 6px; transform: translateX(-50%) scale(0.72); transform-origin: top center; }
-  .hud-obj { top: 44px; font-size: 9px; letter-spacing: 0.14em; }
+
 }
 @media (max-height: 420px) {
   .pcard { width: 128px; }
@@ -633,3 +620,39 @@ body.hints-on .music-chip { bottom: 56px; }
   .touch-ui.pin .touch-base { bottom: 6px; left: 30px; width: 84px; height: 84px; }
   .touch-ui.pin .touch-stick-zone { height: calc(70% - 80px); bottom: 80px; }
 }
+
+/* ================= in game on small screens (short OR narrow windows, phones either way up) =================
+   The player cards become a compact column in the top-left corner, clear of the play area; with 3+ players they
+   shrink to name + spin. Portrait / narrow: the column starts under the score bar. */
+@media (max-height: 560px), (max-width: 760px) {
+  /* in game: small cards stacked top-left */
+  .hud:not(.split):not(.hud-pin) .hud-cards { top: 8px; left: 8px; right: auto; bottom: auto; flex-direction: column; flex-wrap: nowrap; align-items: flex-start; gap: 4px; justify-content: flex-start; }
+  .pcard { width: 148px; padding: 3px 8px 4px; }
+  .pcard::before { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%); }
+  .pcard .nm { font-size: 10px; }
+  .pcard .rpm { font-size: 8px; }
+  .pcard .bar { height: 5px; margin-top: 3px; }
+  .pcard .bar.thin { height: 3px; margin-top: 2px; }
+  .pcard .meta { font-size: 9px; margin-top: 1px; gap: 6px; }
+  .pcard .meta .place { font-size: 11px; }
+  .pcard .item { width: 28px; height: 28px; font-size: 16px; right: -32px; top: 0; }
+  .pcard .item .ico { width: 18px; height: 18px; }
+  .hud-top { top: 6px; transform: translateX(-50%) scale(0.72); transform-origin: top center; }
+  .hud-obj { top: 44px; font-size: 9px; letter-spacing: 0.14em; }
+  .pcard .nm { white-space: nowrap; overflow: hidden; gap: 6px; }
+  .hud-cards:has(.pcard:nth-child(3)) .pcard { width: 124px; }
+  .hud-cards:has(.pcard:nth-child(3)) .pcard .meta, .hud-cards:has(.pcard:nth-child(3)) .pcard .bar.burst, .hud-cards:has(.pcard:nth-child(3)) .pcard .bar.sp { display: none; }
+}
+@media (max-width: 760px) and (min-height: 561px) {
+  .hud:not(.split):not(.hud-pin) .hud-cards { top: 74px; }
+  .hud-top { transform: translateX(-50%) scale(0.8); }
+}
+/* ================= the lobby on short screens: cards never cut, key badges have room, SIZE readable ================= */
+@media (max-height: 560px) {
+  .lobby .slots { min-height: max-content; }
+  .lobby { grid-template-rows: auto auto max-content auto; } /* (a scrolling row doesn't size its track: say so) */
+  .lobby .selector { padding-bottom: 16px; }
+  .lobby .lobby-top { grid-template-columns: minmax(0, 1fr) minmax(0, 0.85fr) minmax(0, 1.5fr); }
+  .lobby .slot canvas { width: 52px; height: 52px; }
+}
+@media (max-height: 560px) and (max-width: 700px) { .lobby .selector .val b { font-size: 12px; letter-spacing: 0.04em; } }
