@@ -82,6 +82,7 @@ class MusicStudio {
   }
   changed() {
     this.saveT = 0.4;
+    this.pendingSurprise = null; // (edited it: it's your work now, kept as a draft)
     if (!this.dirty) { this.dirty = true; this.renderListSoon(); }
     this.bar?.update();
     if (this.playing) this.app.sfx.player?.play(this.song, false);
@@ -399,8 +400,12 @@ class MusicStudio {
   }
 
   // ------------------------------------------------------------------ songs
+  /** the surprise song on screen, while it's still untouched and unsaved: 🎲 again replaces it instead of piling up */
+  private pendingSurprise: string | null = null;
   surprise() {
+    if (this.fresh && this.pendingSurprise === this.song.id) { dropDraft('song', this.song.id); this.dirty = false; this.fresh = false; }
     this.openFresh(surpriseSong());
+    this.pendingSurprise = this.song.id;
     if (!this.playing) this.togglePlay();
     this.setLoopPattern(false);
   }
