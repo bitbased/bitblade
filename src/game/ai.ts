@@ -22,6 +22,8 @@ export interface AIState {
   hunt?: { id: number; until: number }; nextHunt?: number;
   /** low on spin: heading for a spin source (a spin pad, or a slot in a pinball party) until it's topped up */
   recharge?: boolean;
+  /** badly hurt: staying at full spin on a spin source to heal burst health, until this time at the latest */
+  healUntil?: number; healAgain?: number;
   /** pinball party: a short errand to light something on the table (like a crystal in Crystal Rush) */
   errand?: { x: number; z: number; mi: number; until: number; kind?: 'flip' | 'boost' }; nextErrand?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
@@ -317,7 +319,10 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
   if (!t.drone && mode !== 'race' && mode !== 'quest' && !t.held) {
     const srcs = sim.markers.filter((m) => m.kind === 'spinpad' || (sim.party && m.kind === 'saucer' && sim.linkOn(m)));
     if (srcs.length) {
-      if (t.spin < 0.4) ai.recharge = true;
+      // (badly hurt: go and sit at full spin — that's what heals burst health — until it's back up, or 12s at most)
+      if (t.burst > 0.6 && !ai.healUntil && s.t >= (ai.healAgain ?? 0)) ai.healUntil = s.t + 12;
+      if (ai.healUntil && (t.burst < 0.35 || s.t > ai.healUntil)) { ai.healUntil = undefined; ai.healAgain = s.t + 10; }
+      if (t.spin < 0.4 || ai.healUntil) ai.recharge = true;
       else if (t.spin > 0.85) ai.recharge = false;
       const close = enemies.some((e) => Math.hypot(e.x - t.x, e.z - t.z) < 2.2);
       if (ai.recharge && !close) {
