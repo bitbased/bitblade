@@ -365,6 +365,9 @@ export class Sim {
       if (TS && this.safeFinished(t) && t.y < this.ground(t.x, t.z) - 6) { this.placeTop(t, TS.x[t.prog], TS.z[t.prog], 1); t.vx = t.vz = 0; }
     }
     for (const k in t.fx) { const kk = k as keyof typeof t.fx; if (t.fx[kk] > 0) t.fx[kk] = Math.max(0, t.fx[kk] - dt); }
+    // held at full spin a moment, burst health slowly comes back (faster when overspun)
+    t.fullT = t.alive && t.spin >= 0.98 ? (t.fullT ?? 0) + dt : 0;
+    if (t.fullT > 1.5 && t.burst > 0) t.burst = Math.max(0, t.burst - (t.spin > 1.05 ? 0.03 : 0.015) * dt);
     t.dashCd = Math.max(0, t.dashCd - dt);
     t.jumpCd = Math.max(0, t.jumpCd - dt);
     t.itemCd = Math.max(0, t.itemCd - dt);

@@ -87,6 +87,8 @@ export interface TopState {
   od?: boolean; holdT?: number;
   /** where the current dash (or Power Fist charge) started: a dash's extra punch grows with the run-up */
   dashX?: number; dashZ?: number;
+  /** how long it's been at full spin: after a moment there, burst health slowly comes back */
+  fullT?: number;
   /** pinball: aim of the lock this ball sits in · battling in an arena bowl (normal top physics there) */
   aimA?: number; duel?: boolean;
   launch: number; launchLocked: boolean;
