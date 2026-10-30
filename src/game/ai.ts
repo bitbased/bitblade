@@ -320,7 +320,7 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
     const srcs = sim.markers.filter((m) => m.kind === 'spinpad' || (sim.party && m.kind === 'saucer' && sim.linkOn(m)));
     if (srcs.length) {
       // (badly hurt: go and sit at full spin — that's what heals burst health — until it's back up, or 12s at most)
-      if (t.burst > 0.6 && !ai.healUntil && s.t >= (ai.healAgain ?? 0)) ai.healUntil = s.t + 12;
+      if (t.burst > 0.5 && !ai.healUntil && s.t >= (ai.healAgain ?? 0)) ai.healUntil = s.t + 12;
       if (ai.healUntil && (t.burst < 0.35 || s.t > ai.healUntil)) { ai.healUntil = undefined; ai.healAgain = s.t + 10; }
       if (t.spin < 0.4 || ai.healUntil) ai.recharge = true;
       else if (t.spin > 0.85) ai.recharge = false;
