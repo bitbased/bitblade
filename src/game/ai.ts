@@ -28,6 +28,8 @@ export interface AIState {
   errand?: { x: number; z: number; mi: number; until: number; kind?: 'flip' | 'boost' }; nextErrand?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
+  /** races: holding overdrive down a straight / into a jump (kept until a bend comes or the spin runs low) */
+  od?: boolean;
 }
 
 export function newAI(level: number, rnd: () => number): AIState {
@@ -672,7 +674,7 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   const dl = Math.hypot(dx, dz) || 1;
   dx /= dl; dz /= dl;
   // desired velocity along the line; steer by velocity error (handles drift and slides naturally)
-  const target = Math.min(want, 17) * (sim.rubber[t.id] ?? 1);
+  const target = Math.min(want, ai.od ? 22 : 17) * (sim.rubber[t.id] ?? 1); // (overdrive: don't hold it back)
   let ex = dx * target - t.vx, ez = dz * target - t.vz;
   // stay on the ribbon: pull hard back toward center when drifting wide
   const q0 = t.prog;
@@ -685,10 +687,25 @@ function raceControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Control)
   if (lv < 3) { const wob = (3 - lv) * 0.12 * Math.sin(s.t * 2.1 + ai.aimErr); const cx = c.mx, cz = c.mz; c.mx = cx * Math.cos(wob) - cz * Math.sin(wob); c.mz = cx * Math.sin(wob) + cz * Math.cos(wob); }
   // dash: on straights when slower than we could be, and right before jumps
   const straight = worst < 0.012;
-  // overdrive (hold dash) up steep climbs while there's spin to spare
+  // overdrive (hold dash): long boosts down straights, up climbs and into jumps — more of them when behind, when
+  // there's spin banked, and on the last lap (nothing to save it for). Let go before a bend (overdrive turns wide).
   const climb = T.y[(t.prog + 24) % T.n] - T.y[t.prog];
-  c.hold = lv >= 2 && t.grounded && climb > 2.5 && t.spin > 0.55 && straight;
-  if (c.hold && !t.od && t.dashCd <= 0) c.dash = true;
+  let runK = 0; // how far the road stays near-straight ahead
+  for (let k = 2; k < 90; k += 2) { if (Math.abs(T.curv[at(k)]) > 0.02) break; runK = k; }
+  const runM = runK * 0.5, need = 6 + speed * 1.1; // (room for the 0.35s wind-up and a good stretch at speed)
+  const rivals0 = s.tops.filter((o) => o !== t && o.alive && !o.drone);
+  const behind = rivals0.length > 0 && t.place > Math.max(1, Math.ceil((rivals0.length + 1) / 3));
+  const lastLap = t.lap >= sim.cfg.target - 1;
+  const banked = t.spin > 0.95;
+  const floor = lastLap ? 0.16 : behind ? 0.32 : banked ? 0.45 : 0.5; // (spin we keep in reserve)
+  const lead = !behind && t.place === 1 && !lastLap; // (the leader saves some for the fight)
+  const roadOk = runM > need || (gapK >= 0 && gapK < 50) || (climb > 2.5 && straight);
+  const keen = gapK >= 0 || climb > 2.5 || behind || banked || lastLap || (!lead && runM > need * 1.6);
+  const bendNear = worst > 0.03 && worstK * 0.5 < 5 + speed * 0.7;
+  if (ai.od) { if (bendNear || t.spin < floor - 0.08 || (!roadOk && gapK < 0)) ai.od = false; }
+  else if (lv >= 2 || (lv === 1 && behind)) ai.od = t.grounded && roadOk && keen && !bendNear && t.spin > floor && Math.random() < dt * [0, 1.5, 4, 8][lv];
+  c.hold = !!ai.od;
+  if (c.hold && !t.od && t.dashCd <= 0 && t.grounded) c.dash = true;
   if (t.dashCd <= 0 && t.grounded) {
     if (gapK >= 0 && gapK < 14 && speed < 15) c.dash = true;
     else if (straight && speed < target - 1 && t.spin > 0.5 && Math.random() < dt * [0, 0.6, 1.5, 3][lv]) c.dash = true;
