@@ -1505,7 +1505,7 @@ export class Sim {
     for (const b of s.boxes) {
       if (b.t > 0) { b.t -= dt; continue; }
       for (const t of s.tops) {
-        if (!t.alive || t.item || t.roll > 0 || t.drone) continue;
+        if (!t.alive || t.item || t.roll > 0 || (t.drone && !t.duel)) continue; // (an arena guardian can take the bowl's power-up too)
         if (Math.hypot(t.x - b.x, t.z - b.z) < this.radius(t) + 0.6 && Math.abs(t.y - b.y - 0.6) < 1.5) {
           b.t = 6;
           this.rollItem(t);
