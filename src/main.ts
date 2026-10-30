@@ -85,7 +85,19 @@ addEventListener('popstate', () => {
 addEventListener('pointerdown', arm, { once: true });
 addEventListener('keydown', arm, { once: true });
 
+/**
+ * UI scale: menus, lobby, screens and the pause menu are laid out for at least a 600px-tall (1000px-wide, landscape)
+ * screen and scaled down to fit anything smaller — like a game, everything stays on screen instead of scrolling.
+ * (The 3D view, the in-game HUD, the editors and the touch controls keep their own sizing.)
+ */
+function uiScale() {
+  const land = innerWidth > innerHeight;
+  const z = Math.max(0.45, Math.min(1, innerHeight / 600, land ? innerWidth / 1000 : 1));
+  document.documentElement.style.setProperty('--uiz', z.toFixed(3));
+}
+uiScale();
 addEventListener('resize', () => {
+  uiScale();
   const { renderer } = getRenderer(canvas);
   renderer.setSize(innerWidth, innerHeight);
   resizeBackdrop();
