@@ -3,7 +3,7 @@ import type { Sim } from './sim';
 import type { Control, TopState } from './types';
 import { VOID } from './terrain';
 import { hazardPose } from './hazards';
-import { flipperPose, flipperSide, segDist } from './pinball';
+import { arenaRing, flipperPose, flipperSide, segDist } from './pinball';
 
 export interface AIState {
   level: 1 | 2 | 3;
@@ -166,8 +166,13 @@ function pinballControl(sim: Sim, t: TopState, ai: AIState, dt: number, c: Contr
   if (t.held !== undefined && sim.markers[t.held]?.aim) {
     const m = sim.markers[t.held];
     if (ai.aimGoal === undefined) {
-      const dr = sim.s.pin?.swarm.find((d) => d.hp > 0);
-      ai.aimGoal = dr ? Math.atan2(dr.z - m.z, dr.x - m.x) : (m.rot ?? 0) + (sim.rnd() - 0.5) * (m.aim ?? 0);
+      // drones first, then an open arena bowl's gate, then a bank that's still up, else roughly the lock's own line
+      const pin = sim.s.pin!, ms = sim.markers, inArc = (x: number, z: number) => Math.abs(Math.atan2(Math.sin(Math.atan2(z - m.z, x - m.x) - (m.rot ?? 0)), Math.cos(Math.atan2(z - m.z, x - m.x) - (m.rot ?? 0)))) <= m.aim!;
+      const dr = pin.swarm.find((d) => d.hp > 0 && inArc(d.x, d.z));
+      const gates = ms.map((a, ai) => ({ a, ai })).filter(({ a, ai }) => a.kind === 'arena' && pin.lit[ai]).map(({ a }) => { const { R, g } = arenaRing(a); return { x: a.x + Math.cos(g) * R, z: a.z + Math.sin(g) * R }; });
+      const drop = ms.map((q, qi) => ({ q, qi })).find(({ q, qi }) => q.kind === 'drop' && !pin.lit[qi] && inArc(q.x, q.z))?.q;
+      const goal = dr ?? gates.find((g) => inArc(g.x, g.z)) ?? drop;
+      ai.aimGoal = goal ? Math.atan2(goal.z - m.z, goal.x - m.x) : (m.rot ?? 0) + (sim.rnd() - 0.5) * (m.aim ?? 0);
       ai.aimGoal = Math.max((m.rot ?? 0) - m.aim!, Math.min((m.rot ?? 0) + m.aim!, ai.aimGoal));
     }
     const a = t.aimA ?? m.rot ?? 0, diff = ai.aimGoal - a;

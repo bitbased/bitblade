@@ -250,21 +250,25 @@ export function rampRails(r: PinRamp): Rail[] {
  * and a guardian blade drops in for a 1v1 battle.
  */
 /** an arena bowl's ring: its radius (outside the stadium's curved wall), the gate's direction and half-angle */
-/** link colours, the same scheme on every table: the things that light a shot wear its colour as diamond inserts,
- *  the shot itself a ring with arrows pointing in (dim while unlit, pulsing while lit) */
-export const LINK_COLORS = ['#3bd8ff', '#ff9a2b', '#c86bff', '#7dff5a', '#ff4f8b', '#ffe14a'];
-export interface PinLink { color: string; sources: number[]; targets: number[]; /** a link channel (else an arena / hive link) */ ch?: number }
+/** link colours mean the same on every table: channels 1-4 cyan · orange · violet (kickbacks) · green, then a battle
+ *  bowl's link pink and a drone hive's yellow */
+export const LINK_COLORS = ['#3bd8ff', '#ff9a2b', '#c86bff', '#7dff5a'];
+export const ARENA_LINK = '#ff4f8b', HIVE_LINK = '#ffe14a';
+export interface PinLink { color: string; name: string; sources: number[]; targets: number[]; /** a link channel (else an arena / hive link) */ ch?: number }
 /** what lights what on a table: link channels (arms → need), drop banks → their arena bowl, lane groups → their hive */
 export function pinLinks(ms: Marker[]): PinLink[] {
   const idx = (f: (m: Marker) => boolean) => ms.map((m, i) => (f(m) ? i : -1)).filter((i) => i >= 0);
-  const links: Omit<PinLink, 'color'>[] = [];
+  const links: PinLink[] = [];
   const chans = [...new Set(ms.filter((m) => m.need !== undefined).map((m) => m.need!))].sort((a, b) => a - b);
-  for (const ch of chans) links.push({ ch, sources: idx((m) => m.arms === ch), targets: idx((m) => m.need === ch) });
+  for (const ch of chans) {
+    const targets = idx((m) => m.need === ch);
+    links.push({ ch, color: LINK_COLORS[(ch + LINK_COLORS.length - 1) % LINK_COLORS.length], name: targets.length ? linkName(ms, ms[targets[0]]) : '', sources: idx((m) => m.arms === ch), targets });
+  }
   ms.forEach((m, i) => {
-    if (m.kind === 'arena') links.push({ sources: idx((q) => q.kind === 'drop' && (q.team ?? 0) === (m.team ?? 0)), targets: [i] });
-    if (m.kind === 'hive') links.push({ sources: idx((q) => q.kind === 'rollover' && q.team === m.team), targets: [i] });
+    if (m.kind === 'arena') links.push({ color: ARENA_LINK, name: m.name ?? 'ARENA', sources: idx((q) => q.kind === 'drop' && (q.team ?? 0) === (m.team ?? 0)), targets: [i] });
+    if (m.kind === 'hive') links.push({ color: HIVE_LINK, name: m.name ?? 'SWARM', sources: idx((q) => q.kind === 'rollover' && q.team === m.team), targets: [i] });
   });
-  return links.filter((l) => l.sources.length && l.targets.length).map((l, k) => ({ ...l, color: LINK_COLORS[k % LINK_COLORS.length] }));
+  return links.filter((l) => l.sources.length && l.targets.length);
 }
 /** what a link shot is called when it lights */
 export function linkName(ms: Marker[], m: Marker) {
@@ -488,7 +492,7 @@ function starCadet(): ArenaDef {
   const lane = (x: number): Rail => ({ pts: [[x, -21.2], [x, -18.4]], t: 0.3, h: 1.1 }); // (a ~1.6-1.9m gap under the arch: a ball crossing the top can glance off their tops into the lanes)
   return {
     id: 'pin-star-cadet', name: 'Star Cadet', desc: 'A space table: re-entry lanes over the bumper nest, a launch ramp, hyperspace and fuel chutes, booster drop targets, linked wormholes, a kickback and a center post.',
-    theme: COSMOS, custom: false, pinball: true, tilt: 0.15,
+    theme: COSMOS, custom: false, pinball: true, tilt: 0.15, inserts: [-2.6, 8.9],
     course: flat(5, 8),
     rails: [
       { pts: outer, h: 3, t: 0.7 },
@@ -564,7 +568,7 @@ function swarmProtocol(): ArenaDef {
   const C = { x: 1.6, z: -9.0 }, CORE_R = 3.6; // (with its lip and ring the core is ~10.4m across)
   return {
     id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber three-flipper table: a skill-ladder launch, a return ramp, an upper flipper feeding an aimable lock, a battle core behind a firewall and a drone swarm.',
-    theme: CYBER, custom: false, pinball: true, tilt: 0.15,
+    theme: CYBER, custom: false, pinball: true, tilt: 0.15, inserts: [-1.1, 6.2],
     course: flat(5, 8),
     rails: [
       { pts: outer, h: 3, t: 0.7 },
@@ -585,7 +589,7 @@ function swarmProtocol(): ArenaDef {
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
       { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 0.54, speed: 17 },
-      ...low.markers,
+      ...low.markers.map((m) => (m.kind === 'kickback' ? { ...m, need: 3 } : m)), // (the flag lanes light it, as on every table)
       { kind: 'post', x: xc, z: 22.2, r: 0.45 },
       // the skill ladder: three rollovers along the launch's run across the top
       { kind: 'rollover', x: 9.9, z: -19.4, r: 1.0, skill: 1 },
@@ -598,21 +602,21 @@ function swarmProtocol(): ArenaDef {
       { kind: 'bumper', x: -2.6, z: -17.6, r: 1.0 },
       { kind: 'bumper', x: 0.9, z: -18.4, r: 1.0 },
       { kind: 'bumper', x: C.x, z: C.z - CORE_R - 2.75, r: 0.9 }, // (on the core's rim: nothing rests up there)
-      { kind: 'hive', x: -4.6, z: -20.6, r: 12, len: 5, team: 2 },
+      { kind: 'hive', x: -4.6, z: -20.6, r: 12, len: 5, team: 2, name: 'SWARM' },
       // the swarm: the ramp's rollover + the right orbit's (group 2)
       { kind: 'rollover', x: -9.4, z: -12.5, r: 1.0, team: 2, fly: true },
       { kind: 'rollover', x: 10.6, z: -10, r: 1.0, team: 2 },
       // the CORE (center shot) and its firewall bank (team 1) in front of the gate
-      { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random' },
+      { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random', name: 'CORE' },
       { kind: 'spinpad', x: C.x + 1.8, z: C.z, r: 0.85 },
       { kind: 'item', x: C.x - 1.8, z: C.z },
       { kind: 'drop', x: C.x - 1.6, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
       { kind: 'drop', x: C.x, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
       { kind: 'drop', x: C.x + 1.6, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
       // flag rollovers above the drain (group 4)
-      { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
-      { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },
-      { kind: 'rollover', x: xc + 2.0, z: 11.0, r: 0.75, team: 4 },
+      { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4, arms: 3 },
+      { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4, arms: 3 },
+      { kind: 'rollover', x: xc + 2.0, z: 11.0, r: 0.75, team: 4, arms: 3 },
     ],
   } as ArenaDef;
 }

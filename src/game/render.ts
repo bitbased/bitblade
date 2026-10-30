@@ -11,7 +11,7 @@ import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
 import type { TrackSamples } from './track';
-import { arenaRails, arenaRing, pinLinks, railPolyline, railSegments, rampRails, flipperHalf, flyLift, flyLiftAlong } from './pinball';
+import { arenaRails, arenaRing, pinLinks, segDist, railPolyline, railSegments, rampRails, flipperHalf, flyLift, flyLiftAlong } from './pinball';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -713,6 +713,8 @@ export class GameView {
   skillRings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; mi: number }[] = [];
   linkShots: { mi: number; ch?: number; ring: THREE.MeshBasicMaterial; glow: THREE.MeshBasicMaterial; cap?: THREE.Object3D }[] = [];
   linkTrails: { srcs: number[]; ch?: number; mi: number; dots: THREE.MeshBasicMaterial[] }[] = [];
+  /** the row of link lamps: one per link, its progress pips, lit while the shot is open */
+  linkLamps: { mi: number; ch?: number; srcs: number[]; lamp: THREE.MeshBasicMaterial; label: THREE.MeshBasicMaterial; pips: THREE.MeshBasicMaterial[] }[] = [];
   /** pinball links: each linked piece's link colour (what lights a shot and the shot itself wear it) */
   linkCol = new Map<number, string>();
   droneMeshes: { g: THREE.Group; rotors: THREE.Mesh[] }[] = [];
@@ -799,6 +801,7 @@ export class GameView {
 
     this.buildMarkers();
     this.buildLinkDecals();
+    this.buildLinkLamps();
     this.buildRails();
     if (import.meta.env.DEV) (window as any).__r = this; // for the headless visual checks
     const T = this.terrain.track;
@@ -1313,9 +1316,20 @@ export class GameView {
     };
     const mat = (color: string, opacity = 0.3) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
     const dotGeo = new THREE.CircleGeometry(0.17, 12);
+    // (no dot sits under a wall or on another piece: the trail runs "under" them)
+    const segs = railSegments([...(this.cfg.arena.rails ?? []), ...(this.cfg.arena.ramps ?? []).flatMap(rampRails), ...ms.flatMap((m, mi) => (m.kind === 'arena' ? arenaRails(m, mi) : []))]);
+    const pieces = ms.filter((m) => ['bumper', 'saucer', 'portal', 'post', 'drop', 'rollover', 'kickback', 'spinpad', 'item', 'flipper', 'plunger'].includes(m.kind));
+    const clear = (x: number, z: number) => !segs.some((g) => segDist(g, x, z).d < g.half + 0.35)
+      && !pieces.some((m) => Math.hypot(m.x - x, m.z - z) < (m.kind === 'flipper' ? m.len ?? 3 : (m.r ?? 0.9) + 0.4))
+      && !ms.some((m) => m.kind === 'arena' && Math.hypot(m.x - x, m.z - z) < arenaRing(m).R + 0.3);
     for (const l of pinLinks(ms)) {
-      // (the trail starts from the middle of the group that lights it)
-      const sx = l.sources.reduce((a, i) => a + ms[i].x, 0) / l.sources.length, sz = l.sources.reduce((a, i) => a + ms[i].z, 0) / l.sources.length;
+      // the groups that light it: sources within ~5.5m of each other are one group, and each group gets its own trail
+      const groups: number[][] = [];
+      for (const i of l.sources) {
+        const near = groups.filter((g) => g.some((j) => Math.hypot(ms[i].x - ms[j].x, ms[i].z - ms[j].z) < 5.5));
+        for (const g of near) groups.splice(groups.indexOf(g), 1);
+        groups.push([i, ...near.flat()]);
+      }
       for (const mi of l.targets) {
         const m = ms[mi];
         let x = m.x, z = m.z, r = m.r ?? 1;
@@ -1343,17 +1357,64 @@ export class GameView {
           cap = lay(m.x, m.z, [lid, ...bars], false);
         }
         this.linkShots.push({ mi, ch: l.ch, ring, glow, cap });
-        // the trail: dots from the group to the shot
-        const dx = x - sx, dz = z - sz, L = Math.hypot(dx, dz), n = Math.floor((L - 2.6) / 1.0);
-        const dots: THREE.MeshBasicMaterial[] = [];
-        for (let k = 0; k < n; k++) {
-          const f = (1.3 + (k + 0.5) * ((L - 2.6) / n)) / L, dm = mat(l.color, 0.2);
-          lay(sx + dx * f, sz + dz * f, [new THREE.Mesh(dotGeo, dm)]);
-          dots.push(dm);
+        // a trail from each group to the shot: dots that fill as the group is made, and run toward the shot once open
+        for (const grp of groups) {
+          const sx = grp.reduce((a, i) => a + ms[i].x, 0) / grp.length, sz = grp.reduce((a, i) => a + ms[i].z, 0) / grp.length;
+          const dx = x - sx, dz = z - sz, L = Math.hypot(dx, dz), n = Math.floor((L - 2.6) / 1.0);
+          const dots: THREE.MeshBasicMaterial[] = [];
+          for (let k = 0; k < n; k++) {
+            const f = (1.3 + (k + 0.5) * ((L - 2.6) / n)) / L, px = sx + dx * f, pz = sz + dz * f, dm = mat(l.color, 0.2);
+            if (clear(px, pz)) lay(px, pz, [new THREE.Mesh(dotGeo, dm)]);
+            dots.push(dm);
+          }
+          this.linkTrails.push({ srcs: grp, ch: l.ch, mi, dots });
         }
-        this.linkTrails.push({ srcs: l.sources, ch: l.ch, mi, dots });
       }
     }
+  }
+
+  /** the row of link lamps on the lower playfield (like a real table's mode inserts): one per link, named in its
+   *  colour, with a pip per thing that lights it; lit while its shot is open */
+  buildLinkLamps() {
+    const at = this.cfg.arena.inserts;
+    if (!this.cfg.arena.pinball || !at) return;
+    const ms = this.cfg.arena.markers, tiltA = this.cfg.arena.tilt ? Math.atan(this.cfg.arena.tilt) : 0;
+    const links = pinLinks(ms), W = 3.1, H = 1.2, gap = 0.3;
+    links.forEach((l, k) => {
+      const x = at[0] + (k - (links.length - 1) / 2) * (W + gap), z = at[1];
+      const pivot = new THREE.Group();
+      pivot.position.set(x, this.groundY(x, z), z); pivot.rotation.x = tiltA;
+      const flat = (o: THREE.Mesh, y: number, dz = 0) => { o.rotation.x = -Math.PI / 2; o.position.set(0, y, dz); pivot.add(o); };
+      // the lamp: a rounded insert in the link's colour
+      const shape = new THREE.Shape(), r = 0.3, w = W / 2, h = H / 2;
+      shape.moveTo(-w + r, -h); shape.lineTo(w - r, -h); shape.quadraticCurveTo(w, -h, w, -h + r); shape.lineTo(w, h - r); shape.quadraticCurveTo(w, h, w - r, h);
+      shape.lineTo(-w + r, h); shape.quadraticCurveTo(-w, h, -w, h - r); shape.lineTo(-w, -h + r); shape.quadraticCurveTo(-w, -h, -w + r, -h);
+      const lamp = new THREE.MeshBasicMaterial({ color: l.color, transparent: true, opacity: 0.2, toneMapped: false, depthWrite: false });
+      // (on a dark backing, so it reads on any floor)
+      const back = new THREE.Mesh(new THREE.ShapeGeometry(shape, 6), new THREE.MeshBasicMaterial({ color: '#05070d', transparent: true, opacity: 0.8, depthWrite: false }));
+      back.scale.setScalar(1.06);
+      flat(back, 0.04);
+      flat(new THREE.Mesh(new THREE.ShapeGeometry(shape, 6), lamp), 0.05);
+      // its name
+      const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
+      const g = cv.getContext('2d')!;
+      g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      let fs = 74; do { g.font = `800 ${fs}px Orbitron, 'Arial Black', sans-serif`; fs -= 4; } while (g.measureText(l.name).width > 470 && fs > 30);
+      g.fillText(l.name, 256, 58);
+      const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
+      const label = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false });
+      flat(new THREE.Mesh(new THREE.PlaneGeometry(W * 0.92, W * 0.92 / 4), label), 0.07, -0.08);
+      // a pip per thing that lights it
+      const pips: THREE.MeshBasicMaterial[] = [];
+      l.sources.forEach((_, j) => {
+        const pm = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.25, toneMapped: false, depthWrite: false });
+        const pip = new THREE.Mesh(new THREE.CircleGeometry(0.09, 10), pm);
+        flat(pip, 0.07, 0.36); pip.position.x = (j - (l.sources.length - 1) / 2) * 0.3;
+        pips.push(pm);
+      });
+      this.scene.add(pivot);
+      this.linkLamps.push({ mi: l.targets[0], ch: l.ch, srcs: l.sources, lamp, label, pips });
+    });
   }
 
   /** is this link's shot open? (a channel lit · an arena unlocked · a hive's swarm out) */
@@ -1700,6 +1761,12 @@ export class GameView {
         d.ring.opacity = open ? 0.8 + 0.2 * Math.sin(this.time * 7) : 0.35;
         d.glow.opacity = open ? 0.4 + 0.2 * Math.sin(this.time * 7) : 0;
         if (d.cap) d.cap.visible = !open;
+      }
+      for (const lp of this.linkLamps) {
+        const open = this.linkOpen(s, lp.mi, lp.ch);
+        lp.lamp.opacity = open ? 0.75 + 0.25 * Math.sin(this.time * 7) : 0.25;
+        lp.label.opacity = open ? 1 : 0.6;
+        lp.pips.forEach((pm, j) => { pm.opacity = open || s.pin!.lit[lp.srcs[j]] ? 1 : 0.22; });
       }
       for (const tr of this.linkTrails) {
         // filling from the group as it's made · running toward the shot once it's open

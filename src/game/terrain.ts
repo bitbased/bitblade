@@ -68,6 +68,9 @@ export interface ArenaDef {
   tilt?: number;
   /** a pinball table (Pinball mode) */
   pinball?: boolean;
+  /** pinball: where the row of link lamps sits on the lower playfield (its centre) — one lamp per link, named, showing
+   *  progress and lit while its shot is open */
+  inserts?: [number, number];
   /** raised ramp paths on the floor (their walls are added automatically) */
   ramps?: PinRamp[];
 }

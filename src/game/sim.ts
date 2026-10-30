@@ -1155,6 +1155,8 @@ export class Sim {
     });
     // banks pop back up (unless a ball sits right where a plate would rise)
     ms.forEach((m, mi) => {
+      // (a bank that opened an arena bowl stays down while the bowl is open — it's the way in)
+      if (m.kind === 'drop' && pin.lit[mi] && pin.tm[mi] > 0 && ms.some((a, ai) => a.kind === 'arena' && (a.team ?? 0) === (m.team ?? 0) && pin.lit[ai])) { pin.tm[mi] = Math.max(pin.tm[mi], 0.5); return; }
       if (m.kind === 'drop' && pin.lit[mi] && pin.tm[mi] > 0 && pin.tm[mi] <= dt * 1.5 && !s.tops.some((t) => t.alive && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 0.8) + 0.8)) pin.lit[mi] = false;
     });
     // rollover groups: rollovers sharing a team number light up; light the whole group for a bonus
