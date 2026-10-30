@@ -1,5 +1,5 @@
 // Local + online-host lobby: player slots (+ PLAYER: press any device to join · + CPU), blades, teams, arena, rules,
-// invite codes. A lone local player follows whatever device they use (touch, keyboard, gamepad).
+// invite codes. A player's input only changes on their card's input selector (or when they join).
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { glyph } from './nav';
 import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
@@ -143,7 +143,7 @@ export class LobbyScreen implements Screen {
     if (a.mode && !a.keep && a.mode !== L.mode) this.setMode(a.mode);
     else if (a.mode && !a.keep) this.setMode(a.mode, true);
     if (a.arenaId && allArenas().some((x) => x.id === a.arenaId && this.fits(x))) L.arenaId = a.arenaId;
-    if (!L.slots.some((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote')) {
+    if (!L.slots.length) { // (a fresh lobby starts with you in it; one you emptied of players stays that way)
       L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb' }, bladeId: PRESETS[0].id, team: 0 });
     }
     if (a.bladeId) L.slots[0].bladeId = a.bladeId;
@@ -368,13 +368,16 @@ export class LobbyScreen implements Screen {
     }
     c.pad.style.display = this.isPersonalPad(i) ? '' : 'none';
     (c.pad.querySelector('.tm') as HTMLElement).style.display = this.isTeamMode() ? '' : 'none';
-    c.x.style.display = L.slots.length > 1 ? '' : 'none';
+    c.x.style.display = ''; // (anyone can be removed, P1 too: an all-CPU match is fine)
   }
 
   cycleCtrl(i: number) {
     const s = L.slots[i];
     if (!s || s.ctrl.type === 'remote') return;
-    const opts = this.controllerOptions(s.ctrl);
+    // (players and CPUs are separate: a CPU's label only changes its difficulty, a player's only their device —
+    // + PLAYER and + CPU add them, ✕ removes them)
+    const cpu = s.ctrl.type === 'cpu';
+    const opts = this.controllerOptions(s.ctrl).filter((o) => (o.type === 'cpu') === cpu);
     const k = opts.findIndex((o) => specLabel(o) === specLabel(s.ctrl));
     s.ctrl = opts[(k + 1) % opts.length];
     if (s.ctrl.type === 'touch' && s.ctrl.gyro) this.app.input.enableGyro();
@@ -600,9 +603,8 @@ export class LobbyScreen implements Screen {
   }
 
   /**
-   * Each frame: the device that was just used. In join mode it becomes a new player (unless someone already has it);
-   * otherwise, if there's only one local player, they follow it (touch / keyboard / gamepad — a mouse click on the
-   * menus doesn't count). Returns true when the press was used up (joining someone, or switching to a new device).
+   * Each frame: the device that was just used. In join mode it becomes a new player (unless someone already has it).
+   * Nothing else changes anyone's input. Returns true when the press was used up.
    */
   joinFrame() {
     let dev = this.app.input.deviceUsed();
@@ -620,20 +622,9 @@ export class LobbyScreen implements Screen {
       if (this.join(dev)) { this.joining = 0; this.joinUi(); return true; }
       return false;
     }
-    // a lone local player follows their device
-    const humans = L.slots.filter((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote');
-    // (with several players in, a gamepad nobody's using doesn't get to press START: tell them how to join)
-    if (humans.length > 1 && dev.type === 'pad' && !L.slots.some((s) => specKey(s.ctrl) === specKey(dev!))) {
-      this.app.toast(`${specLabel(dev)} isn't playing — press + PLAYER to add it`);
-      return true;
-    }
-    if (humans.length !== 1 || dev.type === 'mouse') return false;
-    const me = humans[0];
-    const want: ControllerSpec = dev.type === 'kb1' || dev.type === 'kb2' ? { type: 'kb' } : dev.type === 'touch' ? { type: 'touch', gyro: me.ctrl.type === 'touch' ? me.ctrl.gyro : undefined } : dev;
-    if (specKey(want) === specKey(me.ctrl)) return false;
-    me.ctrl = want; this.renderSlots(); this.dirty = true;
-    this.app.toast(`P1 now on ${specLabel(want)}`);
-    return true; // (picking up a new device only switches to it: that press doesn't also hit START)
+    // (nobody's input changes on its own: only a card's input selector, or joining with + PLAYER, sets it — any other
+    // press just works the menus)
+    return false;
   }
 
   removeSlot(i: number) {
@@ -668,9 +659,6 @@ export class LobbyScreen implements Screen {
     if (L.slots.length >= m.maxPlayers) {
       idx = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
       if (idx < 0) return false;
-    } else {
-      const cpu = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
-      if (cpu >= 0 && L.slots.length >= m.minPlayers) idx = cpu;
     }
     const blades = allBlades();
     const slot: Slot = { name: spec.type === 'pad' ? `Pad ${spec.index + 1}` : `Player ${idx + 1}`, ctrl: spec, bladeId: blades[(idx * 2 + 1) % blades.length].id, team: idx % 2 };
