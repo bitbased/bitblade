@@ -23,7 +23,7 @@ export interface AIState {
   /** low on spin: heading for a spin source (a spin pad, or a slot in a pinball party) until it's topped up */
   recharge?: boolean;
   /** pinball party: a short errand to light something on the table (like a crystal in Crystal Rush) */
-  errand?: { x: number; z: number; mi: number; until: number }; nextErrand?: number;
+  errand?: { x: number; z: number; mi: number; until: number; kind?: 'flip' | 'boost' }; nextErrand?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
@@ -334,7 +334,8 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
   const pin = s.pin;
   if (sim.party && pin && !t.drone && t.held === undefined) {
     const lit = (mi: number) => pin.lit[mi];
-    if (ai.errand && (s.t > ai.errand.until || lit(ai.errand.mi) || Math.hypot(ai.errand.x - t.x, ai.errand.z - t.z) < 0.8)) { ai.errand = undefined; ai.nextErrand = s.t + 5 + Math.random() * 4; }
+    const done = ai.errand && (ai.errand.kind === 'flip' ? (t.flipT ?? 0) > 0 : lit(ai.errand.mi) || Math.hypot(ai.errand.x - t.x, ai.errand.z - t.z) < 0.8);
+    if (ai.errand && (s.t > ai.errand.until || done)) { ai.errand = undefined; ai.nextErrand = s.t + 5 + Math.random() * 4; }
     const nearFoe = enemies.some((e) => Math.hypot(e.x - t.x, e.z - t.z) < 7);
     if (!ai.errand && !nearFoe && s.t >= (ai.nextErrand ?? 0)) {
       const goals = sim.markers.map((m, mi) => ({ m, mi })).filter(({ m, mi }) => !lit(mi) && (m.kind === 'rollover' || m.kind === 'target' || m.kind === 'drop') && !m.fly)
@@ -343,8 +344,40 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       let best: (typeof goals)[number] | null = null, bd = 14;
       for (const g of goals) { const d = Math.hypot(g.x - t.x, g.z - t.z) * (sim.markers[g.mi].kind === 'rollover' ? 1.6 : 1); if (d < bd) { bd = d; best = g; } }
       if (best) ai.errand = { ...best, until: s.t + 4 };
+      // or now and then: roll onto a flipper and let it fire you at a rival up the table (a flipper shot hits harder)
+      const upTable = enemies.some((e) => e.z < t.z - 6);
+      if (upTable && Math.random() < 0.3) {
+        let fb: { x: number; z: number; mi: number } | null = null, fd = 16;
+        sim.markers.forEach((m, mi) => {
+          if (m.kind !== 'flipper') return;
+          const P = flipperPose(m, m.rot ?? 0), ux = P.bx - P.ax, uz = P.bz - P.az, ul = Math.hypot(ux, uz) || 1;
+          let nx = -uz / ul, nz = ux / ul; if (nz > 0) { nx = -nx; nz = -nz; } // (the side facing up the table)
+          const x = P.ax + ux * 0.55 + nx * 0.9, z = P.az + uz * 0.55 + nz * 0.9, d = Math.hypot(x - t.x, z - t.z);
+          if (d < fd) { fd = d; fb = { x, z, mi }; }
+        });
+        if (fb) ai.errand = { ...(fb as { x: number; z: number; mi: number }), until: s.t + 4, kind: 'flip' };
+      }
     }
     if (ai.errand && !nearFoe) { ai.tx = ai.errand.x; ai.tz = ai.errand.z; return; }
+  }
+
+  // battle arenas with boost pads: now and then, with the rival well away, run over a pad that points at them — you
+  // arrive fast (like going for an item, but only when it's on the way)
+  if (!sim.party && mode !== 'race' && mode !== 'quest' && mode !== 'pinball' && !t.drone && !ai.recharge) {
+    if (ai.errand && (s.t > ai.errand.until || Math.hypot(ai.errand.x - t.x, ai.errand.z - t.z) < 0.9)) { ai.errand = undefined; ai.nextErrand = s.t + 6 + Math.random() * 4; }
+    const foe = enemies.length ? enemies.reduce((a, e) => (Math.hypot(e.x - t.x, e.z - t.z) < Math.hypot(a.x - t.x, a.z - t.z) ? e : a)) : null;
+    if (!ai.errand && foe && Math.hypot(foe.x - t.x, foe.z - t.z) > 6 && s.t >= (ai.nextErrand ?? 0)) {
+      let pad: { x: number; z: number; mi: number } | null = null, pd = 12;
+      sim.markers.forEach((m, mi) => {
+        if (m.kind !== 'boost') return;
+        const a = m.rot ?? 0, fx = Math.sin(a), fz = Math.cos(a), ex = foe.x - m.x, ez = foe.z - m.z, el = Math.hypot(ex, ez) || 1;
+        const d = Math.hypot(m.x - t.x, m.z - t.z);
+        if ((ex * fx + ez * fz) / el > 0.75 && d < pd) { pd = d; pad = { x: m.x, z: m.z, mi }; }
+      });
+      if (pad) ai.errand = { ...(pad as { x: number; z: number; mi: number }), until: s.t + 3, kind: 'boost' };
+      else ai.nextErrand = s.t + 2;
+    }
+    if (ai.errand?.kind === 'boost') { ai.tx = ai.errand.x; ai.tz = ai.errand.z; return; }
   }
 
   switch (t.duel ? (s.pin?.duel?.game === 'koth' ? 'koth' : 'duel') : sim.cfg.mode) {
