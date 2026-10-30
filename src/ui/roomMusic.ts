@@ -2,7 +2,8 @@
 // songs); the whole song travels with the room, so everyone hears it — and anyone can copy a custom one into
 // their own library (how songs get shared).
 import { h, type App } from './app';
-import { allSongs, loadCustomSongs, sanitizeSong, saveCustomSongs, type Song } from '../game/music';
+import { allSongs, loadCustomSongs, sanitizeSong, saveCustomSongs, surpriseSong, type Song } from '../game/music';
+import { icon } from './icons';
 
 /** biggest song we'll accept over the network (a full 4-pattern, 32-part song is ~4KB) */
 export const MAX_SONG_BYTES = 24000;
@@ -27,8 +28,9 @@ export function copyToMySongs(s: Song) {
 }
 
 /**
- * The ROOM MUSIC row: ◀ song ▶ (when you're allowed to set it; cycles YOUR library, "Auto" first) and a
- * "Copy to my songs" button when the room song is someone's custom song you don't have yet.
+ * The ROOM MUSIC row: ◀ song ▶ (when you're allowed to set it; cycles YOUR library, "Auto" first), 🎲 (a brand-new
+ * surprise song for the whole room) and a "Copy to my songs" button when the room song is someone's custom song you
+ * don't have yet.
  */
 export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canSet: boolean; onSet: (s: Song | null) => void; onCopied?: () => void }) {
   const choices: (Song | null)[] = [null, ...allSongs()];
@@ -42,7 +44,8 @@ export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canS
     h('span.lbl', null, 'MUSIC'),
     o.canSet ? h('button.arrow', { onclick: () => cycle(-1) }, '◀') : null,
     h('div.val', null, h('b', null, s ? `♪ ${s.name}` : 'AUTO'), h('span', null, sub)),
-    o.canSet ? h('button.arrow', { onclick: () => cycle(1) }, '▶') : null);
+    o.canSet ? h('button.arrow', { onclick: () => cycle(1) }, '▶') : null,
+    o.canSet ? h('button.arrow.rm-dice', { title: 'Surprise the room: a brand-new song, shared with everyone (press again for another)', onclick: (e: Event) => { e.stopPropagation(); o.onSet(surpriseSong()); } }, icon('dice')) : null);
   if (o.canSet) row.addEventListener('navx', (e) => cycle((e as CustomEvent).detail));
   // one fixed-height status line, whatever it holds — so clicking through songs never shifts the room UI
   const status = h('div.rm-status', null,
