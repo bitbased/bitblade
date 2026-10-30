@@ -53,7 +53,6 @@ function upgradeNumber(inp: HTMLInputElement) {
   };
   holdRepeat(minus, () => step(-1));
   holdRepeat(plus, () => step(1));
-  wrap.addEventListener('wheel', (e) => { e.preventDefault(); step(e.deltaY < 0 ? 1 : -1); }, { passive: false });
   wrap.addEventListener('navx', (e) => step((e as CustomEvent).detail));
   upgraded.add(wrap);
 }
@@ -97,7 +96,6 @@ function upgradeSelect(sel: HTMLSelectElement) {
   prev.addEventListener('click', () => cycle(-1));
   next.addEventListener('click', () => cycle(1));
   wrap.addEventListener('navx', (e) => cycle((e as CustomEvent).detail));
-  wrap.addEventListener('wheel', (e) => { if (openPop) return; e.preventDefault(); cycle(e.deltaY < 0 ? -1 : 1); }, { passive: false });
   label.addEventListener('click', () => {
     if (openPop) { closePop(); return; }
     const pop = document.createElement('div');

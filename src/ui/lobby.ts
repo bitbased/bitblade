@@ -7,14 +7,14 @@ import { ringPoints } from '../core/bladeMesh';
 import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
 import { MODES, PICK_MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
-import { cloudRelayUrl, hostCloud, hostLocal } from '../net/transport';
+import { cloudRelayUrl, hostCloud, hostLocal, publicJoinInput } from '../net/transport';
 import { getPlatform } from '../net/platform';
 import { TEAM_COLORS } from './hud';
 import { setBackdropVisible, setBackdropArena } from './backdrop';
 import { settings } from '../core/settings';
 import { icon, drawIcon } from './icons';
 import type { MatchArg } from './match';
-import { hostRoom } from '../net/room';
+import { clientRoom, hostRoom } from '../net/room';
 import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
@@ -23,7 +23,9 @@ import type { Song } from '../game/music';
 
 /** auto: a ghost CPU — a place the mode needs filled; it plays as a CPU unless a player takes it (+ PLAYER) or it's
  *  locked in as a CPU (+ CPU, or its difficulty is changed) */
-interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean; teamLock?: boolean; teamPicks?: number }
+interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean; teamLock?: boolean; teamPicks?: number;
+  /** a guest's view of the room: the host's label for the slot, and whether it's this guest's own */
+  label?: string; mine?: boolean }
 
 interface Card {
   el: HTMLElement; pnum: HTMLElement; team: HTMLElement; cv: HTMLCanvasElement; name: HTMLInputElement; bname: HTMLElement;
@@ -146,6 +148,7 @@ export class LobbyScreen implements Screen {
   joinMsg!: HTMLElement;
   /** a full lobby's + PLAYER (in the rules row) */
   joinMini?: HTMLButtonElement;
+  startBtn?: HTMLButtonElement;
   cpuMini?: HTMLButtonElement;
   /** join mode: listening for a new player's device (time it started, ms) */
   joining = 0;
@@ -167,9 +170,30 @@ export class LobbyScreen implements Screen {
 
   get mode() { return MODES.find((m) => m.id === L.mode)!; }
 
+  /**
+   * GUEST: in someone else's online room, this same lobby shows their room — their mode, arena, rules, players and
+   * music, kept in step with what the host sends. You pick your own blade, name and team on your card; with OPEN
+   * CONTROL the room's settings and START work for you too (they're sent to the host, who applies them).
+   */
+  guest = false;
+  /** your own lobby, put back when you leave the room view */
+  private guestBackup = '';
+  private remoteArena: ArenaDef | null = null;
+  private lastSong: string | null | undefined = undefined;
+  get canCtl() { return this.guest && clientRoom.lobby?.control === 'all'; }
+  /** a guest changing a room setting: sent to the host (OPEN CONTROL), or a note that the leader runs the room */
+  guestCtl(a: string, extra: Record<string, unknown> = {}) {
+    if (!this.guest) return false;
+    if (this.canCtl) clientRoom.send({ t: 'ctl', a, ...extra });
+    else this.app.toast(`${clientRoom.lobby?.leader ?? 'The leader'} runs this room — you choose your blade and team`);
+    return true;
+  }
+
   mount(app: App, arg?: unknown) {
     this.app = app;
     if (import.meta.env.DEV) (window as unknown as { __lobby?: unknown }).__lobby = this; // (headless checks)
+    if ((arg as { guest?: boolean } | undefined)?.guest && clientRoom.t) { this.mountGuest(); return; }
+    this.guest = false;
     // an online room keeps its chosen song between matches; otherwise menu music
     lobbyApp = app; activeLobby = this;
     if (hostRoom.t && L.song) { app.sfx.playSong(L.song, app.sfx.player?.song?.id !== L.song.id); onRoomSong(app, L.radioBy, (n) => hostRoomSong(app, n, `📻 ${L.slots[0]?.name ?? 'Host'}`, RADIO_HOST)); } else app.sfx.useMusic('menu');
@@ -205,6 +229,63 @@ export class LobbyScreen implements Screen {
     this.syncMembers();
     if (a.online && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
     if (a.autostart) setTimeout(() => { if (this.el.isConnected) { this.el.style.visibility = ''; this.start(); } }, 0);
+  }
+
+  /** a guest's lobby: the room as the host has it */
+  mountGuest() {
+    const app = this.app;
+    this.guest = true;
+    this.guestBackup = JSON.stringify(L);
+    this.lastSong = undefined;
+    setBackdropVisible(true, app.canvas);
+    this.build();
+    app.root.append(this.el);
+    this.nav = new MenuNav(app, this.el, () => this.leave());
+    this.nav.focus(1);
+    this.joining = 0;
+    clientRoom.handler = (m) => {
+      if (m?.t === 'lobby') this.applyRemote();
+      else if (m?.t === 'busy') this.renderOnline();
+      else if (m?.t === 'full') app.toast('The room is full for this mode — you\'ll play when a place frees up');
+      else if (m?.t === 'start' && clientRoom.t) app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } } as MatchArg);
+    };
+    clientRoom.closeHandler = (r) => {
+      if (r === 'Host left' && clientRoom.lastJoin) { app.go('online', { rejoin: clientRoom.lastJoin }); return; }
+      app.toast(`Disconnected: ${r}`);
+      app.go('online');
+    };
+    this.applyRemote();
+  }
+
+  /** guest: show the room as the host last sent it */
+  applyRemote() {
+    const lb = clientRoom.lobby;
+    if (!this.guest) return;
+    if (!lb) { this.renderOnline(); return; }
+    const me = clientRoom.t?.id ?? -1;
+    L.mode = (MODES.some((m) => m.id === lb.mode) ? lb.mode : 'duel') as ModeId;
+    this.remoteArena = lb.arenaDef ?? allArenas().find((a) => a.id === lb.arenaId) ?? null;
+    L.arenaId = lb.arenaId;
+    L.sizeFilter = ((Object.entries(SIZE_LABEL) as [ArenaSize, string][]).find(([, v]) => v === lb.sizeFilter)?.[0] ?? 'ALL') as typeof L.sizeFilter;
+    L.items = !!lb.items; L.target = lb.target ?? L.target; L.time = lb.time ?? L.time;
+    if (lb.nudge !== undefined) L.nudge = !!lb.nudge;
+    if (lb.kothShare !== undefined) L.kothShare = !!lb.kothShare;
+    if (lb.rubber !== undefined) L.rubber = lb.rubber;
+    L.slots = (lb.slots as { name: string; ctrl: string; blade?: BladeDesign; team: number; lock?: boolean; auto?: boolean }[]).map((s) => {
+      const peer = s.ctrl.startsWith('online:') ? Number(s.ctrl.slice(7)) : -1;
+      const ctrl: ControllerSpec = s.ctrl.startsWith('CPU') ? { type: 'cpu', level: 2 } : { type: 'remote', peer };
+      return { name: s.name, ctrl, bladeId: s.blade?.id ?? PRESETS[0].id, blade: s.blade, team: s.team, teamLock: !!s.lock, auto: !!s.auto, label: s.ctrl, mine: peer === me && me >= 0 };
+    });
+    L.count = L.slots.length;
+    // the room's song plays for everyone in the room
+    const song = lb.song ? acceptSong(lb.song) : null;
+    if ((song?.id ?? null) !== this.lastSong) {
+      this.lastSong = song?.id ?? null;
+      if (song) this.app.sfx.playSong(song, this.app.sfx.player?.song?.id !== song.id); else this.app.sfx.useMusic('menu');
+      if (song) onRoomSong(this.app, lb.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true }));
+    }
+    this.refresh();
+    this.renderOnline();
   }
 
   setMode(id: ModeId, keepArena = false) {
@@ -251,6 +332,7 @@ export class LobbyScreen implements Screen {
    * In slot order, so someone joining never reshuffles the people already in.
    */
   assignTeams() {
+    if (this.guest) return; // (the host balances the room's teams)
     const m = this.mode;
     if (m.id === 'gauntlet' || m.id === 'quest') { L.slots.forEach((s) => (s.team = 0)); return; }
     if (!this.isTeamMode()) { L.slots.forEach((s, i) => (s.team = i)); return; }
@@ -269,6 +351,7 @@ export class LobbyScreen implements Screen {
   cycleTeam(i: number) {
     const s = L.slots[i];
     if (!s || !this.isTeamMode()) return;
+    if (this.guest) { if (s.mine) clientRoom.send({ t: 'ctl', a: 'team' }); else this.app.toast('You pick your own team — the room balances the rest'); return; }
     if (!s.teamLock) { s.teamLock = true; s.team = 1 - s.team; s.auto = false; }
     else if (s.teamPicks === undefined || s.teamPicks < 1) { s.team = 1 - s.team; s.teamPicks = 1; }
     else { s.teamLock = false; s.teamPicks = undefined; }
@@ -308,19 +391,20 @@ export class LobbyScreen implements Screen {
       return el;
     };
     const targetLbl = h('span'), targetVal = h('b'), timeVal = h('b'), rubberVal = h('b');
-    const target = stepper(targetLbl, targetVal, (d) => { L.target = Math.max(1, L.target + d * (L.mode === 'koth' ? 5 : 1)); this.refresh(); });
-    const time = stepper(h('span', null, 'TIME'), timeVal, (d) => { L.time = Math.max(30, L.time + d * 15); this.refresh(); });
+    const target = stepper(targetLbl, targetVal, (d) => this.stepTarget(d));
+    const time = stepper(h('span', null, 'TIME'), timeVal, (d) => this.stepTime(d));
     // PLAYERS: how many places — the ones nobody's taken are ghost CPUs (online friends join into them)
     const countVal = h('b');
-    const count = stepper(h('span', null, 'PLAYERS'), countVal, (d) => { L.count = L.count + d * (this.isTeamMode() ? 2 : 1); if (d < 0) L.count = Math.max(L.slots.filter((s) => !s.auto).length, L.count); this.fillCpus(); this.renderSlots(); this.dirty = true; });
+    const count = stepper(h('span', null, 'PLAYERS'), countVal, (d) => this.stepCount(d));
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
-    const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => { L.nudge = !L.nudge; this.refresh(); } }, h('span.dot'), 'NUDGE');
-    const share = h('div.toggle.panel.nav', { title: 'King of the Hill: everyone in the zone banks time, even when it is contested. Off: only a top holding it alone scores', onclick: () => { L.kothShare = !L.kothShare; this.refresh(); } }, h('span.dot'), 'SHARED TIME');
-    const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => { L.rubber = (L.rubber + 1) % 3; this.refresh(); } }, 'CPU CATCH-UP ', rubberVal);
-    rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.refresh(); });
+    const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => this.toggleRule('nudge') }, h('span.dot'), 'NUDGE');
+    const share = h('div.toggle.panel.nav', { title: 'King of the Hill: everyone in the zone banks time, even when it is contested. Off: only a top holding it alone scores', onclick: () => this.toggleRule('share') }, h('span.dot'), 'SHARED TIME');
+    const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => this.stepRubber(1) }, 'CPU CATCH-UP ', rubberVal);
+    rubber.addEventListener('navx', (e) => this.stepRubber((e as CustomEvent).detail));
     const back = h<HTMLButtonElement>('button.btn.small.nav.back-btn', { onclick: () => this.leave(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back');
     const desc = h('div.screen-sub');
     this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal, count, countVal };
+    this.el?.classList.toggle('guest', this.guest);
 
     this.slotsEl = h('div.slots');
     new ResizeObserver(() => this.placeJoin()).observe(this.slotsEl); // (columns change with the window)
@@ -338,7 +422,7 @@ export class LobbyScreen implements Screen {
         back,
         h('div.screen-title', null, 'LOBBY'),
         desc,
-        h('button.btn.primary.nav.start-btn', { onclick: () => this.start(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ START')),
+        this.startBtn = h<HTMLButtonElement>('button.btn.primary.nav.start-btn', { onclick: () => this.start(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ START')),
       h('div.lobby-top', null, mode.el, size.el, arena.el),
       this.slotsEl,
       h('div.lobby-bottom', null,
@@ -359,9 +443,10 @@ export class LobbyScreen implements Screen {
     if (!this.ui) return;
     const m = this.mode, u = this.ui;
     const order = this.arenaOrder();
-    const arena = findArena(L.arenaId);
+    const arena = this.guest && this.remoteArena ? this.remoteArena : findArena(L.arenaId); // (a guest: the host's — maybe custom — arena)
     const sz = arenaSize(arena);
-    u.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
+    u.back.textContent = this.guest ? '◀ Leave Room' : hostRoom.t ? '◀ Close Room' : '◀ Back';
+    if (this.startBtn) this.startBtn.textContent = this.guest && !this.canCtl ? `WAITING FOR ${String(clientRoom.lobby?.leader ?? 'HOST').toUpperCase()}` : '▶ START';
     u.mode.set(m.name.toUpperCase(), m.tag);
     u.size.set(L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`);
     u.arena.set(arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`);
@@ -385,12 +470,13 @@ export class LobbyScreen implements Screen {
 
   makeCard(): Card {
     const idx = () => Number(card.el.dataset.i);
-    const remote = () => L.slots[idx()]?.ctrl.type === 'remote';
+    const remote = () => { const s = L.slots[idx()]; return this.guest ? !s?.mine : s?.ctrl.type === 'remote'; }; // (a guest edits only their own card)
     const cv = h<HTMLCanvasElement>('canvas', { width: 200, height: 200 });
     const name = h<HTMLInputElement>('input.pname', { maxLength: 16 });
     name.addEventListener('change', () => {
       const i = idx(), s = L.slots[i];
       if (!s) return;
+      if (this.guest) { if (!s.mine) return; settings.playerName = name.value.trim() || settings.playerName; settings.save(); clientRoom.send({ t: 'hello', name: settings.playerName }); return; }
       s.name = name.value || `Player ${i + 1}`;
       if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); }
       this.dirty = true;
@@ -418,8 +504,9 @@ export class LobbyScreen implements Screen {
 
   updateCard(c: Card, s: Slot, i: number) {
     const d = this.bladeOf(s);
-    const remote = s.ctrl.type === 'remote';
+    const remote = this.guest ? !s.mine : s.ctrl.type === 'remote';
     c.el.dataset.i = String(i);
+    c.el.classList.toggle('mine', !!s.mine);
     c.el.classList.toggle('ghost', !!s.auto);
     c.el.title = s.auto ? 'Auto CPU: plays if nobody joins — + PLAYER takes this place, + CPU (or picking its difficulty) keeps it' : '';
     c.el.style.setProperty('--slot', this.slotColor(s, i));
@@ -437,15 +524,21 @@ export class LobbyScreen implements Screen {
       STAT_KEYS.forEach((k, j) => { c.bars[j].i.style.width = `${st.points[k] * 10}%`; c.bars[j].row.title = `${STAT_INFO[k].label} ${st.points[k]}/10 — ${STAT_INFO[k].desc}`; });
       drawBladeIcon(c.cv, d, this.angle);
     }
-    const ck = remote ? 'remote' : specKey(s.ctrl) + specLabel(s.ctrl) + (s.auto ? 'auto' : '');
-    if (c.ctrlKey !== ck) {
+    const ck = this.guest ? `g:${s.mine}:${s.label}:${s.auto}` : remote ? 'remote' : specKey(s.ctrl) + specLabel(s.ctrl) + (s.auto ? 'auto' : '');
+    if (c.ctrlKey !== ck && this.guest) {
+      // (a guest's view: who plays each place — YOU, an online player, the host's own players, CPUs)
+      c.ctrlKey = ck;
+      c.ctrl.innerHTML = '';
+      const lbl = s.label ?? '';
+      c.ctrl.append(icon(s.mine ? 'star' : lbl.startsWith('CPU') ? 'gear' : 'link'), ' ', s.mine ? 'YOU' : lbl.startsWith('online:') ? 'ONLINE PLAYER' : lbl.startsWith('CPU') ? (s.auto ? `AUTO · ${lbl}` : lbl) : `${String(clientRoom.lobby?.leader ?? 'HOST').toUpperCase()}'S ${lbl.toUpperCase()}`);
+    } else if (c.ctrlKey !== ck) {
       c.ctrlKey = ck;
       c.ctrl.innerHTML = '';
       c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb' || s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : s.auto ? `AUTO · ${specLabel(s.ctrl)}` : specLabel(s.ctrl));
     }
     c.pad.style.display = this.isPersonalPad(i) ? '' : 'none';
     (c.pad.querySelector('.tm') as HTMLElement).style.display = this.isTeamMode() ? '' : 'none';
-    c.x.style.display = s.auto ? 'none' : ''; // (anyone can be removed, P1 too; ghosts are just placeholders)
+    c.x.style.display = s.auto || this.guest ? 'none' : ''; // (anyone can be removed, P1 too; ghosts are just placeholders — and only by the host)
   }
 
   cycleCtrl(i: number) {
@@ -482,7 +575,19 @@ export class LobbyScreen implements Screen {
     return order;
   }
 
+  stepTarget(d: number) { if (this.guestCtl('target', { d })) return; L.target = Math.max(1, L.target + d * (L.mode === 'koth' ? 5 : 1)); this.refresh(); }
+  stepTime(d: number) { if (this.guestCtl('time', { d })) return; L.time = Math.max(30, L.time + d * 15); this.refresh(); }
+  stepCount(d: number) {
+    if (this.guestCtl('count', { d })) return;
+    L.count = L.count + d * (this.isTeamMode() ? 2 : 1);
+    if (d < 0) L.count = Math.max(L.slots.filter((s) => !s.auto).length, L.count);
+    this.fillCpus(); this.renderSlots(); this.dirty = true;
+  }
+  stepRubber(d: number) { if (this.guestCtl('rubber', { d })) return; L.rubber = (L.rubber + d + 3) % 3; this.refresh(); }
+  toggleRule(k: 'nudge' | 'share') { if (this.guestCtl(k)) return; if (k === 'nudge') L.nudge = !L.nudge; else L.kothShare = !L.kothShare; this.refresh(); }
+
   stepMode(d: number) {
+    if (this.guestCtl('mode', { d })) return;
     const i = PICK_MODES.findIndex((x) => x.id === L.mode);
     this.setMode(PICK_MODES[(i + d + PICK_MODES.length) % PICK_MODES.length].id);
     this.fillCpus();
@@ -490,6 +595,7 @@ export class LobbyScreen implements Screen {
   }
 
   stepArena(d: number) {
+    if (this.guestCtl('arena', { d })) return;
     const order = this.arenaOrder();
     const i = order.findIndex((a) => a.id === L.arenaId);
     L.arenaId = order[(i + d + order.length) % order.length].id;
@@ -497,6 +603,7 @@ export class LobbyScreen implements Screen {
   }
 
   stepSize(d: number) {
+    if (this.guestCtl('size', { d })) return;
     const sizes: ('ALL' | ArenaSize)[] = L.mode === 'race' ? ['ALL'] : ['ALL', 'S', 'M', 'L'];
     const i = Math.max(0, sizes.indexOf(L.sizeFilter));
     L.sizeFilter = sizes[(i + d + sizes.length) % sizes.length];
@@ -508,6 +615,7 @@ export class LobbyScreen implements Screen {
 
   /** dice: a random mode (and a course that suits it), or just a random course for the current mode */
   randomize(mode: boolean) {
+    if (this.guestCtl('rand', { mode })) return;
     if (mode) {
       const pick = PICK_MODES.filter((m) => m.id !== L.mode)[Math.floor(Math.random() * (PICK_MODES.length - 1))];
       this.setMode(pick.id);
@@ -520,14 +628,22 @@ export class LobbyScreen implements Screen {
     this.app.toast(`${this.mode.name} · ${findArena(L.arenaId).name}`);
   }
 
-  toggleItems() { L.items = !L.items; this.rebuild(); }
+  toggleItems() { if (this.guestCtl('items')) return; L.items = !L.items; this.rebuild(); }
 
   /** a room member asked to change something (only honoured with Open Control) */
   onRemoteCtl(peer: number, m: any) {
+    // (your own team is yours to pick, OPEN CONTROL or not)
+    if (m?.a === 'team') { const i = L.slots.findIndex((s) => s.ctrl.type === 'remote' && s.ctrl.peer === peer); if (i >= 0) this.cycleTeam(i); return; }
     if (!hostRoom.openControl) return;
     const who = hostRoom.members.get(peer)?.name ?? 'Someone';
     const d = m.d === -1 ? -1 : 1;
     switch (m.a) {
+      case 'target': this.stepTarget(d); break;
+      case 'time': this.stepTime(d); break;
+      case 'count': this.stepCount(d); break;
+      case 'rubber': this.stepRubber(d); break;
+      case 'nudge': case 'share': this.toggleRule(m.a); break;
+      case 'rand': this.randomize(!!m.mode); break;
       case 'mode': this.stepMode(d); break;
       case 'arena': this.stepArena(d); break;
       case 'size': this.stepSize(d); break;
@@ -627,6 +743,7 @@ export class LobbyScreen implements Screen {
    */
   placeJoin() {
     if (!this.slotsEl || !this.joinCard) return;
+    if (this.guest) { this.joinCard.style.display = 'none'; if (this.joinMini) this.joinMini.style.display = 'none'; if (this.cpuMini) this.cpuMini.style.display = 'none'; return; }
     const room = L.slots.length < this.mode.maxPlayers;
     const tpl = getComputedStyle(this.slotsEl).gridTemplateColumns;
     const cols = !tpl || tpl === 'none' ? 0 : tpl.split(' ').filter(Boolean).length; // (0: one scrolling row — always fits)
@@ -646,6 +763,16 @@ export class LobbyScreen implements Screen {
   cycleSlotBlade(i: number, dir: number, random = false) {
     const s = L.slots[i];
     const blades = allBlades();
+    if (this.guest) {
+      if (!s?.mine) return;
+      const k0 = blades.findIndex((b) => b.id === (s.blade?.id ?? s.bladeId));
+      const b = random ? blades[Math.floor(Math.random() * blades.length)] : blades[(k0 + dir + blades.length) % blades.length];
+      s.blade = b; s.bladeId = b.id;
+      try { localStorage.setItem('bitblade.lastBlade', b.id); } catch { /* ignore */ }
+      clientRoom.send({ t: 'blade', blade: b });
+      this.renderSlots(); this.app.sfx.play('tick'); this.flashSlot(i);
+      return;
+    }
     const k = blades.findIndex((b) => b.id === s.bladeId);
     s.bladeId = random ? blades[Math.floor(Math.random() * blades.length)].id : blades[(k + dir + blades.length) % blades.length].id;
     s.blade = undefined;
@@ -783,6 +910,7 @@ export class LobbyScreen implements Screen {
   // -------------------------------------------------------------- online host
   renderOnline() {
     const el = this.onlineEl;
+    if (this.guest) { this.renderGuestBox(); return; }
     if (this.ui) this.ui.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
     // typing a room name: redraw once they're done instead of wiping the field mid-word
     const typing = el.querySelector<HTMLInputElement>('.room-name');
@@ -865,13 +993,14 @@ export class LobbyScreen implements Screen {
     const arena = findArena(L.arenaId);
     return {
       t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
-      items: L.items, target: L.target, time: L.time, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
-      slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i) })),
+      items: L.items, target: L.target, time: L.time, nudge: L.nudge, kothShare: L.kothShare, rubber: L.rubber, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
+      slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i), lock: !!s.teamLock, auto: !!s.auto })),
     };
   }
 
   // -------------------------------------------------------------- start / leave
   start() {
+    if (this.guestCtl('start')) return;
     const m = this.mode;
     this.fillCpus();
     if (L.slots.length < m.minPlayers) { this.app.toast(`${m.name} needs ${m.minPlayers} players`); return; }
@@ -909,6 +1038,13 @@ export class LobbyScreen implements Screen {
   }
 
   leave() {
+    if (this.guest) {
+      if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return;
+      clientRoom.leave();
+      this.app.toast('Left the room — Rejoin from Online to come back');
+      this.app.go('online');
+      return;
+    }
     if (this.joining) { this.toggleJoin(); return; } // (Esc cancels join mode first)
     if (testRide.from && !hostRoom.t) { this.app.go(testRide.from); return; } // test ride: back to the editor
     if (hostRoom.t) {
@@ -919,7 +1055,33 @@ export class LobbyScreen implements Screen {
     this.app.go('menu');
   }
 
+  /** a guest's room box: the room, its invite link, its music, and leaving */
+  renderGuestBox() {
+    const el = this.onlineEl, lb = clientRoom.lobby, t = clientRoom.t;
+    if (!el) return;
+    el.innerHTML = '';
+    if (!t) return;
+    const link = publicJoinInput(t.code);
+    const song = lb?.song ? acceptSong(lb.song) : null;
+    const watching = lb && !L.slots.some((s) => s.mine);
+    el.append(...([
+      h('div.hint', null, `${lb?.roomName ? String(lb.roomName).toUpperCase() : 'ONLINE ROOM'} · ${lb ? (this.canCtl ? 'OPEN CONTROL' : `LED BY ${String(lb.leader).toUpperCase()}`) : 'CONNECTING…'}`),
+      h('div.code', null, t.code),
+      h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', link),
+      watching ? h('div.hint', { style: { color: 'var(--gold)' } }, clientRoom.busy ? 'A match is on — you\'ll join the next one' : 'Room full for this mode — you\'ll play when a place frees up') : null,
+      clientRoom.busy && !watching ? h('div.hint', { style: { color: 'var(--gold)' } }, 'A match is on — you\'ll join the next one') : null,
+      lb ? roomMusicRow(this.app, { song, by: lb.songBy, canSet: this.canCtl, onSet: (s, radio) => clientRoom.send({ t: 'ctl', a: 'song', song: s, radio }), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }) : null,
+    ].filter(Boolean) as Node[])); // (leaving: the ◀ LEAVE ROOM button, top left)
+  }
+
   update(dt: number) {
+    if (this.guest) {
+      this.nav.update(dt);
+      this.angle += dt * 2.5;
+      this.iconT += dt;
+      if (this.iconT > 0.05) { this.iconT = 0; for (const c of this.cards) if (c.d) drawBladeIcon(c.cv, c.d, this.angle * c.d.spinDir); }
+      return;
+    }
     if (this.joinFrame()) return; // (the press that joined someone doesn't also work the menu)
     this.personalPads(dt);
     this.nav.update(dt);
@@ -938,6 +1100,14 @@ export class LobbyScreen implements Screen {
   }
 
   unmount() {
+    if (this.guest) {
+      // (your own lobby comes back as you left it)
+      try { Object.assign(L, JSON.parse(this.guestBackup)); } catch { /* ignore */ }
+      clientRoom.handler = null; clientRoom.closeHandler = null;
+      this.guest = false;
+      this.el.remove();
+      return;
+    }
     removeEventListener('pointerdown', this.onTap, true);
     this.unsub?.();
     hostRoom.onCtl = null;

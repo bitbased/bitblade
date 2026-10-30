@@ -54,7 +54,8 @@ export class OnlineScreen implements Screen {
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1);
-    if (a.resume && clientRoom.t) { this.listen(); this.renderRoom(); }
+    // in a room: it's shown in the lobby (the same screen the host uses)
+    if (a.resume && clientRoom.t) { queueMicrotask(() => this.app.go('lobby', { guest: true })); return; }
     else if (a.join) this.join(a.join);
     else if (a.rejoin) this.startRetry(a.rejoin);
     this.refreshList();
@@ -275,8 +276,8 @@ export class OnlineScreen implements Screen {
       clientRoom.remember(input.trim());
       this.listen();
       clientRoom.send({ t: 'hello', name: settings.playerName || 'Guest', blade: this.myBlade });
-      this.renderRoom();
       this.app.sfx.play('select');
+      this.app.go('lobby', { guest: true });
     } catch (e) {
       if (quiet) return;
       this.roomEl.innerHTML = '';

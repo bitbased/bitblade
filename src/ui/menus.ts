@@ -185,7 +185,7 @@ export class Results extends Base {
     if (online === 'client') {
       clientRoom.handler = (m) => {
         if (m?.t === 'start' && clientRoom.t) this.app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } });
-        else if (m?.t === 'lobby') this.app.go('online', { resume: true });
+        else if (m?.t === 'lobby') this.app.go('lobby', { guest: true });
       };
       clientRoom.closeHandler = (r) => { this.app.toast(`Room closed: ${r}`); this.app.go('menu'); };
     }

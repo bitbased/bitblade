@@ -75,13 +75,9 @@ function installGlobal() {
   addEventListener('pointerdown', (e) => { if (!e.isTrusted) return; setDevice(e.pointerType === 'touch' || e.pointerType === 'pen' ? 'mouse' : 'key'); }, { passive: true });
   // desktop starts with keyboard+mouse prompts, phones/tablets with none
   setDevice(typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? 'key' : 'mouse');
-  // mouse wheel over any selector turns it
-  addEventListener('wheel', (e) => {
-    const t = (e.target as HTMLElement)?.closest?.('[data-navx]') as HTMLElement | null;
-    if (!t || t.classList.contains('gx-step') || t.tagName === 'INPUT') return; // steppers / sliders handle their own wheel
-    e.preventDefault();
-    t.dispatchEvent(new CustomEvent('navx', { detail: e.deltaY < 0 ? 1 : -1 }));
-  }, { passive: false });
+  // the mouse wheel only ever scrolls: it never changes a setting under the pointer (a focused number box lets go,
+  // so the browser doesn't step it either)
+  addEventListener('wheel', (e) => { const t = e.target as HTMLInputElement; if (t?.tagName === 'INPUT' && t.type === 'number' && document.activeElement === t) t.blur(); }, { passive: true });
   // a mouse click leaves the button DOM-focused; drop it so Enter/Space don't double-fire with the menu's own confirm
   addEventListener('click', (e) => { if ((e as MouseEvent).detail > 0) (e.target as HTMLElement)?.closest?.('button')?.blur(); }, true);
 }
