@@ -569,6 +569,7 @@ body.hints-on .music-chip { bottom: 56px; }
 .room-music .rm-status { height: 30px; display: flex; align-items: center; font-size: 12px; color: var(--muted); overflow: hidden; }
 .room-music .rm-status .btn { padding: 5px 12px; font-size: 10px; height: 28px; }
 .room-music .rm-dice { margin-left: 4px; } .room-music .rm-dice .ico { width: 18px; height: 18px; }
+.room-music .rm-radio.on { color: var(--gold); text-shadow: 0 0 10px var(--gold); } /* (my room radio is on) */
 .room-music .val b, .room-music .val span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; }
 
 .music-chip .mm-ic svg { width: 20px; height: 20px; }

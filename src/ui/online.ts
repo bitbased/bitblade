@@ -13,7 +13,7 @@ import { MODES, type ModeId } from '../game/types';
 import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
-import { acceptSong, roomMusicRow } from './roomMusic';
+import { acceptSong, armRadio, roomMusicRow } from './roomMusic';
 
 /** what the lobby needs to open a room the way the hub set it up */
 export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean }
@@ -310,6 +310,8 @@ export class OnlineScreen implements Screen {
     if ((song?.id ?? null) !== this.lastSong) {
       this.lastSong = song?.id ?? null;
       if (song) this.app.sfx.playSong(song, this.app.sfx.player?.song?.id !== song.id); else this.app.sfx.useMusic('menu');
+      // (my room radio, if I switched it on: the next pick goes to the room once this song's had its time)
+      if (song && canCtl) armRadio(this.app, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true }));
     }
     const ctl = (a: string, label: string, val: string, sub: string) => {
       const send = (d: number) => clientRoom.send({ t: 'ctl', a, d });
@@ -325,7 +327,7 @@ export class OnlineScreen implements Screen {
       ctl('mode', 'MODE', (mode?.name ?? lobby.mode).toUpperCase(), mode?.tag ?? ''),
       ctl('size', 'SIZE', lobby.sizeFilter ?? 'ALL', ''),
       ctl('arena', 'ARENA', String(lobby.arena).toUpperCase(), `${lobby.size ?? ''} · ${lobby.arenaDesc ?? ''}`),
-      roomMusicRow(this.app, { song, by: lobby.songBy, canSet: canCtl, onSet: (s) => clientRoom.send({ t: 'ctl', a: 'song', song: s }), onCopied: () => this.renderRoom() }),
+      roomMusicRow(this.app, { song, by: lobby.songBy, canSet: canCtl, onSet: (s, radio) => clientRoom.send({ t: 'ctl', a: 'song', song: s, radio }), onCopied: () => this.renderRoom(), onRadio: () => this.renderRoom() }),
       h('div.hint', null, canCtl ? 'OPEN CONTROL — anyone can change the room and start.' : `Room leader: ${lobby.leader}. Waiting for them to start…`),
       canCtl ? h('button.btn.primary.nav', { onclick: () => clientRoom.send({ t: 'ctl', a: 'start' }) }, '▶ START MATCH') : null,
       h('div.hint', null, `PLAYERS (${lobby.slots.length})`),

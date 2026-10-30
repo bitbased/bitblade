@@ -18,7 +18,7 @@ import { hostRoom } from '../net/room';
 import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
-import { acceptSong, roomMusicRow } from './roomMusic';
+import { acceptSong, armRadio, roomMusicRow } from './roomMusic';
 import type { Song } from '../game/music';
 
 /** auto: a ghost CPU — a place the mode needs filled; it plays as a CPU unless a player takes it (+ PLAYER) or it's
@@ -140,7 +140,7 @@ export class LobbyScreen implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     // an online room keeps its chosen song between matches; otherwise menu music
-    if (hostRoom.t && L.song) app.sfx.playSong(L.song, app.sfx.player?.song?.id !== L.song.id); else app.sfx.useMusic('menu');
+    if (hostRoom.t && L.song) { app.sfx.playSong(L.song, app.sfx.player?.song?.id !== L.song.id); armRadio(app, (n) => this.setRoomSong(n, `📻 ${L.slots[0]?.name ?? 'Host'}`)); } else app.sfx.useMusic('menu');
     setBackdropVisible(true, app.canvas);
     // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
     // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)
@@ -478,7 +478,7 @@ export class LobbyScreen implements Screen {
       case 'arena': this.stepArena(d); break;
       case 'size': this.stepSize(d); break;
       case 'items': this.toggleItems(); break;
-      case 'song': { const s = m.song === null ? null : acceptSong(m.song); if (m.song !== null && !s) return; this.setRoomSong(s, who); return; }
+      case 'song': { const s = m.song === null ? null : acceptSong(m.song); if (m.song !== null && !s) return; this.setRoomSong(s, m.radio ? `📻 ${who}` : who); return; }
       case 'start': this.app.toast(`${who} started the match`); this.start(); return;
       default: return;
     }
@@ -489,7 +489,9 @@ export class LobbyScreen implements Screen {
   setRoomSong(s: Song | null, by: string) {
     L.song = s; L.songBy = s ? by : '';
     if (s) this.app.sfx.playSong(s, this.app.sfx.player?.song?.id !== s.id); else this.app.sfx.useMusic('menu');
-    if (s) this.app.toast(`♪ ${s.name}${by ? ` — picked by ${by}` : ''}`);
+    if (s) this.app.toast(`♪ ${s.name}${by ? ` — ${by.startsWith('📻') ? by : `picked by ${by}`}` : ''}`);
+    // (my room radio: the next song comes once this one's had its time)
+    if (s) armRadio(this.app, (n) => this.setRoomSong(n, `📻 ${L.slots[0]?.name ?? 'Host'}`));
     this.dirty = true;
     this.renderOnline();
   }
@@ -745,7 +747,7 @@ export class LobbyScreen implements Screen {
         rname,
         h('div.code', null, t.code),
         ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
-        roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s) => this.setRoomSong(s, L.slots[0]?.name ?? 'Host'), onCopied: () => this.renderOnline() }),
+        roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host')), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
         h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
           h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
