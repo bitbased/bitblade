@@ -16,6 +16,8 @@ export interface AIState {
   sx?: number; sz?: number; st?: number; unstuck?: number; unSide?: number;
   /** pinball: how long the plunger has been held */
   plungeT?: number; aimGoal?: number;
+  /** battles: a run-up — swinging out round the enemy at speed — and the charge in after it */
+  runup?: { side: number; t: number }; runCd?: number; charge?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
@@ -44,6 +46,26 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     const lead = 0.25 * ai.level;
     gx = enemy.x + enemy.vx * lead; gz = enemy.z + enemy.vz * lead;
   }
+  // run-ups: rather than just chasing, now and then swing out round the enemy (no boost: overdrive barely steers)
+  // and cut in with it held. Circling keeps the speed — backing straight off and turning round loses it.
+  // Not when holding a king-of-the-hill zone
+  ai.runCd = (ai.runCd ?? 2) - dt; ai.charge = Math.max(0, (ai.charge ?? 0) - dt);
+  const bowlR = arenaRadius(sim, t);
+  if (enemy && enemy.alive && !ai.runup && ai.runCd <= 0 && bowlR && !s.zone && t.spin > 0.4) {
+    const ed = Math.hypot(enemy.x - t.x, enemy.z - t.z);
+    if (ed < 4 && Math.random() < dt * [0, 0.4, 1.2, 1.8][ai.level]) ai.runup = { side: Math.random() < 0.5 ? -1 : 1, t: 0.8 + Math.random() * 0.7 };
+  }
+  if (ai.runup) {
+    ai.runup.t -= dt;
+    if (!enemy?.alive || ai.runup.t <= 0 || t.spin < 0.35) { ai.runup = undefined; ai.runCd = 2.5 + Math.random() * 2.5; ai.charge = 1.5; }
+    else {
+      // a point ahead round a ~4m circle about the enemy (kept inside the bowl)
+      const home = arenaHome(sim, t), a = Math.atan2(t.z - enemy!.z, t.x - enemy!.x) + ai.runup.side * 0.9;
+      gx = enemy!.x + Math.cos(a) * 4; gz = enemy!.z + Math.sin(a) * 4;
+      const pr = Math.hypot(gx - home.x, gz - home.z), lim = bowlR! * 0.7;
+      if (pr > lim) { gx = home.x + ((gx - home.x) * lim) / pr; gz = home.z + ((gz - home.z) * lim) / pr; }
+    }
+  }
   // courses with levels: take the route (ramps, round walls) when the goal isn't straight ahead on our level
   let climbing = false;
   if (sim.terrain.def.course && !t.duel) { // (a pinball arena duel: the bowl is the whole stadium)
@@ -62,8 +84,9 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   const err = (3 - ai.level) * 0.25 * Math.sin(s.t * 1.3 + ai.aimErr);
   const ce = Math.cos(err), se = Math.sin(err);
   let mx = dx * ce - dz * se, mz = dx * se + dz * ce;
-  // counteract current velocity a bit so we actually arrive
-  mx -= t.vx * 0.04 * ai.level; mz -= t.vz * 0.04 * ai.level;
+  // counteract current velocity a bit so we actually arrive (charging in: only the drift sideways, keep the speed)
+  if (ai.charge && !ai.runup) { const along = t.vx * dx + t.vz * dz; mx -= (t.vx - dx * along) * 0.04 * ai.level; mz -= (t.vz - dz * along) * 0.04 * ai.level; }
+  else { mx -= t.vx * 0.04 * ai.level; mz -= t.vz * 0.04 * ai.level; }
 
   // edge avoidance: look ahead along velocity
   const look = 0.5 + ai.level * 0.15;
@@ -106,7 +129,9 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   // attacks
   if (enemy && enemy.alive) {
     const ed = Math.hypot(enemy.x - t.x, enemy.z - t.z);
-    if (ed < 4.5 && t.dashCd <= 0 && Math.random() < dt * [0, 0.8, 2, 4][ai.level]) c.dash = true;
+    // (the charge in after a run-up: boost held down the straight (overdrive hits harder, but barely steers), dash just before contact)
+    if (ai.charge && ai.charge > 0 && !ai.runup && t.spin > 0.35) c.hold = true;
+    if (!ai.runup && ed < 4.5 && t.dashCd <= 0 && (ai.charge ? ed < 3 : Math.random() < dt * [0, 0.8, 2, 4][ai.level])) c.dash = true;
     if (ed < 3.5 && t.special >= 1 && Math.random() < dt * 2) c.special = true;
     if (Math.abs(enemy.y - t.y) > 1 && ed < 2.5 && t.grounded && Math.random() < dt * ai.level) c.jump = true;
   }
@@ -201,6 +226,13 @@ function unstick(t: TopState, ai: AIState, dt: number, c: Control, goalD: number
 }
 
 /** the middle of the stadium you're fighting in: a pinball arena bowl in a duel, else the arena's centre */
+/** the battle bowl's radius round arenaHome (null off a stadium: courses) */
+function arenaRadius(sim: Sim, t: TopState) {
+  const d = sim.s.pin?.duel;
+  if (t.duel && d) return sim.markers[d.mi].r ?? 6;
+  return sim.terrain.def.course ? null : sim.terrain.def.stadium?.radius ?? null;
+}
+
 function arenaHome(sim: Sim, t: TopState) {
   const d = sim.s.pin?.duel;
   if (t.duel && d) { const m = sim.markers[d.mi]; return { x: m.x, z: m.z }; }

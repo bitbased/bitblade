@@ -556,13 +556,16 @@ export class Sim {
     const sA = A.dir * A.spin * S_SURF, sB = -B.dir * B.spin * S_SURF;
     const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
     const slip = vt + sA - sB;
-    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // overcharge (>100%) is defence, not extra punch
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // overcharge (>100%) is defence, not extra punch
     const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
     const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
     const approach = Math.max(0, -vn);
     const e = 0.55;
     const jn = mEff * (approach * (1 + e) + (2.0 + Math.abs(slip) * 0.32) * (0.55 + (aA + aB) * 0.55));
     const jt = Math.sign(slip) * Math.min(0.55 * jn, Math.abs(slip) * mEff * 0.5);
+    // who was running at whom (taken before the bounce): splits the impact damage below
+    const runA = Math.max(0, A.vx * nx + A.vz * nz), runB = Math.max(0, -(B.vx * nx + B.vz * nz));
+    const wA = runA + runB > 0.01 ? runA / (runA + runB) : 0.5;
     const kA = A.fx.shield > 0 ? 0.4 : 1, kB = B.fx.shield > 0 ? 0.4 : 1;
     A.vx -= ((nx * jn + tx * jt) / mA) * kA; A.vz -= ((nz * jn + tz * jt) / mA) * kA;
     B.vx += ((nx * jn + tx * jt) / mB) * kB; B.vz += ((nz * jn + tz * jt) / mB) * kB;
@@ -578,8 +581,10 @@ export class Sim {
     A.spin = Math.max(0, Math.min(1.35, (sAn * A.dir) / S_SURF));
     B.spin = Math.max(0, Math.min(1.35, (-sBn * B.dir) / S_SURF));
     // direct impact damage (a surging top shrugs off half)
-    A.spin -= (approach * 0.003 + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
-    B.spin -= (approach * 0.003 + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
+    // (the closing speed is split by who was running at whom: a long run-up into a top that's sitting still lands
+    // up to twice what the runner takes back)
+    A.spin -= (approach * 0.003 * (0.7 + 0.6 * (1 - wA)) + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
+    B.spin -= (approach * 0.003 * (0.7 + 0.6 * wA) + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
     // pinball: your own balls bounce off each other, no battle damage
     const friendly = this.cfg.mode === 'pinball' && A.team === B.team;
     if (friendly) { A.spin = before[0]; B.spin = before[1]; }
