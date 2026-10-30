@@ -20,6 +20,8 @@ export function fmtTime(sec: number) {
   return `${m}:${r.toFixed(2).padStart(5, '0')}`;
 }
 
+/** burst toughness: every source of burst damage is scaled by this (0.5 = twice the burst health) */
+const BURST_K = 0.5;
 const RESPAWN_MODES = new Set(['ctf', 'rush', 'koth', 'gauntlet', 'race', 'quest', 'pinball']);
 
 function mulberry(seed: number) {
@@ -682,8 +684,8 @@ export class Sim {
     const I = jn + Math.abs(jt);
     const bth = 8;
     if (I > bth) {
-      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin) * protB * dashHit(A, rA);
-      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin) * protA * dashHit(B, rB);
+      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin) * protB * dashHit(A, rA) * BURST_K;
+      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin) * protA * dashHit(B, rB) * BURST_K;
     }
     // flag carriers drop on hard hits
     if (I > 6) { if (A.flag >= 0) this.dropFlag(A); if (B.flag >= 0) this.dropFlag(B); }
@@ -1654,7 +1656,7 @@ export class Sim {
       const k = o.fx.shield > 0 ? 0.3 : 1;
       o.vx += (dx / d) * power * f * k; o.vz += (dz / d) * power * f * k; o.vy += 5 * f * k;
       o.spin -= dmg * f * k;
-      if (burst) o.burst += burst * f * k;
+      if (burst) o.burst += burst * f * k * BURST_K;
       o.lastHit = src.id; o.lastHitT = this.s.t;
       if (o.flag >= 0) this.dropFlag(o);
       if (this.cfg.mode === 'rush') this.spillCrystals(o, Math.min(o.crystals, 2));
