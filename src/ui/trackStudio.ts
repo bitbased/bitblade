@@ -673,13 +673,15 @@ class TrackStudio {
   }
 
   testRide() {
+    this.pristine = false; // (riding it saves it: the lobby loads it from My Tracks)
     this.persist();
     if (this.issues.some((x) => x.includes('passes over itself'))) { this.app.toast('Fix the overlap first: a track can’t pass over itself'); return; }
     testRide.from = 'tracks'; testRide.id = this.cur.id;
     this.app.go('lobby', { mode: this.cur.closed ? 'race' : 'quest', arenaId: this.cur.id });
   }
 
-  back() { this.persist(); this.app.back(); }
+  /** leaving the studio goes to the main menu (not back through a test ride's lobby / match) */
+  back() { this.persist(); this.app.go('menu'); }
 
   /** Esc / B: cancel drawing, then clear the selection, and only then leave the studio */
   escape() {

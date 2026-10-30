@@ -392,7 +392,7 @@ class CourseEditor {
       h('button.cd-tool', { title: 'Undo (Ctrl+Z)', onclick: () => this.doUndo() }, icon('back'), h('span', null, 'Undo')),
       h('button.cd-tool', { title: 'Redo (Ctrl+Y)', onclick: () => this.doRedo() }, h('span.cd-flip', null, icon('back')), h('span', null, 'Redo')),
       h('div.cd-sep'),
-      h('button.cd-tool', { title: 'Back to menu (Esc)', onclick: () => this.app.back() }, icon('close'), h('span', null, 'Exit')));
+      h('button.cd-tool', { title: 'Back to menu (Esc)', onclick: () => this.app.go('menu') }, icon('close'), h('span', null, 'Exit')));
   }
 
   toggleDrawer() {
@@ -1968,7 +1968,7 @@ class CourseEditor {
     if (P('Escape')) {
       if (this.selected >= 0) { this.selected = -1; this.renderCard(); this.renderRight(); }
       else if (this.drawerOpen) this.toggleDrawer();
-      else this.app.back();
+      else this.app.go('menu'); // (to the main menu, not back through a test ride's lobby / match)
     }
     // keyboard pan
     const kp = (a: string[]) => a.some((k) => inp.keys.has(k));
