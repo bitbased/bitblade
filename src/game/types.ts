@@ -5,12 +5,12 @@ export type ModeId = 'duel' | 'tag' | 'ffa' | 'ctf' | 'rush' | 'koth' | 'gauntle
 export type ItemKind = 'turbo' | 'shield' | 'shock' | 'surge' | 'vortex' | 'titan' | 'comet' | 'mine' | 'fist';
 export type FinishType = 'spin' | 'over' | 'burst' | 'xtreme';
 
-export interface ModeInfo { id: ModeId; name: string; tag: string; desc: string; minPlayers: number; maxPlayers: number; teams: number; rounds: boolean; target: number; time: number; arenas: string[] }
+export interface ModeInfo { id: ModeId; name: string; tag: string; desc: string; minPlayers: number; maxPlayers: number; teams: number; rounds: boolean; target: number; time: number; arenas: string[]; /** not offered in the mode pickers (rules used by other modes) */ hidden?: boolean }
 
 export const MODES: ModeInfo[] = [
-  { id: 'duel', name: 'Duel', tag: '1 v 1', desc: 'Classic battle. Spin finish 1pt, Over & Burst 2pt, Xtreme 3pt. First to 4. With 3+ players it becomes a free-for-all.', minPlayers: 2, maxPlayers: 8, teams: 2, rounds: true, target: 4, time: 90, arenas: ['neon-stadium', 'hex-colosseum', 'kidney-pool', 'crater', 'mega-bowl'] },
+  { id: 'duel', name: 'Battle', tag: '1v1 · free-for-all', desc: '1v1: spin finish 1pt, Over & Burst 2pt, Xtreme 3pt — first to 4. With 3+ blades it\'s a free-for-all: KOs score, last spinner gets a bonus.', minPlayers: 2, maxPlayers: 8, teams: 2, rounds: true, target: 4, time: 90, arenas: ['neon-stadium', 'hex-colosseum', 'kidney-pool', 'crater', 'mega-bowl', 'titan-colosseum', 'ramp-park', 'ramp-park-xl'] },
   { id: 'tag', name: 'Tag Team', tag: 'Teams', desc: 'Two teams (2v2 up to 4v4). Last team spinning takes the round.', minPlayers: 4, maxPlayers: 8, teams: 2, rounds: true, target: 5, time: 100, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'mega-bowl', 'titan-colosseum'] },
-  { id: 'ffa', name: 'All For One', tag: 'Free-for-all', desc: 'Everyone for themselves. KOs score, last spinner gets a bonus.', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: true, target: 6, time: 100, arenas: ['crater', 'hex-colosseum', 'ramp-park', 'kidney-pool', 'titan-colosseum', 'mega-bowl', 'ramp-park-xl'] },
+  { id: 'ffa', name: 'Battle', tag: 'Free-for-all', hidden: true, desc: 'Everyone for themselves. KOs score, last spinner gets a bonus.', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: true, target: 6, time: 100, arenas: ['crater', 'hex-colosseum', 'ramp-park', 'kidney-pool', 'titan-colosseum', 'mega-bowl', 'ramp-park-xl'] },
   { id: 'ctf', name: 'Capture the Flag', tag: 'Teams', desc: 'Grab the enemy core and bring it home. Hard hits make carriers drop it.', minPlayers: 2, maxPlayers: 8, teams: 2, rounds: false, target: 3, time: 240, arenas: ['twin-forts', 'twin-forts-xl', 'ramp-park', 'ramp-park-xl', 'crater'] },
   { id: 'rush', name: 'Crystal Rush', tag: 'Items', desc: 'Collect crystals, smash rivals to make them spill. Item boxes everywhere.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 0, time: 150, arenas: ['ramp-park', 'ramp-park-xl', 'crater', 'mega-bowl', 'kidney-pool', 'twin-forts'] },
   { id: 'koth', name: 'King of the Hill', tag: 'Zone', desc: 'Stay in the zone to score — everyone inside banks time (or only a lone holder, with SHARED TIME off). The zone moves!', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: false, target: 45, time: 180, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'ramp-park', 'titan-colosseum', 'mega-bowl'] },
@@ -19,6 +19,8 @@ export const MODES: ModeInfo[] = [
   { id: 'quest', name: 'Blade Quest', tag: 'Adventure', desc: 'Platforming adventure: jump gaps, climb levels, dodge drone hives, grab gems and reach the goal. Checkpoints respawn you and refill your spin.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 0, time: 600, arenas: ['quest-neon-run', 'quest-coaster', 'quest-sky-steps', 'quest-glacier', 'quest-hive-valley', 'quest-gauntlet-peak'] },
   { id: 'pinball', name: 'Pinball', tag: 'Table', desc: 'Your blade is the ball. Flippers: Left / Right Shift, Ctrl, Tab / Enter, Z / slash, or LB / RB. Hold ↓ to pull the plunger. Steering nudges the table — overdo it and it TILTs. Pop bumpers, slingshots, spin pads; light every target for MULTIBALL. 3 balls. With 2+ players it’s a PINBALL PARTY: a free-for-all on the table — the flippers play themselves, slots refill your spin (DASH fires you out where you steer).', minPlayers: 1, maxPlayers: 8, teams: 1, rounds: false, target: 0, time: 3600, arenas: ['pin-star-cadet', 'pin-swarm-protocol', 'pin-neon-classic', 'pin-synth-cathedral'] },
 ];
+/** the modes you can pick (All For One is Battle with 3+ blades now — its rules stay for that and Pinball Party) */
+export const PICK_MODES = MODES.filter((m) => !m.hidden);
 
 export const ITEMS: Record<ItemKind, { name: string; icon: string; color: string }> = {
   turbo: { name: 'Turbo', icon: 'flame', color: '#ff7b1c' },

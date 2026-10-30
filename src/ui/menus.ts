@@ -2,7 +2,7 @@
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
-import { MODES, type ModeId } from '../game/types';
+import { PICK_MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
 import { FINISH_LABEL, fmtTime } from '../game/sim';
@@ -167,7 +167,7 @@ export class ModeSelect extends Base {
   build() {
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.app.back() }, '◀ Back'), h('div.screen-title', null, 'SELECT MODE')),
-      h('div.mode-grid', null, ...MODES.map((m, i) => {
+      h('div.mode-grid', null, ...PICK_MODES.map((m, i) => {
         const card = h('div.mode-card.nav', { onclick: () => { this.app.sfx.play('select'); this.app.go('lobby', { mode: m.id }); } },
           h('div.icon', null, icon(MODE_ICON[m.id])), h('div.tag', null, m.tag), h('h3', null, m.name.toUpperCase()), h('p', null, m.desc));
         card.style.animation = `fadeUp 0.4s ${i * 0.05}s both`;

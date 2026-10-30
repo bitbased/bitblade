@@ -5,7 +5,7 @@ import { glyph } from './nav';
 import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
 import { ringPoints } from '../core/bladeMesh';
 import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaSize } from '../game/terrain';
-import { MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
+import { MODES, PICK_MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
 import { cloudRelayUrl, hostCloud, hostLocal } from '../net/transport';
 import { getPlatform } from '../net/platform';
@@ -207,6 +207,7 @@ export class LobbyScreen implements Screen {
   }
 
   setMode(id: ModeId, keepArena = false) {
+    if (id === 'ffa') id = 'duel'; // (All For One is Battle with 3+ blades)
     L.mode = id;
     const m = this.mode;
     L.target = m.target;
@@ -478,8 +479,8 @@ export class LobbyScreen implements Screen {
   }
 
   stepMode(d: number) {
-    const i = MODES.findIndex((x) => x.id === L.mode);
-    this.setMode(MODES[(i + d + MODES.length) % MODES.length].id);
+    const i = PICK_MODES.findIndex((x) => x.id === L.mode);
+    this.setMode(PICK_MODES[(i + d + PICK_MODES.length) % PICK_MODES.length].id);
     this.fillCpus();
     this.rebuild();
   }
@@ -504,7 +505,7 @@ export class LobbyScreen implements Screen {
   /** dice: a random mode (and a course that suits it), or just a random course for the current mode */
   randomize(mode: boolean) {
     if (mode) {
-      const pick = MODES.filter((m) => m.id !== L.mode)[Math.floor(Math.random() * (MODES.length - 1))];
+      const pick = PICK_MODES.filter((m) => m.id !== L.mode)[Math.floor(Math.random() * (PICK_MODES.length - 1))];
       this.setMode(pick.id);
       this.fillCpus();
     }
@@ -595,9 +596,9 @@ export class LobbyScreen implements Screen {
     u.count.style.display = m.maxPlayers > 1 ? '' : 'none';
     const party = m.id === 'pinball' && L.slots.length > 1;
     const brawl = m.id === 'duel' && L.slots.length > 2;
-    const desc = brawl ? `FREE-FOR-ALL — ${L.slots.length} blades, everyone for themselves. KOs score, last spinner gets a bonus. (A duel is 2 players.)` : party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
+    const desc = brawl ? `FREE-FOR-ALL — ${L.slots.length} blades, everyone for themselves. KOs score, last spinner gets a bonus. (Two blades play a 1v1.)` : party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
     if (u.desc.textContent !== desc) u.desc.textContent = desc;
-    u.mode.set(m.name.toUpperCase(), brawl ? `${L.slots.length} players · free-for-all` : m.tag);
+    u.mode.set(m.name.toUpperCase(), brawl ? `${L.slots.length} players · free-for-all` : m.id === 'duel' ? '1v1 · add blades for a free-for-all' : m.tag);
     u.nudge.style.display = m.id === 'pinball' && !party ? '' : 'none';
     const tw = u.timeVal.closest<HTMLElement>('.stepper');
     if (tw) tw.style.display = party ? 'none' : ''; // (a party plays free-for-all rounds)

@@ -91,7 +91,7 @@ const TEMPLATES: { id: TemplateId; label: string; w: number; h: number }[] = [
 ];
 
 const TEST_MODES: { id: string; label: string }[] = [
-  { id: 'quest', label: 'Blade Quest' }, { id: 'rush', label: 'Crystal Rush' }, { id: 'ffa', label: 'Free-for-all' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Duel' }, { id: 'pinball', label: 'Pinball' },
+  { id: 'quest', label: 'Blade Quest' }, { id: 'rush', label: 'Crystal Rush' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Battle' }, { id: 'pinball', label: 'Pinball' },
 ];
 
 type SnapMode = 'grid' | 'tile' | 'off';

@@ -9,7 +9,7 @@ import { cleanCode, deleteMyRoom, loadMyRooms, newOwnerKey, newRoomCode, saveMyR
 import { setBackdropVisible, setBackdropArena } from './backdrop';
 import { drawBladeIcon } from './lobby';
 import { settings } from '../core/settings';
-import { MODES, type ModeId } from '../game/types';
+import { MODES, PICK_MODES, type ModeId } from '../game/types';
 import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
@@ -93,7 +93,7 @@ export class OnlineScreen implements Screen {
     this.listEl = h('div.room-list');
     this.myEl = h('div.room-list');
     this.renderMyRooms();
-    const filter = h<HTMLSelectElement>('select', null, h('option', { value: 'all' }, 'All modes'), ...MODES.map((m) => h('option', { value: m.id }, m.name)));
+    const filter = h<HTMLSelectElement>('select', null, h('option', { value: 'all' }, 'All modes'), ...PICK_MODES.map((m) => h('option', { value: m.id }, m.name)));
     filter.value = this.modeFilter;
     filter.addEventListener('change', () => { this.modeFilter = filter.value as 'all' | ModeId; this.renderList(); });
 
@@ -119,7 +119,7 @@ export class OnlineScreen implements Screen {
           customRow,
           h('div.hint', null, 'Pick a mode to open the room. You lead: switch modes and arenas between matches and everyone follows.'),
           h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
-            ...MODES.map((m) => h('button.btn.small.nav', { onclick: () => create(m.id) }, icon(MODE_ICON[m.id]), ` ${m.name}`))),
+            ...PICK_MODES.map((m) => h('button.btn.small.nav', { onclick: () => create(m.id) }, icon(MODE_ICON[m.id]), ` ${m.name}`))),
           h('h3', { style: { marginTop: '8px' } }, 'MY ROOMS'),
           this.myEl)),
     );
@@ -175,7 +175,7 @@ export class OnlineScreen implements Screen {
     const open = this.filtered().filter((r) => r.players < r.max);
     const pick = open.find((r) => !r.inMatch) ?? open[0];
     if (pick) { this.app.toast(`Quick match: ${pick.name || pick.code}`); this.join(publicJoinInput(pick.code)); return; }
-    const mode: ModeId = this.modeFilter === 'all' ? 'ffa' : this.modeFilter;
+    const mode: ModeId = this.modeFilter === 'all' ? 'duel' : this.modeFilter;
     if (!confirmTwice(this.app, 'qm-host', 'No open public rooms — press QUICK MATCH again to host a public one')) return;
     this.app.go('lobby', { mode, online: true, room: { name: '', public: true, persistent: false } satisfies RoomOpts });
   }
