@@ -23,7 +23,7 @@ import type { Song } from '../game/music';
 
 /** auto: a ghost CPU — a place the mode needs filled; it plays as a CPU unless a player takes it (+ PLAYER) or it's
  *  locked in as a CPU (+ CPU, or its difficulty is changed) */
-interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean }
+interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean; teamLock?: boolean; teamPicks?: number }
 
 interface Card {
   el: HTMLElement; pnum: HTMLElement; team: HTMLElement; cv: HTMLCanvasElement; name: HTMLInputElement; bname: HTMLElement;
@@ -168,6 +168,7 @@ export class LobbyScreen implements Screen {
 
   mount(app: App, arg?: unknown) {
     this.app = app;
+    if (import.meta.env.DEV) (window as unknown as { __lobby?: unknown }).__lobby = this; // (headless checks)
     // an online room keeps its chosen song between matches; otherwise menu music
     lobbyApp = app; activeLobby = this;
     if (hostRoom.t && L.song) { app.sfx.playSong(L.song, app.sfx.player?.song?.id !== L.song.id); onRoomSong(app, L.radioBy, (n) => hostRoomSong(app, n, `📻 ${L.slots[0]?.name ?? 'Host'}`, RADIO_HOST)); } else app.sfx.useMusic('menu');
@@ -229,6 +230,7 @@ export class LobbyScreen implements Screen {
     // (the places: at least the mode's minimum, at least everyone who's actually in, at most the mode's maximum)
     const real = L.slots.filter((s) => !s.auto).length;
     L.count = Math.min(m.maxPlayers, Math.max(base, real, L.count));
+    if (this.isTeamMode() && L.count % 2 && L.count < m.maxPlayers) L.count++; // (teams: an even number of places — a ghost evens them out)
     const need = L.count;
     for (let i = L.slots.length - 1; i >= 0 && L.slots.length > need; i--) if (L.slots[i].auto) L.slots.splice(i, 1);
     while (L.slots.length < need) {
@@ -241,18 +243,34 @@ export class LobbyScreen implements Screen {
     this.assignTeams();
   }
 
-  assignTeams(force = false) {
+  /**
+   * Teams, automatically: anyone locked to a team (their team tag was picked) keeps it; then the players — local and
+   * online — are spread evenly across the teams, then CPUs, and the ghost CPUs last, so they even the numbers out.
+   * In slot order, so someone joining never reshuffles the people already in.
+   */
+  assignTeams() {
     const m = this.mode;
-    L.slots.forEach((s, i) => {
-      if (m.id === 'gauntlet' || m.id === 'quest') s.team = 0;
-      else if (m.teams === 0 || m.id === 'duel') s.team = i;
-      else if (force || s.team > 1) s.team = m.id === 'tag' ? (i < 2 ? 0 : 1) : i % 2;
-    });
-    if (m.teams === 2 && m.id !== 'duel' && !force) {
-      // keep teams balanced-ish
-      const c0 = L.slots.filter((s) => s.team === 0).length, c1 = L.slots.length - c0;
-      if (Math.abs(c0 - c1) > 1) this.assignTeams(true);
-    }
+    if (m.id === 'gauntlet' || m.id === 'quest') { L.slots.forEach((s) => (s.team = 0)); return; }
+    if (!this.isTeamMode()) { L.slots.forEach((s, i) => (s.team = i)); return; }
+    const all = [0, 0], people = [0, 0];
+    const isPerson = (s: Slot) => s.ctrl.type !== 'cpu';
+    for (const s of L.slots) if (s.teamLock) { s.team = s.team === 1 ? 1 : 0; all[s.team]++; if (isPerson(s)) people[s.team]++; }
+    const place = (s: Slot, byPeople: boolean) => {
+      const t = byPeople && people[0] !== people[1] ? (people[0] < people[1] ? 0 : 1) : all[0] !== all[1] ? (all[0] < all[1] ? 0 : 1) : people[0] <= people[1] ? 0 : 1;
+      s.team = t; all[t]++; if (isPerson(s)) people[t]++;
+    };
+    for (const s of L.slots) if (!s.teamLock && isPerson(s)) place(s, true);
+    for (const s of L.slots) if (!s.teamLock && !isPerson(s) && !s.auto) place(s, false);
+    for (const s of L.slots) if (!s.teamLock && s.auto) place(s, false);
+  }
+  /** the team tag (or a pad's X): AUTO → the other team (locked) → back across (locked) → AUTO again */
+  cycleTeam(i: number) {
+    const s = L.slots[i];
+    if (!s || !this.isTeamMode()) return;
+    if (!s.teamLock) { s.teamLock = true; s.team = 1 - s.team; s.auto = false; }
+    else if (s.teamPicks === undefined || s.teamPicks < 1) { s.team = 1 - s.team; s.teamPicks = 1; }
+    else { s.teamLock = false; s.teamPicks = undefined; }
+    this.renderSlots(); this.dirty = true;
   }
 
   isTeamMode() { return L.mode === 'tag' || L.mode === 'ctf'; }
@@ -292,7 +310,7 @@ export class LobbyScreen implements Screen {
     const time = stepper(h('span', null, 'TIME'), timeVal, (d) => { L.time = Math.max(30, L.time + d * 15); this.refresh(); });
     // PLAYERS: how many places — the ones nobody's taken are ghost CPUs (online friends join into them)
     const countVal = h('b');
-    const count = stepper(h('span', null, 'PLAYERS'), countVal, (d) => { L.count = L.count + d; if (d < 0) L.count = Math.max(L.slots.filter((s) => !s.auto).length, L.count); this.fillCpus(); this.renderSlots(); this.dirty = true; });
+    const count = stepper(h('span', null, 'PLAYERS'), countVal, (d) => { L.count = L.count + d * (this.isTeamMode() ? 2 : 1); if (d < 0) L.count = Math.max(L.slots.filter((s) => !s.auto).length, L.count); this.fillCpus(); this.renderSlots(); this.dirty = true; });
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
     const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => { L.nudge = !L.nudge; this.refresh(); } }, h('span.dot'), 'NUDGE');
     const share = h('div.toggle.panel.nav', { title: 'King of the Hill: everyone in the zone banks time, even when it is contested. Off: only a top holding it alone scores', onclick: () => { L.kothShare = !L.kothShare; this.refresh(); } }, h('span.dot'), 'SHARED TIME');
@@ -384,7 +402,7 @@ export class LobbyScreen implements Screen {
       return { i, row };
     });
     const ctrl = h('div.ctrl.nav', { onclick: () => this.cycleCtrl(idx()) });
-    const team = h('div.team-tag', { onclick: () => { const s = L.slots[idx()]; if (!s) return; s.team = 1 - s.team; this.renderSlots(); this.dirty = true; } });
+    const team = h('div.team-tag', { title: 'Team: AUTO keeps the teams even — tap to pick one', onclick: () => this.cycleTeam(idx()) });
     const pad = h('div.slot-pad', { html: '<i class="g stick">◀▶</i> blade <i class="g g-y">Y</i> random <span class="tm"><i class="g g-x">X</i> team</span> <i class="g g-b">B</i> leave' });
     const x = h('div.x', { onclick: () => this.removeSlot(idx()), title: 'Remove' }, icon('close'));
     const pnum = h('div.pnum');
@@ -402,7 +420,8 @@ export class LobbyScreen implements Screen {
     c.el.style.setProperty('--slot', this.slotColor(s, i));
     c.pnum.textContent = `P${i + 1}`;
     c.team.style.display = this.isTeamMode() ? '' : 'none';
-    c.team.textContent = s.team === 0 ? 'RED' : 'BLUE';
+    c.team.innerHTML = (s.team === 0 ? 'RED' : 'BLUE') + (s.teamLock ? '' : '<span class="tauto"> · AUTO</span>');
+    c.team.classList.toggle('auto', !s.teamLock);
     if (document.activeElement !== c.name && c.name.value !== s.name) c.name.value = s.name;
     c.name.disabled = remote;
     c.left.style.visibility = c.right.style.visibility = remote ? 'hidden' : '';
@@ -542,7 +561,7 @@ export class LobbyScreen implements Screen {
         if (cpu < 0) continue; // room full for this mode: they watch from the room until a slot frees up
         L.slots.splice(cpu, 1);
       }
-      L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: L.slots.length % 2 });
+      L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: 0 });
       this.app.sfx.play('select');
       this.app.toast(`${m.name} joined the room`);
       changed = true;
@@ -575,14 +594,17 @@ export class LobbyScreen implements Screen {
     u.countVal.textContent = String(L.slots.length);
     u.count.style.display = m.maxPlayers > 1 ? '' : 'none';
     const party = m.id === 'pinball' && L.slots.length > 1;
-    const desc = party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
+    const brawl = m.id === 'duel' && L.slots.length > 2;
+    const desc = brawl ? `FREE-FOR-ALL — ${L.slots.length} blades, everyone for themselves. KOs score, last spinner gets a bonus. (A duel is 2 players.)` : party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
     if (u.desc.textContent !== desc) u.desc.textContent = desc;
+    u.mode.set(m.name.toUpperCase(), brawl ? `${L.slots.length} players · free-for-all` : m.tag);
     u.nudge.style.display = m.id === 'pinball' && !party ? '' : 'none';
     const tw = u.timeVal.closest<HTMLElement>('.stepper');
     if (tw) tw.style.display = party ? 'none' : ''; // (a party plays free-for-all rounds)
   }
 
   renderSlots() {
+    this.assignTeams();
     this.rulesUi();
     if (!this.slotsEl) return;
     while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
@@ -639,7 +661,7 @@ export class LobbyScreen implements Screen {
       this.padCool.set(p, cool);
       if (dir) this.cycleSlotBlade(i, dir);
       else if (e(3)) this.cycleSlotBlade(i, 0, true);
-      else if (e(2) && this.isTeamMode()) { s.team = 1 - s.team; this.renderSlots(); this.dirty = true; this.flashSlot(i); this.app.sfx.play('tick'); }
+      else if (e(2) && this.isTeamMode()) { this.cycleTeam(i); this.flashSlot(i); this.app.sfx.play('tick'); }
       else if (e(1)) { this.app.toast(`${s.name} left`); this.removeSlot(i); this.fillCpus(); this.renderSlots(); }
       else if (e(9)) this.start();
     });
@@ -704,8 +726,8 @@ export class LobbyScreen implements Screen {
     if (ghost >= 0) { L.slots[ghost].auto = false; this.renderSlots(); this.flashSlot(ghost); this.dirty = true; this.app.sfx.play('select'); return; }
     if (L.slots.length >= this.mode.maxPlayers) { this.app.toast('Lobby full for this mode'); return; }
     const blade = PRESETS[(L.slots.length * 3) % PRESETS.length];
-    L.slots.push({ name: `CPU ${L.slots.length + 1}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length % 2 });
-    this.assignTeams();
+    L.slots.push({ name: `CPU ${L.slots.length + 1}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: 0 });
+    this.fillCpus();
     this.renderSlots();
     this.dirty = true;
     this.app.sfx.play('select');
@@ -730,7 +752,7 @@ export class LobbyScreen implements Screen {
     const slot: Slot = { name: spec.type === 'pad' ? `Pad ${spec.index + 1}` : `Player ${idx + 1}`, ctrl: spec, bladeId: blades[(idx * 2 + 1) % blades.length].id, team: idx % 2 };
     if (idx < L.slots.length) L.slots[idx] = { ...slot, team: L.slots[idx].team };
     else L.slots.push(slot);
-    this.assignTeams();
+    this.fillCpus(); // (teams: a ghost evens the numbers out again)
     this.renderSlots();
     this.dirty = true;
     this.app.sfx.play('select');
@@ -846,6 +868,11 @@ export class LobbyScreen implements Screen {
     if (cfg.mode === 'pinball' && cfg.players.length > 1) {
       const ffa = MODES.find((x) => x.id === 'ffa')!;
       Object.assign(cfg, { mode: 'ffa', target: 10, timeLimit: ffa.time, items: L.items });
+      cfg.players.forEach((p, i) => (p.team = i));
+    }
+    // a duel with 3+ blades: free-for-all rules (the arena, target and time stay)
+    if (cfg.mode === 'duel' && cfg.players.length > 2) {
+      cfg.mode = 'ffa'; // (the target and time are what the lobby shows)
       cfg.players.forEach((p, i) => (p.team = i));
     }
     this.app.sfx.play('go');

@@ -109,6 +109,8 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 @keyframes slotIn { from { transform: scale(0.6); opacity: 0; } }
 .slot .pnum { position: absolute; top: 6px; left: 12px; font-family: var(--font-h); font-weight: 900; font-size: 20px; color: var(--slot); }
 .slot .team-tag { position: absolute; top: 9px; right: 14px; font-family: var(--font-h); font-size: 10px; letter-spacing: 0.2em; padding: 2px 8px; background: var(--slot); color: #000; cursor: pointer; }
+/* (picked by the lobby to keep teams even: outlined; picked by the player: solid) */
+.slot .team-tag.auto { background: transparent; color: var(--slot); box-shadow: inset 0 0 0 1px var(--slot); }
 .slot canvas { width: 120px; height: 120px; }
 .slot .bname { font-family: var(--font-h); font-size: 15px; letter-spacing: 0.06em; text-align: center; }
 .slot .ctrl { font-size: 13px; color: var(--muted); cursor: pointer; }
@@ -721,3 +723,6 @@ body.hints-on .music-chip { bottom: 56px; }
 .draft-bar.unsaved .draft-save { box-shadow: 0 0 0 2px #ffd23a88, 0 0 14px #ffd23a55; }
 .ms-preset { color: #b9c3ff; }
 .ms-item.draft b, .ts-item.draft b, .cd-lib-item.draft .cd-lib-name { color: #ffd23a; }
+
+/* phones: the team tag is just RED / BLUE (outlined = auto) — " · AUTO" doesn't fit the card */
+@media (max-width: 700px) { .slot .team-tag .tauto { display: none; } .slot .team-tag { letter-spacing: 0.1em; padding: 2px 6px; } }
