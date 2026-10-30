@@ -21,7 +21,9 @@ import type { RoomOpts } from './online';
 import { acceptSong, roomMusicRow } from './roomMusic';
 import type { Song } from '../game/music';
 
-interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign }
+/** auto: a ghost CPU — a place the mode needs filled; it plays as a CPU unless a player takes it (+ PLAYER) or it's
+ *  locked in as a CPU (+ CPU, or its difficulty is changed) */
+interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean }
 
 interface Card {
   el: HTMLElement; pnum: HTMLElement; team: HTMLElement; cv: HTMLCanvasElement; name: HTMLInputElement; bname: HTMLElement;
@@ -30,7 +32,7 @@ interface Card {
 interface Sel { el: HTMLElement; set(title: string, sub: string): void }
 interface LobbyUI {
   back: HTMLButtonElement; desc: HTMLElement; mode: Sel; size: Sel; arena: Sel;
-  items: HTMLElement; nudge: HTMLElement; share: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement;
+  items: HTMLElement; nudge: HTMLElement; share: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement; count: HTMLElement; countVal: HTMLElement;
 }
 
 const L = {
@@ -45,6 +47,8 @@ const L = {
   kothShare: true,
   target: 4,
   time: 90,
+  /** how many places the lobby has: players + CPUs, with ghost CPUs filling the rest (0 = the mode's minimum) */
+  count: 0,
   slots: [] as Slot[],
   /** set once the lobby has been visited: the menu offers CONTINUE back into it */
   active: false,
@@ -114,7 +118,8 @@ export class LobbyScreen implements Screen {
   /** join mode: listening for a new player's device (time it started, ms) */
   joining = 0;
   private lastTap: { type: 'touch' | 'mouse'; t: number } | null = null;
-  private onTap = (e: PointerEvent) => { this.lastTap = { type: e.pointerType === 'touch' ? 'touch' : 'mouse', t: performance.now() }; if (this.joining && (e.target as Element).closest?.('.join-btn')) this.lastTap = null; };
+  // (a tap / click only joins someone when it's on the join card itself — elsewhere it's just using the menus)
+  private onTap = (e: PointerEvent) => { const el = e.target as Element; this.lastTap = this.joining && el.closest?.('.slot.join') && !el.closest('.join-btn') ? { type: e.pointerType === 'touch' ? 'touch' : 'mouse', t: performance.now() } : null; };
   ui!: LobbyUI;
   lastBackdrop = '';
   angle = 0;
@@ -173,23 +178,33 @@ export class LobbyScreen implements Screen {
     const m = this.mode;
     L.target = m.target;
     L.time = m.time;
+    L.count = Math.min(L.count, m.maxPlayers);
     const cur = allArenas().find((x) => x.id === L.arenaId);
     const ok = !!cur && this.fits(cur, id) && (m.arenas.includes(L.arenaId) || !!cur.custom);
     if (id === 'race' || L.sizeFilter === 'TRACK') L.sizeFilter = 'ALL';
     if (!keepArena || !ok) L.arenaId = m.arenas[0];
     // (pinball: start without CPUs — one of you is a table, two or more is a party; add CPUs on purpose)
-    if (id === 'pinball' && !keepArena) L.slots = L.slots.filter((s) => s.ctrl.type !== 'cpu');
+    if (id === 'pinball' && !keepArena) { L.slots = L.slots.filter((s) => s.ctrl.type !== 'cpu'); L.count = 0; }
     if (L.slots.length > m.maxPlayers) L.slots = L.slots.filter((s, i) => i < m.maxPlayers || s.ctrl.type === 'remote');
     this.assignTeams();
   }
 
+  /** ghost CPUs: exactly as many as the mode needs to start (they play as CPUs unless someone takes their place) */
   fillCpus() {
     const m = this.mode;
     const names = ['Kai', 'Ryo', 'Mika', 'Zed', 'Nova', 'Juno', 'Rex', 'Ivy'];
-    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' || m.id === 'quest' || m.id === 'pinball' ? 1 : 2)) {
+    const base = Math.max(m.minPlayers, m.id === 'gauntlet' || m.id === 'quest' || m.id === 'pinball' ? 1 : 2);
+    // (the places: at least the mode's minimum, at least everyone who's actually in, at most the mode's maximum)
+    const real = L.slots.filter((s) => !s.auto).length;
+    L.count = Math.min(m.maxPlayers, Math.max(base, real, L.count));
+    const need = L.count;
+    for (let i = L.slots.length - 1; i >= 0 && L.slots.length > need; i--) if (L.slots[i].auto) L.slots.splice(i, 1);
+    while (L.slots.length < need) {
       const used = new Set(L.slots.map((s) => s.bladeId));
       const blade = PRESETS.find((b) => !used.has(b.id)) ?? PRESETS[L.slots.length % PRESETS.length];
-      L.slots.push({ name: `CPU ${names[L.slots.length % names.length]}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length });
+      const taken = new Set(L.slots.map((s) => s.name));
+      const name = names.map((n) => `CPU ${n}`).find((n) => !taken.has(n)) ?? `CPU ${L.slots.length + 1}`; // (a name nobody has)
+      L.slots.push({ name, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length, auto: true });
     }
     this.assignTeams();
   }
@@ -243,6 +258,9 @@ export class LobbyScreen implements Screen {
     const targetLbl = h('span'), targetVal = h('b'), timeVal = h('b'), rubberVal = h('b');
     const target = stepper(targetLbl, targetVal, (d) => { L.target = Math.max(1, L.target + d * (L.mode === 'koth' ? 5 : 1)); this.refresh(); });
     const time = stepper(h('span', null, 'TIME'), timeVal, (d) => { L.time = Math.max(30, L.time + d * 15); this.refresh(); });
+    // PLAYERS: how many places — the ones nobody's taken are ghost CPUs (online friends join into them)
+    const countVal = h('b');
+    const count = stepper(h('span', null, 'PLAYERS'), countVal, (d) => { L.count = L.count + d; if (d < 0) L.count = Math.max(L.slots.filter((s) => !s.auto).length, L.count); this.fillCpus(); this.renderSlots(); this.dirty = true; });
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
     const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => { L.nudge = !L.nudge; this.refresh(); } }, h('span.dot'), 'NUDGE');
     const share = h('div.toggle.panel.nav', { title: 'King of the Hill: everyone in the zone banks time, even when it is contested. Off: only a top holding it alone scores', onclick: () => { L.kothShare = !L.kothShare; this.refresh(); } }, h('span.dot'), 'SHARED TIME');
@@ -250,7 +268,7 @@ export class LobbyScreen implements Screen {
     rubber.addEventListener('navx', (e) => { L.rubber = (L.rubber + (e as CustomEvent).detail + 3) % 3; this.refresh(); });
     const back = h<HTMLButtonElement>('button.btn.small.nav.back-btn', { onclick: () => this.leave(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back');
     const desc = h('div.screen-sub');
-    this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal };
+    this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal, count, countVal };
 
     this.slotsEl = h('div.slots');
     // + PLAYER: listen for the next device (a key, a gamepad, a tap or a click) and make it a new player · + CPU
@@ -272,7 +290,7 @@ export class LobbyScreen implements Screen {
       this.slotsEl,
       h('div.lobby-bottom', null,
         h('div.rules', null,
-          items, nudge, share, rubber, target, time),
+          count, items, nudge, share, rubber, target, time),
         this.onlineEl),
     );
     this.el = el;
@@ -346,6 +364,8 @@ export class LobbyScreen implements Screen {
     const d = this.bladeOf(s);
     const remote = s.ctrl.type === 'remote';
     c.el.dataset.i = String(i);
+    c.el.classList.toggle('ghost', !!s.auto);
+    c.el.title = s.auto ? 'Auto CPU: plays if nobody joins — + PLAYER takes this place, + CPU (or picking its difficulty) keeps it' : '';
     c.el.style.setProperty('--slot', this.slotColor(s, i));
     c.pnum.textContent = `P${i + 1}`;
     c.team.style.display = this.isTeamMode() ? '' : 'none';
@@ -360,15 +380,15 @@ export class LobbyScreen implements Screen {
       STAT_KEYS.forEach((k, j) => { c.bars[j].i.style.width = `${st.points[k] * 10}%`; c.bars[j].row.title = `${STAT_INFO[k].label} ${st.points[k]}/10 — ${STAT_INFO[k].desc}`; });
       drawBladeIcon(c.cv, d, this.angle);
     }
-    const ck = remote ? 'remote' : specKey(s.ctrl) + specLabel(s.ctrl);
+    const ck = remote ? 'remote' : specKey(s.ctrl) + specLabel(s.ctrl) + (s.auto ? 'auto' : '');
     if (c.ctrlKey !== ck) {
       c.ctrlKey = ck;
       c.ctrl.innerHTML = '';
-      c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb' || s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
+      c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb' || s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : s.auto ? `AUTO · ${specLabel(s.ctrl)}` : specLabel(s.ctrl));
     }
     c.pad.style.display = this.isPersonalPad(i) ? '' : 'none';
     (c.pad.querySelector('.tm') as HTMLElement).style.display = this.isTeamMode() ? '' : 'none';
-    c.x.style.display = ''; // (anyone can be removed, P1 too: an all-CPU match is fine)
+    c.x.style.display = s.auto ? 'none' : ''; // (anyone can be removed, P1 too; ghosts are just placeholders)
   }
 
   cycleCtrl(i: number) {
@@ -377,6 +397,7 @@ export class LobbyScreen implements Screen {
     // (players and CPUs are separate: a CPU's label only changes its difficulty, a player's only their device —
     // + PLAYER and + CPU add them, ✕ removes them)
     const cpu = s.ctrl.type === 'cpu';
+    s.auto = false; // (picking a ghost's difficulty keeps it)
     const opts = this.controllerOptions(s.ctrl).filter((o) => (o.type === 'cpu') === cpu);
     const k = opts.findIndex((o) => specLabel(o) === specLabel(s.ctrl));
     s.ctrl = opts[(k + 1) % opts.length];
@@ -485,7 +506,9 @@ export class LobbyScreen implements Screen {
         if (sl.name !== m.name || (m.blade && sl.blade?.id !== m.blade.id)) { sl.name = m.name; if (m.blade) sl.blade = m.blade; changed = true; }
         continue;
       }
-      if (L.slots.length >= this.mode.maxPlayers) {
+      const ghost = L.slots.findIndex((x) => x.auto);
+      if (ghost >= 0) L.slots.splice(ghost, 1); // (they take a ghost CPU's place)
+      else if (L.slots.length >= this.mode.maxPlayers) {
         const cpu = L.slots.findIndex((x) => x.ctrl.type === 'cpu');
         if (cpu < 0) continue; // room full for this mode: they watch from the room until a slot frees up
         L.slots.splice(cpu, 1);
@@ -519,6 +542,9 @@ export class LobbyScreen implements Screen {
   rulesUi() {
     const u = this.ui, m = this.mode;
     if (!u) return;
+    L.count = Math.max(L.count, L.slots.length);
+    u.countVal.textContent = String(L.slots.length);
+    u.count.style.display = m.maxPlayers > 1 ? '' : 'none';
     const party = m.id === 'pinball' && L.slots.length > 1;
     const desc = party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
     if (u.desc.textContent !== desc) u.desc.textContent = desc;
@@ -599,7 +625,7 @@ export class LobbyScreen implements Screen {
   joinUi() {
     this.joinCard.classList.toggle('listening', !!this.joining);
     this.joinBtn.textContent = this.joining ? 'CANCEL' : '+ PLAYER';
-    this.joinMsg.textContent = this.joining ? (Input.isTouchDevice() ? 'TAP, PRESS A KEY OR A GAMEPAD BUTTON TO JOIN' : 'PRESS A KEY, A GAMEPAD BUTTON OR CLICK TO JOIN') : '';
+    this.joinMsg.textContent = this.joining ? (Input.isTouchDevice() ? 'PRESS A KEY OR A GAMEPAD BUTTON — OR TAP HERE — TO JOIN' : 'PRESS A KEY OR A GAMEPAD BUTTON — OR CLICK HERE FOR MOUSE — TO JOIN') : '';
   }
 
   /**
@@ -609,7 +635,7 @@ export class LobbyScreen implements Screen {
   joinFrame() {
     let dev = this.app.input.deviceUsed();
     const tap = this.lastTap; this.lastTap = null;
-    if (!dev && tap) dev = tap.type === 'touch' ? { type: 'touch' } : this.joining ? { type: 'mouse' } : null;
+    if (!dev && tap) dev = tap.type === 'touch' ? { type: 'touch' } : { type: 'mouse' };
     if (this.joining && performance.now() - this.joining > 10000) { this.joining = 0; this.joinUi(); }
     if (!dev) return false;
     if (this.joining) {
@@ -629,14 +655,19 @@ export class LobbyScreen implements Screen {
 
   removeSlot(i: number) {
     const s = L.slots[i];
+    if (s.auto) return;
     if (s.ctrl.type === 'remote') hostRoom.t?.kick(s.ctrl.peer);
     L.slots.splice(i, 1);
+    this.fillCpus();
     this.assignTeams();
     this.renderSlots();
     this.dirty = true;
   }
 
   addCpu() {
+    // (a ghost waiting for someone? lock it in as a CPU instead of adding another)
+    const ghost = L.slots.findIndex((s) => s.auto);
+    if (ghost >= 0) { L.slots[ghost].auto = false; this.renderSlots(); this.flashSlot(ghost); this.dirty = true; this.app.sfx.play('select'); return; }
     if (L.slots.length >= this.mode.maxPlayers) { this.app.toast('Lobby full for this mode'); return; }
     const blade = PRESETS[(L.slots.length * 3) % PRESETS.length];
     L.slots.push({ name: `CPU ${L.slots.length + 1}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length % 2 });
@@ -655,14 +686,15 @@ export class LobbyScreen implements Screen {
     if (spec.type === 'mouse' && L.slots.some((s) => s.ctrl.type === 'kb' || s.ctrl.type === 'kb1')) return false;
     // replace a CPU if full
     const m = this.mode;
-    let idx = L.slots.length;
-    if (L.slots.length >= m.maxPlayers) {
+    let idx = L.slots.findIndex((s) => s.auto); // (a ghost's place first)
+    if (idx < 0) idx = L.slots.length;
+    if (idx === L.slots.length && L.slots.length >= m.maxPlayers) {
       idx = L.slots.findIndex((s) => s.ctrl.type === 'cpu');
       if (idx < 0) return false;
     }
     const blades = allBlades();
     const slot: Slot = { name: spec.type === 'pad' ? `Pad ${spec.index + 1}` : `Player ${idx + 1}`, ctrl: spec, bladeId: blades[(idx * 2 + 1) % blades.length].id, team: idx % 2 };
-    if (idx < L.slots.length) L.slots[idx] = { ...slot, bladeId: L.slots[idx].bladeId, team: L.slots[idx].team };
+    if (idx < L.slots.length) L.slots[idx] = { ...slot, team: L.slots[idx].team };
     else L.slots.push(slot);
     this.assignTeams();
     this.renderSlots();

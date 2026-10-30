@@ -118,6 +118,9 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 .slot .x { position: absolute; bottom: 8px; right: 12px; color: var(--muted); cursor: pointer; font-size: 18px; }
 .slot.join { border-style: dashed; justify-content: center; min-height: 230px; color: var(--muted); font-family: var(--font-h); font-size: 13px; letter-spacing: 0.12em; text-align: center; animation: none; }
 .slot.join .big { font-size: 40px; color: var(--accent); animation: blink 1.4s infinite; }
+/* ghost CPUs: places the mode needs — they play as CPUs unless someone takes them or they're locked in */
+.slot.ghost { opacity: 0.5; border-style: dashed; filter: saturate(0.55); }
+.slot.ghost:hover, .slot.ghost:focus-within { opacity: 0.75; }
 /* + PLAYER / + CPU, and join mode (listening for the new player's device) */
 .slot.join { gap: 10px; }
 .slot.join .join-btn { min-width: 150px; }
