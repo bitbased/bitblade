@@ -1985,17 +1985,21 @@ export class GameView {
     const above = Math.max(0, t.y - ground);
     // (the colour ring — and the landing / launch rings below — mark your own tops only: local players and their multiball balls)
     const mine = this.focus.includes(t.id) || (!!t.extra && this.focus.some((i) => s.tops[i]?.team === t.team));
-    v.ring.visible = t.alive && gh > VOID && mine;
-    // team games: a team-coloured ring — always on your own blade (outside your colour ring), and on the other team,
-    // your team, or both, as you choose in Settings (everyone, when nobody here is playing)
+    // rings under the other blades, as chosen in Settings: off, everyone (team colours in team games, each blade's
+    // own colour otherwise), only your team, or only the other side. Your own blade always has its colour ring — and
+    // in team games your team's ring round it. (Nobody here playing: everyone's.)
     const teams = this.cfg.mode === 'tag' || this.cfg.mode === 'ctf';
-    let teamRing = false;
-    if (teams && t.alive && gh > VOID && !t.drone) {
-      const myTeams = this.focus.map((i) => s.tops[i]?.team);
-      const friend = myTeams.includes(t.team), pick = settings.teamRings;
-      teamRing = mine || !this.focus.length || pick === 'both' || (pick === 'enemy' ? !friend : friend);
-      if (teamRing) (v.teamRing.material as THREE.MeshBasicMaterial).color.set(t.team === 0 ? '#ff3b4a' : '#3b8bff');
+    const shown = t.alive && gh > VOID && !t.drone;
+    let own = mine, teamRing = false;
+    if (shown && !mine) {
+      const pick = this.focus.length ? settings.rings : settings.rings === 'off' ? 'off' : 'all';
+      const friend = this.focus.some((i) => s.tops[i]?.team === t.team);
+      if (teams) teamRing = pick === 'all' || (pick === 'mine' && friend) || (pick === 'theirs' && !friend);
+      else own = pick === 'all' || pick === 'theirs'; // (no teams: everyone else is the other side)
     }
+    if (shown && mine && teams) teamRing = true;
+    v.ring.visible = shown && own;
+    if (teamRing) (v.teamRing.material as THREE.MeshBasicMaterial).color.set(t.team === 0 ? '#ff3b4a' : '#3b8bff');
     v.teamRing.visible = teamRing;
     v.shadow.visible = gh > VOID;
     // ring + shadow follow the surface under the blade (bowls, ramps, pipes) instead of cutting through it
