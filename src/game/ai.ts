@@ -18,6 +18,8 @@ export interface AIState {
   plungeT?: number; aimGoal?: number;
   /** battles: a run-up — swinging out round the enemy at speed — and the charge in after it */
   runup?: { side: number; t: number }; runCd?: number; charge?: number;
+  /** 3+ tops: a spell spent hunting the rival with the most burst health left (so nobody coasts untouched) */
+  hunt?: { id: number; until: number }; nextHunt?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
@@ -282,6 +284,16 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
   };
   const pickEnemy = () => {
     if (!enemies.length) return;
+    // 3+ tops: now and then go after whoever has the most burst health left, for a few seconds
+    const now = s.t;
+    if (ai.hunt && now < ai.hunt.until && enemies.some((e) => e.id === ai.hunt!.id)) { ai.target = ai.hunt.id; return; }
+    if (enemies.length >= 2 && now >= (ai.nextHunt ??= now + 4 + Math.random() * 8)) {
+      const fresh = enemies.reduce((a, e) => (e.burst < a.burst - 0.02 || (Math.abs(e.burst - a.burst) <= 0.02 && e.spin > a.spin) ? e : a));
+      ai.hunt = { id: fresh.id, until: now + 4 };
+      ai.nextHunt = now + 8 + Math.random() * 6;
+      ai.target = fresh.id;
+      return;
+    }
     // prefer weak & near
     let best = enemies[0], bv = -1e9;
     for (const e of enemies) {
