@@ -908,11 +908,21 @@ export class Sim {
   plunge(t: TopState, k: number) {
     const pl = this.markers.find((m) => m.kind === 'plunger');
     if (!pl) return;
-    const v = (15 + 25 * k) * (pl.len ?? 1);
+    // launch speed: speed..40*len (speed = the weakest launch: set it just above what reaches the top, and the
+    // whole pull is a skill-shot range); default 15..40
+    const lo = pl.speed ?? 15 * (pl.len ?? 1), hi = 40 * (pl.len ?? 1), v = lo + (hi - lo) * k;
     t.x = pl.x; t.vx = 0; t.vz = -v;
     t.spin = Math.max(t.spin, 1); // a fresh launch is a full-spin launch
     if (this.s.pin) { this.s.pin.charge = 0; if (!t.extra) this.s.pin.save = 10; }
     this.ev({ k: 'pin', what: 'plunge', x: t.x, y: t.y, z: t.z });
+    // skill shot: light one of the table's skill targets (markers marked `skill`) — how hard you plunge decides where
+    // the ball goes, so pull it just right and reach the lit one
+    const skills = this.markers.map((m, mi) => ({ m, mi })).filter(({ m }) => m.skill);
+    if (this.s.pin && !t.extra && skills.length) {
+      const pick = skills[Math.floor(this.rnd() * skills.length)];
+      this.s.pin.skill = { mi: pick.mi, t: 12 };
+      this.ev({ k: 'announce', text: 'SKILL SHOT', sub: pick.m.kind === 'saucer' ? 'plunge into the lit lock' : 'plunge through the lit lane', color: '#ffd23a' });
+    }
   }
 
   /** dash aim on a table: the nearest drone / rival, else the nearest unlit target ahead of you */
@@ -1029,6 +1039,7 @@ export class Sim {
     });
     for (let i = 0; i < pin.tm.length; i++) if (pin.tm[i] > 0) pin.tm[i] = Math.max(0, pin.tm[i] - dt);
     if (pin.save > 0) pin.save = Math.max(0, pin.save - dt);
+    if (pin.skill && (pin.skill.t -= dt) <= 0) pin.skill = null;
     // center post: up between the flippers while ball save runs (the first seconds after a launch)
     ms.forEach((m, mi) => {
       if (m.kind !== 'post' || pin.save <= 0) return;
@@ -1144,6 +1155,7 @@ export class Sim {
       const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8 && this.atLevel(t, m));
       if (mi < 0) continue;
       t.held = mi; t.heldT = ms[mi].aim ? ms[mi].hold ?? 8 : 1.6;
+      if (pin.skill && pin.skill.mi === mi && !t.extra) { pin.skill = null; this.addScore(t, 5000); t.spin = Math.max(t.spin, 1); this.ev({ k: 'announce', text: 'SKILL SHOT!', sub: '+5000 · full spin', color: '#ffd23a' }); this.ev({ k: 'pin', what: 'group', x: ms[mi].x, y: t.y, z: ms[mi].z, pts: 5000 }); }
       if (ms[mi].aim) { t.aimA = ms[mi].rot ?? 0; this.ev({ k: 'announce', text: 'TARGET LOCK', sub: 'aim: flippers or ← →  ·  fire: SPACE', color: '#39ff9c' }); this.ev({ k: 'pin', what: 'lock', x: ms[mi].x, y: t.y, z: ms[mi].z }); }
       this.addScore(t, 750);
       this.ev({ k: 'pin', what: 'capture', x: ms[mi].x, y: t.y, z: ms[mi].z, pts: 750 });
@@ -1158,6 +1170,13 @@ export class Sim {
       t.rollT = 0.7;
       this.addScore(t, 100);
       this.ev({ k: 'pin', what: 'rollover', x: m.x, y: t.y, z: m.z, pts: 100 });
+      if (pin.skill && pin.skill.mi === ms.indexOf(m) && !t.extra) {
+        pin.skill = null;
+        this.addScore(t, 5000);
+        t.spin = Math.max(t.spin, 1);
+        this.ev({ k: 'announce', text: 'SKILL SHOT!', sub: '+5000 · full spin', color: '#ffd23a' });
+        this.ev({ k: 'pin', what: 'group', x: m.x, y: t.y, z: m.z, pts: 5000 });
+      }
       if (m.team !== undefined) {
         const mi = ms.indexOf(m);
         pin.lit[mi] = true;

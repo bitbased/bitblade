@@ -681,6 +681,7 @@ export class GameView {
   aims: { beam: THREE.Group; mi: number }[] = [];
   arenaRings: { mat: THREE.MeshBasicMaterial; mi: number }[] = [];
   hiveZones: THREE.Object3D[] = [];
+  skillRings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; mi: number }[] = [];
   droneMeshes: { g: THREE.Group; rotors: THREE.Mesh[] }[] = [];
   boxMeshes: THREE.Mesh[] = [];
   crystalMeshes = new Map<number, THREE.Mesh>();
@@ -1234,6 +1235,14 @@ export class GameView {
       }
       if (obj && (m.kind === 'arm' || m.kind === 'saw')) { this.scene.add(obj); this.hazardMeshes.push({ m: obj, mi }); }
       else if (obj) this.scene.add(obj);
+      if (m.skill) {
+        // a skill-shot target: a gold ring that flashes while it's the lit one
+        const mat = new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
+        const ring = new THREE.Mesh(new THREE.RingGeometry((m.r ?? 1) * 1.05, (m.r ?? 1) * 1.35, 32), mat);
+        ring.rotation.x = -Math.PI / 2; ring.position.set(m.x, y + 0.08, m.z);
+        this.scene.add(ring);
+        this.skillRings.push({ mesh: ring, mat, mi });
+      }
       if (tiltA && !UNTILTED.has(m.kind)) {
         // re-hang this piece's meshes in a group tilted with the table, pivoting where it stands
         const added = this.scene.children.splice(before);
@@ -1583,13 +1592,14 @@ export class GameView {
       for (const d of this.drops) { const down = s.pin.lit[d.mi]; const ty = d.y + (down ? -0.55 : 0.5); d.g.position.y += (ty - d.g.position.y) * Math.min(1, dt * 18); }
       for (const k of this.kickbacks) { const armed = (s.pin.tm[k.mi] ?? 0) <= 0; k.mat.color.set(armed ? '#38ffb0' : '#3a4250'); k.mat.opacity = armed ? 0.6 + 0.35 * Math.sin(this.time * 6) : 0.5; }
       for (const p of this.posts) { const ty = p.y + (s.pin.save > 0 ? 0.55 : -0.6); p.g.position.y += (ty - p.g.position.y) * Math.min(1, dt * 12); }
-      for (const l of this.lights) l.mat.color.set(s.pin.lit[l.mi] ? '#ffffff' : l.base);
+      for (const l of this.lights) l.mat.color.set(s.pin.skill?.mi === l.mi ? (Math.sin(this.time * 14) > 0 ? '#ffffff' : '#ff3bd0') : s.pin.lit[l.mi] ? '#ffffff' : l.base); // (the skill-shot lane flashes)
       // arena gates: solid red while locked, gone while open (a flicker as it shuts)
       for (const g of this.gates) {
         const open = s.pin.lit[g.mi] || (s.pin.tm[g.mi] ?? 0) > 0;
         g.mesh.visible = !open;
         g.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 9);
       }
+      for (const r of this.skillRings) r.mat.opacity = s.pin.skill?.mi === r.mi ? 0.5 + 0.5 * Math.sin(this.time * 14) : 0;
       for (const a of this.arenaRings) {
         const live = s.pin.duel?.mi === a.mi, open = s.pin.lit[a.mi];
         a.mat.color.set(live ? (Math.sin(this.time * 14) > 0 ? '#ffffff' : '#ff2a6d') : open ? '#39ff9c' : '#ff2a6d');
