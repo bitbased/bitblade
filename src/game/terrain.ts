@@ -1,6 +1,6 @@
 import { fillTrackHeights, sampleTrack, trackBounds, trackOverlaps, trackSurface, surfaceCtx, SampleGrid, type SurfaceCtx, type TrackDef, type TrackSamples } from './track';
 import { compileCourse, compileNodeCourse, segToNodes, type NodeCourse, type SegCourse } from './segments';
-import { pinballTables, arenaRing, flyLift, rampLiftAt, tiltLift, ARENA_WALL_W, type PinRamp, type Rail } from './pinball';
+import { pinballTables, arenaRing, flyLift, rampLiftAt, tiltLift, ARENA_LIP, ARENA_WALL_W, type PinRamp, type Rail } from './pinball';
 
 // Arena terrain: everything is a heightfield. Classic stadiums are procedural; skate-park courses are built from tiles.
 
@@ -140,9 +140,11 @@ export class Terrain {
     // as a stadium arena, its rim at the floor height of its centre; at the gate the wall is notched down to the table
     for (const m of def.markers) {
       if (m.kind !== 'arena') continue;
-      const P: StadiumParams = { radius: m.r ?? 6, depth: m.len ?? 1.8, wall: 1.3, pockets: 0, pocketWidth: 0, sides: 0 };
-      const c = courseHeight(def.course!, m.x, m.z) + tiltLift(def, m.z);
+      const P: StadiumParams = { radius: m.r ?? 6, depth: m.len ?? 1.8, wall: ARENA_LIP, pockets: 0, pocketWidth: 0, sides: 0 };
       const { g, gap } = arenaRing(m), out = P.radius + ARENA_WALL_W;
+      // the rim sits at the lowest floor round the bowl (the low side of a tilted table), so its ring stays low
+      let c = Infinity;
+      for (let k = 0; k < 24; k++) { const a = (k / 24) * Math.PI * 2, x = m.x + Math.cos(a) * out, z = m.z + Math.sin(a) * out; c = Math.min(c, courseHeight(def.course!, x, z) + tiltLift(def, z)); }
       for (let j = 0; j < this.nz; j++)
         for (let i = 0; i < this.nx; i++) {
           const x = this.minX + i * this.cell, z = this.minZ + j * this.cell, d = Math.hypot(x - m.x, z - m.z);
