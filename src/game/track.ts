@@ -216,7 +216,7 @@ export function trackSurface(def: TrackDef, S: TrackSamples, best: number, x: nu
   if (def.profile === 'pipe' || (def.pipes && inRanges(f, def.pipes))) {
     // U-shaped pipe; banking leans the whole cross-section (curvature + a twisting wave along the lap)
     const D = def.depth ?? 3;
-    const bank = Math.max(-0.6, Math.min(0.6, -curv * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4))));
+    const bank = Math.max(-0.6, Math.min(0.6, -curv * 14 + (def.twist ?? 0) * Math.sin(f * Math.PI * 2 * (def.twistWaves ?? 4)) + L(S.bank)));
     const y0 = y0c + kick;
     if (d <= half) { const u = d / half; return inRanges(f, def.gaps) ? VOID : y0 + D * (1 - Math.sqrt(Math.max(0, 1 - u * u * 0.96))) + bank * side; }
     if (d <= half + 0.7 && !inRanges(f, def.gaps)) return y0 + D * 0.8 + bank * side; // the rim: go over it and you're out

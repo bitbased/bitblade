@@ -8,10 +8,11 @@
 import * as THREE from 'three';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { buildRibbon, getRenderer } from '../game/render';
-import { COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { BUILTIN_ARENAS, COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { MODES } from '../game/types';
 import { testRide } from './testRide';
 import { allSongs, songById } from '../game/music';
-import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
+import { compileNodeCourse, jumpSpeed, nodeTrackDef, segToNodes, trackToNodes, spanRanges, type NodeCourse, type SegAttach, type SegAttachKind, type Span } from '../game/segments';
 import { sampleTrack, type TrackSamples } from '../game/track';
 import { icon } from './icons';
 import './trackStudio.css';
@@ -68,6 +69,8 @@ class TrackStudio {
   drawing = false;
   hover = -1;
   saveT = 0;
+  /** an untouched copy (a game track, or the starting Rollercoaster copy): not saved into My Tracks until edited */
+  pristine = false;
   // 3D view
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
@@ -92,6 +95,7 @@ class TrackStudio {
     const back = testRide.from === 'tracks' ? this.courses.find((c) => c.id === testRide.id) : undefined;
     testRide.from = null;
     this.cur = back ? clone(back) : this.courses[0] ? clone(this.courses[0]) : this.fromCoaster();
+    this.pristine = !back && !this.courses[0];
     this.root = this.build();
     app.root.append(this.root);
     this.nav = new MenuNav(app, this.el.panel, () => this.escape());
@@ -105,6 +109,14 @@ class TrackStudio {
   }
 
   fromCoaster(): NodeCourse { const n = segToNodes(COASTER); n.id = newId(); n.name = 'Rollercoaster (copy)'; return n; }
+  /** every built-in race track (and Rollercoaster Run), as an editable copy */
+  builtins(): { name: string; make: () => NodeCourse }[] {
+    const race = (MODES.find((m) => m.id === 'race')?.arenas ?? []).map((id) => BUILTIN_ARENAS.find((a) => a.id === id)).filter((a) => a?.track);
+    return [
+      ...race.map((a) => ({ name: a!.name, make: () => { const n = trackToNodes(a!); n.id = newId(); n.name = `${a!.name} (copy)`; return n; } })),
+      { name: COASTER.name, make: () => this.fromCoaster() },
+    ];
+  }
 
   // ------------------------------------------------------------------ layout
   build() {
@@ -121,12 +133,14 @@ class TrackStudio {
       h('button.btn.primary.nav', { onclick: () => this.testRide(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ TEST RIDE'));
 
     this.el.list = h('div.ts-list');
+    // the game's own tracks: open an editable copy of any of them
+    const builtin = h('div.ts-list.ts-builtin', null, ...this.builtins().map((b) => h('div.ts-item.nav', { title: `Open an editable copy of ${b.name}`, onclick: () => { this.persist(); this.open(b.make()); this.pristine = true; this.saveT = 0; } }, h('b', null, b.name), h('span', null, 'copy ›'))));
     const left = h('div.ts-panel.ts-left', null,
       h('h3', null, 'MY TRACKS'), this.el.list,
+      h('h3', null, 'GAME TRACKS'), builtin,
       h('div.ts-btns', null,
         h('button.btn.small.nav', { onclick: () => this.open(starter(true)) }, '+ New race track'),
         h('button.btn.small.nav', { onclick: () => this.open(starter(false)) }, '+ New adventure'),
-        h('button.btn.small.nav', { onclick: () => this.open(this.fromCoaster()) }, 'Copy Rollercoaster Run'),
         h('button.btn.small.nav', { onclick: () => this.open({ ...clone(this.cur), id: newId(), name: this.cur.name + ' copy' }) }, 'Duplicate'),
         h('button.btn.small.nav', { onclick: () => this.exportJson() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importJson() }, 'Import'),
@@ -177,11 +191,11 @@ class TrackStudio {
   changed(geometry = true, snapshot = false) {
     if (snapshot) this.snapshot();
     if (geometry) this.recompute();
-    this.saveT = 0.5;
+    this.saveT = 0.5; this.pristine = false;
   }
 
   snapshot() { this.undoStack.push(JSON.stringify(this.cur)); if (this.undoStack.length > 60) this.undoStack.shift(); }
-  undo() { const s = this.undoStack.pop(); if (!s) return; this.cur = JSON.parse(s); this.sel = { kind: 'none' }; this.recompute(); this.renderPanel(); this.saveT = 0.5; }
+  undo() { const s = this.undoStack.pop(); if (!s) return; this.cur = JSON.parse(s); this.sel = { kind: 'none' }; this.recompute(); this.renderPanel(); this.saveT = 0.5; this.pristine = false; }
 
   // ------------------------------------------------------------------ map view
   w2s(x: number, z: number): [number, number] { const r = this.map; return [r.width / 2 + (x - this.cx) * this.scale, r.height / 2 + (z - this.cz) * this.scale]; }
@@ -435,12 +449,12 @@ class TrackStudio {
     this.cur.nodes.splice(k + 1, 0, node);
     // split the stretch: rails/items carry over, the jump stays at the end, things keep their place on the road
     const old = this.cur.spans[k] ?? {};
-    const a: Span = { rails: old.rails, boost: old.boost, items: old.items, att: [] }, b: Span = { rails: old.rails, gap: old.gap, lip: old.lip, att: [] };
+    const a: Span = { rails: old.rails, pipe: old.pipe, boost: old.boost, items: old.items, att: [] }, b: Span = { rails: old.rails, pipe: old.pipe, gap: old.gap, lip: old.lip, att: [] };
     for (const t of old.att ?? []) { if (t.at < frac) a.att!.push({ ...t, at: t.at / frac }); else b.att!.push({ ...t, at: (t.at - frac) / (1 - frac) }); }
     this.cur.spans.splice(k, 1, a, b);
     this.recompute();
     this.select({ kind: 'node', i: k + 1 });
-    this.saveT = 0.5;
+    this.saveT = 0.5; this.pristine = false;
     this.app.sfx.play('tick');
   }
 
@@ -605,7 +619,7 @@ class TrackStudio {
         h('button.ts-segbtn.nav' + (!c.closed ? '.on' : ''), { onclick: () => this.setClosed(false), title: 'Open: start → goal with checkpoints (Blade Quest)' }, 'ADVENTURE')),
       h('div.ts-grid', null, num('ROAD WIDTH m', c.width, 6, 20, 0.5, (v) => { c.width = v; }, 'Default width (points can override it)'), h('div.ts-field', null, h('label', null, 'THEME'), theme)),
       h('div.ts-field', null, h('label', null, 'MUSIC'), h<HTMLSelectElement>('select', {
-        onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; c.song = v || undefined; this.persist(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
+        onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; c.song = v || undefined; this.pristine = false; this.persist(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
       }, h('option', { value: '' }, 'Auto (a fitting preset)'), ...allSongs().map((s) => h('option', { value: s.id, selected: c.song === s.id }, `♪ ${s.name}${s.custom ? '' : ' ★'}`)))),
       h('div.ts-row', null,
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 0.9, z * 0.9]), title: 'Shrink the whole track 10%' }, 'Scale −'),
@@ -632,9 +646,10 @@ class TrackStudio {
     for (const c of all) el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : ''), { onclick: () => { if (c.id !== this.cur.id) { this.persist(); this.open(clone(c)); } } }, h('b', null, c.name), h('span', null, c.closed ? 'Race loop' : 'Adventure')));
   }
 
-  open(c: NodeCourse) { this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.framed3d = false; this.recompute(); this.fit(); if (this.view === '3d') this.frame3d(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
+  open(c: NodeCourse) { this.pristine = false; this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.framed3d = false; this.recompute(); this.fit(); if (this.view === '3d') this.frame3d(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
 
   persist() {
+    if (this.pristine) return;
     const i = this.courses.findIndex((c) => c.id === this.cur.id);
     const copy = clone(this.cur);
     if (i >= 0) this.courses[i] = copy; else this.courses.unshift(copy);

@@ -317,6 +317,77 @@ export function compileNodeCourse(c: NodeCourse, checks = true): CompiledCourse 
   return { arena, issues, length: Math.round(total), rise: +(hi - lo).toFixed(1), spots };
 }
 
+/**
+ * Convert a built-in race track (a TrackDef with lap-fraction features) into an editable node course. Its own control
+ * points stay; points are added only where something starts or ends between them (rails, half-pipe stretches, the
+ * end of a jump gap) and, on a twisting tube, often enough to carry the twist as per-point banking. Boosts, item
+ * rows and the obstacles become attachments on the stretch they sit on.
+ */
+export function trackToNodes(a: ArenaDef): NodeCourse {
+  const T = a.track!, S = sampleTrack(T), n = S.n, total = S.total;
+  const iAt = (f: number) => Math.floor((((f % 1) + 1) % 1) * n) % n;
+  const pipeAt = (f: number) => T.profile === 'pipe' || (T.pipes ?? []).some(([p, q]) => f >= p && f <= q);
+  const twistAt = (f: number) => (pipeAt(f) ? (T.twist ?? 0) * Math.sin(f * Math.PI * 2 * (T.twistWaves ?? 4)) : 0);
+  const orig: TrackNode[] = T.pts.map(([x, z, y], k) => ({ x, z, y, bank: T.banks?.[k] ?? 0, w: T.widths?.[k] }));
+  const oi = nodeSampleIndex(S, orig);
+  // where points must be: the originals, then every feature boundary (snapped to an original within ~4m)
+  const cuts = new Map<number, TrackNode>();
+  oi.forEach((i, k) => cuts.set(i, orig[k]));
+  // (each added point bends the curve a little, so a rail end just rounds to a point within 12m; a jump gets its own)
+  const add = (f: number, snap = 4) => {
+    const i = iAt(f);
+    if ([...cuts.keys()].some((j) => Math.min(Math.abs(S.cum[j] - S.cum[i]), total - Math.abs(S.cum[j] - S.cum[i])) < snap)) return;
+    cuts.set(i, { x: +S.x[i].toFixed(2), z: +S.z[i].toFixed(2), y: +S.y[i].toFixed(2), bank: S.bank[i], w: T.widths ? +S.w[i].toFixed(2) : undefined });
+  };
+  for (const [, q] of T.gaps) add(q);
+  for (const [p, q] of [...T.rails, ...(T.pipes ?? [])]) { add(p, 12); add(q, 12); }
+  if (T.twist && T.profile === 'pipe') { const per = 1 / ((T.twistWaves ?? 4) * 6); for (let f = 0; f < 1; f += per) add(f); }
+  const order = [...cuts.keys()].sort((p, q) => p - q);
+  // (the lap starts at the first original point, so the start line stays put)
+  while (order[0] !== oi[0]) order.push(order.shift()!);
+  const nodes = order.map((i) => {
+    const nd = { ...cuts.get(i)! }, f = i / n;
+    nd.bank = +((nd.bank ?? 0) + twistAt(f)).toFixed(3);
+    if (nd.w === undefined) delete nd.w;
+    return nd;
+  });
+  const inR = (f: number, rs: [number, number][]) => rs.some(([p, q]) => f >= p && f <= q);
+  const spans: Span[] = order.map((i0, k) => {
+    const i1 = order[(k + 1) % order.length], len = ((i1 - i0 + n) % n) || n, mid = ((i0 + len / 2) % n) / n;
+    const sp: Span = {};
+    if (inR(mid, T.rails)) sp.rails = true;
+    if (pipeAt(mid)) sp.pipe = true;
+    // a gap ending at this stretch's end point (a jump): its length, and the kicker before it
+    const g = T.gaps.find(([, q]) => Math.abs(((iAt(q) - i1 + n + n / 2) % n) - n / 2) < 12);
+    if (g) { sp.gap = +((g[1] - g[0]) * total).toFixed(1); const rp = (T.ramps ?? []).find((r) => Math.abs(r.f - g[0]) < 0.01); sp.lip = rp ? rp.h : T.autoKick === false ? 0 : 1.5; }
+    sp.att = [];
+    return sp;
+  });
+  // things along the road → attachments on the stretch they're on (at = 0..1 along it, lat = -1..1 across)
+  const where = (i: number) => {
+    for (let k = 0; k < order.length; k++) {
+      const i0 = order[k], len = ((order[(k + 1) % order.length] - i0 + n) % n) || n, d = (i - i0 + n) % n;
+      if (d < len) return { k, at: +(d / len).toFixed(3) };
+    }
+    return { k: 0, at: 0 };
+  };
+  const put = (i: number, att: SegAttach) => { const { k, at } = where(i); spans[k].att!.push({ ...att, at }); };
+  for (const f of T.boosts) put(iAt(f), { at: 0, kind: 'boost', size: +(T.width * (T.profile === 'pipe' ? 0.2 : 0.36)).toFixed(2) });
+  for (const f of T.items) for (const lat of [-0.6, 0, 0.6]) put(iAt(f), { at: 0, kind: 'item', lat });
+  for (const m of a.markers) {
+    if (!['arm', 'saw', 'bumper', 'pillar', 'spinpad', 'checkpoint', 'hive', 'gem'].includes(m.kind)) continue;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const d = (S.x[i] - m.x) ** 2 + (S.z[i] - m.z) ** 2; if (d < bd) { bd = d; bi = i; } }
+    const off = -(m.x - S.x[bi]) * S.tz[bi] + (m.z - S.z[bi]) * S.tx[bi], half = S.w[bi] / 2;
+    const lat = +Math.max(-1, Math.min(1, off / half)).toFixed(2);
+    const kind = m.kind as SegAttachKind;
+    if (kind === 'arm') put(bi, { at: 0, kind, lat: lat >= 0 ? 1 : -1, size: m.len, speed: m.speed });
+    else put(bi, { at: 0, kind, lat, size: m.kind === 'saw' || m.kind === 'bumper' || m.kind === 'pillar' || m.kind === 'spinpad' ? m.r : undefined, speed: m.speed });
+  }
+  for (const sp of spans) if (!sp.att!.length) delete sp.att;
+  return { id: a.id, name: a.name, desc: a.desc, theme: a.theme, width: T.width, closed: !T.open, nodes, spans, song: (a as { song?: string }).song };
+}
+
 /** convert a segment course (e.g. Rollercoaster Run) into editable points: one at each segment end, more on big curves */
 export function segToNodes(c: SegCourse): NodeCourse {
   const nodes: TrackNode[] = [{ x: 0, z: 0, y: 4, bank: 0 }];

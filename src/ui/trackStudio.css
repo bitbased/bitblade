@@ -29,7 +29,9 @@
 .ts-proflbl { position: absolute; left: 10px; top: 4px; font-family: var(--font-h); font-size: 9px; letter-spacing: 0.18em; color: var(--muted); pointer-events: none; }
 .ts-prof { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: ns-resize; touch-action: none; }
 .ts-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; flex: 1 1 auto; min-height: 60px; }
+.ts-list.ts-builtin { flex: 0 1 auto; max-height: 34vh; }
 .ts-item { display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; background: rgba(255, 255, 255, 0.04); border-left: 3px solid transparent; cursor: pointer; font-size: 13px; }
+.ts-item b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ts-item span { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ts-item.on { border-left-color: var(--accent); background: rgba(60, 242, 255, 0.12); }
 .ts-item:hover, .ts-item.focus { background: rgba(60, 242, 255, 0.1); }
@@ -89,5 +91,10 @@
   .ts-stats { display: none; }
   .ts-tab { padding: 5px 9px; font-size: 10px; }
   .ts-panel { padding: 6px; gap: 6px; }
+  /* (the left column scrolls as one: both lists at full length, compact rows) */
+  .ts-left { overflow-y: auto; }
+  .ts-left .ts-list { flex: none; min-height: 0; max-height: none; overflow: visible; }
+  .ts-item { padding: 4px 8px; font-size: 11px; }
+  .ts-item span { display: none; }
   .ts-help { font-size: 10px; }
 }
