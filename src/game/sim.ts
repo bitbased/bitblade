@@ -833,7 +833,7 @@ export class Sim {
   }
 
   respawn(t: TopState, i: number) {
-    t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1; t.off = 0;
+    t.alive = true; t.out = ''; t.spin = 1; t.burst = 0; t.fx.shield = 2; t.flag = -1; t.off = 0; t.plunged = false; t.plungeWait = 0;
     t.graceT = 1.6;
     if (this.cfg.mode === 'pinball') {
       const sp = this.spawnFor(t, i);
@@ -1001,16 +1001,18 @@ export class Sim {
   }
 
   /** fire the ball up the plunger lane (k = how far the plunger was pulled, 0..1) */
-  plunge(t: TopState, k: number) {
+  plunge(t: TopState, k: number, auto = false) {
     const pl = this.markers.find((m) => m.kind === 'plunger');
     if (!pl) return;
+    t.plunged = true; t.plungeWait = 0;
     // launch speed: speed..40*len (speed = the weakest launch: set it just above what reaches the top, and the
     // whole pull is a skill-shot range); default 15..40
     const lo = pl.speed ?? 15 * (pl.len ?? 1), hi = 40 * (pl.len ?? 1), v = lo + (hi - lo) * k;
     t.x = pl.x; t.vx = 0; t.vz = -v;
     t.spin = Math.max(t.spin, 1); // a fresh launch is a full-spin launch
-    if (this.s.pin) { this.s.pin.charge = 0; if (!t.extra) this.s.pin.save = 10; }
+    if (this.s.pin) { this.s.pin.charge = 0; if (!t.extra && !auto) this.s.pin.save = 10; }
     this.ev({ k: 'pin', what: 'plunge', x: t.x, y: t.y, z: t.z });
+    if (auto) return; // (a re-entry refire: no ball save or skill shot — those belong to your launch)
     // skill shot: light one of the table's skill targets (markers marked `skill`) — how hard you plunge decides where
     // the ball goes, so pull it just right and reach the lit one
     const skills = this.markers.map((m, mi) => ({ m, mi })).filter(({ m }) => m.skill);
@@ -1131,6 +1133,9 @@ export class Sim {
       t.spin = Math.max(t.spin, 1); // waiting to launch: no spin lost
       if (t.extra) { this.plunge(t, 0.9); continue; }
       if (s.phase !== 'battle') continue;
+      // rolled back into the lane after its launch (or any ball in a party, where nobody pulls a plunger): it fires
+      // back out by itself after a beat
+      if (t.plunged || this.party) { t.plungeWait = (t.plungeWait ?? 0) + dt; if (t.plungeWait > 0.5) this.plunge(t, 0.75 + this.rnd() * 0.2, true); continue; }
       const c = this.controls[t.id] ?? NO_CONTROL;
       if (c.mz > 0.35) { pin.charge = Math.min(1, pin.charge + dt / 1.1); t.vx = 0; t.vz = Math.max(0, t.vz); t.x = pl.x; }
       else if (pin.charge > 0.05) this.plunge(t, pin.charge);

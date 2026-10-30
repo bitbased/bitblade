@@ -91,6 +91,8 @@ export interface TopState {
   fullT?: number;
   /** fired by a swinging flipper this long ago: it hits like a dash (attack bonus, scaled by the run from the flipper) */
   flipT?: number;
+  /** pinball: this ball has had its launch — rolling back into the plunger lane fires it out again by itself */
+  plunged?: boolean; plungeWait?: number;
   /** pinball: aim of the lock this ball sits in · battling in an arena bowl (normal top physics there) */
   aimA?: number; duel?: boolean;
   launch: number; launchLocked: boolean;
