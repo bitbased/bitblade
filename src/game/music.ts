@@ -117,24 +117,57 @@ const S = (name: string, id: string, o: Partial<Song>, lanes: Partial<Record<Lan
 });
 
 export const PRESET_SONGS: Song[] = [
+  // Every preset is arranged like a real track (as Crunch Rush was first): up to 4 parts — usually an intro groove,
+  // the theme, a lift / climb and a breakdown — played through chord changes over ~18-24 bars, so it develops
+  // instead of looping one bar.
+  // synthwave cruise: arp-and-bass intro → the hook → a higher answer over 16th hats → a half-time breakdown
   S('Neon Drive', 'neon-drive', { bpm: 118, root: 45, scale: 'minor' },
-    { lead: { wave: 'saw', oct: 2, vol: 0.4, decay: 0.22, cutoff: 0.6, echo: 0.1, vib: 0 }, bass: { wave: 'square', oct: 0, vol: 0.45, decay: 0.3 }, pad: { mute: true } },
-    [{ lead: '0.4.7.9.7.4.6.4.', bass: '0...0...0...0...', kick: 'x.......x.......', hat: '....x.......x...' }],
-    [[0, 0], [0, 0], [0, 5], [0, 6]]),
+    { lead: { wave: 'saw', oct: 2, vol: 0.4, decay: 0.22, cutoff: 0.6, echo: 0.1, vib: 0 }, arp: { vol: 0.22, echo: 0.35 }, bass: { wave: 'square', oct: 0, vol: 0.45, decay: 0.3 }, pad: { vol: 0.2, decay: 1.6 }, perc: { vol: 0.22 } },
+    [
+      { arp: '0.2.4.2.0.2.4.2.', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', hat: '..x...x...x...x.' },
+      { lead: '0.4.7.9.7.4.6.4.', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.', perc: '..............9.' },
+      { lead: '9---7---6---4-2-', arp: '0.2.4.7.4.2.0.2.', bass: '0..0..0.0..0..0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x..x', hat: 'x.x.x.x.x.x.x.x.', perc: '......9.......b.' },
+      { lead: '7-------6---4---', arp: '0...4...0...4...', bass: '0-------0-------', pad: '0---------------', kick: 'x.......x.......', snare: '........x...xxxx', perc: 'b.9.7.4.........' },
+    ],
+    [
+      [0, 0], [0, 5], [0, 2], [0, 6], // intro: i VI III VII
+      [1, 0], [1, 5], [1, 2], [1, 6], // the hook
+      [2, 3], [2, 4], [2, 0], [2, 5], // lift: iv v i VI
+      [3, 0], [3, 5], [3, 3], [3, 4], // breakdown → roll
+      [1, 0], [1, 5], [2, 2], [2, 6], // hook home
+    ]),
+  // bright sky racer: sparkling intro → verse → a soaring chorus up the octave → a lift with snare pickups
   S('Sky Ride', 'sky-ride', { bpm: 132, root: 48, scale: 'major' },
-    { lead: { wave: 'pulse25', oct: 1 }, pad: { vol: 0.2 } },
+    { lead: { wave: 'pulse25', oct: 1 }, pad: { vol: 0.2 }, perc: { vol: 0.22 } },
     [
+      { arp: '0.2.4.2.0.2.4.2.', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', hat: '..x...x...x...x.', perc: '............7.9.' },
       { lead: '4-.4.5.7---5.4.2', arp: '0...0...0...0...', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.' },
-      { lead: '2-.2.4.5---4.2.0', arp: '0...0...0...0...', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.' },
+      { lead: '7-.7.9.b---9.7.9', arp: '0.4.0.4.0.4.0.4.', bass: '0.0.4.0.0.0.4.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x.x.', hat: 'x.x.x.x.x.x.x.x.', perc: '..9.......9.....' },
+      { lead: '2-.2.4.5---4.2.0', arp: '0...0...0...0...', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x.xx', hat: '..x...x...x...x.' },
     ],
-    [[0, 0], [0, 4], [1, 5], [1, 3]]),
-  S('Boss Rush', 'boss-rush', { bpm: 150, root: 50, scale: 'harmonic', crunch: 0.2 },
-    { bass: { wave: 'saw', oct: -1, vol: 0.5, decay: 0.12, cutoff: 0.45 }, lead: { wave: 'square', vib: 0.25 }, arp: { mute: true } },
     [
+      [0, 0], [0, 4], [0, 5], [0, 3], // intro: I V vi IV
+      [1, 0], [1, 4], [3, 5], [3, 3], // verse
+      [2, 0], [2, 4], [2, 5], [2, 3], // chorus
+      [3, 3], [3, 4], [1, 5], [3, 4], // lift: IV V vi V
+      [2, 0], [2, 4], [2, 5], [1, 3], // last chorus
+    ]),
+  // the clean boss theme (Crunch Rush is its crunchy cousin): tension intro → riff → climb → a frantic phase two
+  S('Boss Rush', 'boss-rush', { bpm: 150, root: 50, scale: 'harmonic', crunch: 0.2 },
+    { bass: { wave: 'saw', oct: -1, vol: 0.5, decay: 0.12, cutoff: 0.45 }, lead: { wave: 'square', vib: 0.25 }, arp: { vol: 0.22 }, pad: { vol: 0.22 }, perc: { vol: 0.22 } },
+    [
+      { arp: '0.4.7.4.0.4.7.4.', bass: '0000300004000300', pad: '0---------------', kick: 'x...x.x.x...x.x.', hat: 'x...x...x...x...' },
       { lead: '7---6-5-4---2-4-', bass: '0000300004000300', kick: 'x...x.x.x...x.x.', snare: '....X.......X..x', hat: 'x.x.x.x.x.x.x.x.' },
-      { lead: '7-8-9---8-7-6-4-', bass: '0000300004000300', kick: 'x...x.x.x...x.x.', snare: '....X.......X..x', hat: 'x.x.x.x.x.x.x.x.' },
+      { lead: '7-8-9---8-7-6-4-', bass: '0000300004000300', kick: 'x...x.x.x...x.x.', snare: '....X.......X..x', hat: 'x.x.x.x.x.x.x.x.', perc: '..............b.' },
+      { lead: '9-8-7-8-9-b-9---', arp: '0.4.7.4.0.4.7.4.', bass: '0000000033334444', kick: 'x.x.x.x.x.x.x.x.', snare: '....X.......X.X.', hat: 'xxxxxxxxxxxxxxxx', perc: '..b...9...b...9.' },
     ],
-    [[0, 0], [0, 0], [1, 3], [1, 4]]),
+    [
+      [0, 0], [0, 0], [0, 5], [0, 4], // the boss appears
+      [1, 0], [1, 0], [2, 3], [2, 4], // riff → climb
+      [3, 0], [3, 5], [3, 3], [3, 4], // phase two
+      [1, 0], [1, 5], [2, 3], [2, 4], // riff again
+      [3, 0], [3, 0], [2, 4], [2, 4], // finale
+    ]),
   // a heavy, crunchy take on Boss Rush (found while testing random voices), arranged out: intro groove →
   // main riff → climb → half-time breakdown with a snare roll → final run (20 bars)
   S('Crunch Rush', 'crunch-rush', { bpm: 150, root: 50, scale: 'harmonic', crunch: 0.7 },
@@ -163,41 +196,83 @@ export const PRESET_SONGS: Song[] = [
       [3, 0], [3, 5], [3, 3], [3, 4], // breakdown → roll
       [1, 0], [2, 4], [1, 5], [2, 4], // final run
     ]),
+  // laid-back lobby: pad-and-bass intro → the two-line theme → a sparkly bridge with a walking bass
   S('Chill Lobby', 'chill-lobby', { bpm: 92, root: 50, scale: 'dorian', swing: 0.18 },
-    { lead: { wave: 'triangle', echo: 0.5, vol: 0.5 }, bass: { oct: -1 }, kick: { vol: 0.55 }, snare: { vol: 0.3 }, hat: { vol: 0.18 }, arp: { mute: true } },
+    { lead: { wave: 'triangle', echo: 0.5, vol: 0.5 }, arp: { wave: 'triangle', vol: 0.16, echo: 0.45, chord: false }, bass: { oct: -1 }, kick: { vol: 0.55 }, snare: { vol: 0.3 }, hat: { vol: 0.18 }, perc: { vol: 0.16, echo: 0.5 } },
     [
+      { bass: '0.....0...4.....', pad: '0---------------', kick: 'x.........x.....', hat: '..x...x...x...x.', perc: '..........7.....' },
       { lead: '....4.5.7...5...', bass: '0.....0...4.....', pad: '0---------------', kick: 'x.........x.....', snare: '....x.......x...', hat: '..x...x...x...x.' },
-      { lead: '....2.4.5...4...', bass: '0.....0...4.....', pad: '0---------------', kick: 'x.........x.....', snare: '....x.......x...', hat: '..x...x...x...x.' },
+      { lead: '....2.4.5...4...', bass: '0.....0...4.....', pad: '0---------------', kick: 'x.........x.....', snare: '....x.......x...', hat: '..x...x...x...x.', perc: '..............9.' },
+      { lead: '7---5---4-2-0---', arp: '0.2.4.2.0.2.4.2.', bass: '0...0...3...3...', pad: '0---------------', kick: 'x.......x.......', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.' },
     ],
-    [[0, 0], [0, 3], [1, 5], [1, 4]]),
+    [
+      [0, 0], [0, 3], [0, 0], [0, 3], // i IV vamp
+      [1, 0], [1, 3], [2, 5], [2, 4], // theme
+      [1, 0], [1, 3], [2, 5], [2, 4],
+      [3, 0], [3, 3], [3, 1], [3, 4], // bridge
+      [1, 0], [1, 3], [2, 5], [0, 4], // theme, fading into the vamp
+    ]),
+  // creeping dungeon: an ominous drone → the theme → its darker answer → a chase with a pounding kick
   S('Dungeon Crawl', 'dungeon-crawl', { bpm: 100, root: 52, scale: 'phrygian' },
-    { bass: { wave: 'pulse25', oct: -1, vol: 0.5 }, lead: { vib: 0.4, echo: 0.3 }, arp: { mute: true }, pad: { mute: true } },
+    { bass: { wave: 'pulse25', oct: -1, vol: 0.5 }, lead: { vib: 0.4, echo: 0.3 }, arp: { mute: true }, pad: { wave: 'sine', oct: 0, vol: 0.18, decay: 2 }, perc: { echo: 0.45 } },
     [
+      { bass: '0..0..1.0..0..1.', pad: '0---------------', kick: 'x.....x...x.....', perc: '..........4.....' },
       { lead: '4---3---1---0---', bass: '0..0..1.0..0..1.', perc: '..........4.....', kick: 'x.....x...x.....', snare: '....x.......x...', hat: 'x...x...x...x...' },
-      { lead: '7---6---4---3-1-', bass: '0..0..1.0..0..1.', perc: '..........4.....', kick: 'x.....x...x.....', snare: '....x.......x...', hat: 'x...x...x...x...' },
+      { lead: '7---6---4---3-1-', bass: '0..0..1.0..0..1.', pad: '0---------------', perc: '..........4...7.', kick: 'x.....x...x.....', snare: '....x.......x...', hat: 'x...x...x...x...' },
+      { lead: '0.1.3.1.0.1.4.3.', bass: '0.0.1.0.0.0.1.0.', kick: 'x..x..x.x..x..x.', snare: '....x.......x.x.', hat: 'x.x.x.x.x.x.x.x.', perc: '7.......4.......' },
     ],
-    [[0, 0], [0, 0], [1, 0], [1, 1]]),
-  S('Victory Lap', 'victory-lap', { bpm: 140, root: 43, scale: 'penta' },
-    { lead: { wave: 'pulse25' }, pad: { mute: true } },
     [
+      [0, 0], [0, 0], [0, 1], [0, 0], // the drone
+      [1, 0], [1, 0], [2, 0], [2, 1], // theme
+      [3, 0], [3, 1], [3, 0], [3, -1], // chase
+      [1, 3], [2, 1], [1, 0], [2, 1], // theme, moved
+      [0, 0], [0, 1], // back into the dark
+    ]),
+  // winners' fanfare: a rising call → the tune → its answer → a bouncing chorus with 16th hats
+  S('Victory Lap', 'victory-lap', { bpm: 140, root: 43, scale: 'penta' },
+    { lead: { wave: 'pulse25' }, pad: { mute: true }, perc: { vol: 0.22 } },
+    [
+      { lead: '0...2...4...7---', arp: '0.......0.......', bass: '0...0...0...0...', kick: 'x...x...x...x...', snare: '............xxxx', hat: 'x.x.x.x.x.x.x.x.' },
       { lead: '0.1.2.3.4---3.2.', arp: '0.......0.......', bass: '0...2...3...2...', kick: 'x...x...x...x...', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.' },
       { lead: '4.3.2.1.2---0...', arp: '0.......0.......', bass: '0...2...3...2...', kick: 'x...x...x...x...', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.' },
+      { lead: '7.7.6.4.6---4.2.', arp: '0.2.4.2.0.2.4.2.', bass: '0.0.2.0.3.0.2.0.', kick: 'x...x...x...x...', snare: '....x.......x.x.', hat: 'xxxxxxxxxxxxxxxx', perc: '..9...9...9...9.' },
     ],
-    [[0, 0], [1, 0], [0, 2], [1, 0]]),
-  S('Glacier Dream', 'glacier-dream', { bpm: 108, root: 53, scale: 'lydian' },
-    { lead: { wave: 'sine', echo: 0.6, vib: 0.3, decay: 0.5 }, arp: { wave: 'triangle', chord: false, vol: 0.22 }, bass: { oct: -1 }, pad: { mute: true }, kick: { vol: 0.5 }, hat: { vol: 0.15 } },
     [
+      [0, 0], [0, 2], // the call
+      [1, 0], [2, 0], [1, 2], [2, 0], // the tune
+      [3, 0], [3, 3], [3, 2], [3, 1], // chorus
+      [1, 0], [2, 0], [1, 2], [2, 0],
+      [3, 0], [3, 3], [3, 2], [0, 0], // chorus → one last call
+    ]),
+  // icy and floating: a shimmering arp intro → the theme → its answer → a blooming lift with soft drums
+  S('Glacier Dream', 'glacier-dream', { bpm: 108, root: 53, scale: 'lydian' },
+    { lead: { wave: 'sine', echo: 0.6, vib: 0.3, decay: 0.5 }, arp: { wave: 'triangle', chord: false, vol: 0.22 }, bass: { oct: -1 }, pad: { vol: 0.18, decay: 2 }, kick: { vol: 0.5 }, snare: { vol: 0.28 }, hat: { vol: 0.15 }, perc: { wave: 'triangle', vol: 0.18, echo: 0.6 } },
+    [
+      { arp: '0.4.7.4.0.4.7.4.', bass: '0-------4-------', pad: '0---------------', perc: '..............b.' },
       { lead: '0---4---6---7---', arp: '0.4.7.4.0.4.7.4.', bass: '0-------4-------', kick: 'x.......x.......', hat: '....x.......x...' },
-      { lead: '8---7---6---4---', arp: '0.4.7.4.0.4.7.4.', bass: '0-------4-------', kick: 'x.......x.......', hat: '....x.......x...' },
+      { lead: '8---7---6---4---', arp: '0.4.7.4.0.4.7.4.', bass: '0-------4-------', pad: '0---------------', kick: 'x.......x.......', hat: '....x.......x...' },
+      { lead: '7-8-9-b-9---7---', arp: '0.4.7.b.7.4.0.4.', bass: '0---0---4---4---', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.', perc: '......b.......9.' },
     ],
-    [[0, 0], [0, 1], [1, 0], [1, 1]]),
+    [
+      [0, 0], [0, 1], [0, 0], [0, 1], // I II (the lydian shimmer)
+      [1, 0], [1, 1], [2, 0], [2, 1], // theme
+      [3, 0], [3, 1], [3, 3], [3, 4], // bloom
+      [1, 0], [1, 1], [2, 3], [2, 4],
+      [3, 0], [3, 1], [0, 0], [0, 1], // bloom, then melt away
+    ]),
+  // a proper 12-bar blues, twice: the riff with its turnaround, then stop-time hits and a shuffle solo
   S('Gravel Blues', 'gravel-blues', { bpm: 112, root: 45, scale: 'blues', swing: 0.3 },
-    { bass: { wave: 'square', vol: 0.45 }, lead: { wave: 'saw', cutoff: 0.45, vol: 0.45 }, arp: { mute: true }, pad: { mute: true } },
+    { bass: { wave: 'square', vol: 0.45 }, lead: { wave: 'saw', cutoff: 0.45, vol: 0.45 }, arp: { mute: true }, pad: { mute: true }, perc: { vol: 0.2 } },
     [
       { lead: '5-.4.3-.1-......', bass: '0.2.3.4.5.4.3.2.', kick: 'x.....x.x.....x.', snare: '....x.......x...', hat: 'x.xxx.xxx.xxx.xx' },
       { lead: '0.1.2.3.4.5.6---', bass: '0.2.3.4.5.4.3.2.', kick: 'x.....x.x.....x.', snare: '....x.......x...', hat: 'x.xxx.xxx.xxx.xx' },
+      { lead: '......5-4-3-1-0-', bass: '0.......0.......', kick: 'x.......x.......', snare: 'X.......X.......' },
+      { lead: '0.3.4.5.6.5.4.3.', bass: '0.2.3.4.5.4.3.2.', kick: 'x.....x.x.....x.', snare: '....x.......x..x', hat: 'x.xxx.xxx.xxx.xx', perc: '.......7.......9' },
     ],
-    [[0, 0], [0, 0], [0, 2], [0, 0], [1, 4], [0, 2], [0, 0], [1, 0]]),
+    [
+      [0, 0], [0, 0], [0, 0], [0, 0], [0, 2], [0, 2], [0, 0], [0, 0], [1, 4], [1, 2], [0, 0], [1, 4], // chorus 1
+      [2, 0], [2, 0], [3, 0], [3, 0], [3, 2], [3, 2], [2, 0], [2, 0], [3, 4], [3, 2], [1, 0], [1, 4], // stop-time + solo
+    ]),
 ];
 
 // ------------------------------------------------------------------ storage + choosing what plays
@@ -556,26 +631,67 @@ export function genLane(kind: Lane['kind'], s: { scale: ScaleId }): string {
   return EMPTY;
 }
 
+/** which shape the next surprise takes: they alternate, a sectioned song then a short loop */
+let surpriseLong = Math.random() < 0.5;
+
 /**
  * 🎲 Surprise me: a whole song from a few dice rolls inside rules that keep it musical — a random mood/key/
- * tempo (+ maybe swing / crunch / chip waves), every lane written for its job (genLane), two patterns (A answers
- * B), arranged over a proven chord progression. Notes are scale degrees, so nothing can land out of key.
+ * tempo (+ maybe swing / crunch / chip waves), every lane written for its job (genLane), arranged over proven
+ * chord progressions. Notes are scale degrees, so nothing can land out of key. Two shapes, taking turns:
+ *  · a loop: two patterns (A answers B) over one progression (8 bars)
+ *  · a sectioned song like Crunch Rush: intro groove (no lead) → the theme → a lift (a higher phrase, four on the
+ *    floor, 16th hats, pickups) over another progression → a half-time breakdown into a snare roll → the theme
+ *    home (20 bars)
  */
-export function surpriseSong(): Song {
-    const s = newSong('Surprise ' + Math.floor(Math.random() * 900 + 100));
-    const scales = Object.keys(SCALES) as ScaleId[];
-    s.scale = scales[Math.floor(Math.random() * scales.length)];
-    s.bpm = 90 + Math.floor(Math.random() * 14) * 5;
-    s.root = 40 + Math.floor(Math.random() * 12);
-    s.swing = Math.random() < 0.3 ? 0.15 + Math.random() * 0.15 : 0;
-    s.crunch = Math.random() < 0.3 ? Math.random() * 0.4 : 0;
-    const chip: Lane['wave'][] = ['square', 'pulse25', 'pulse12', 'triangle', 'saw'];
-    s.lanes.forEach((l) => { if (!DRUMS.has(l.kind) && l.kind !== 'pad') l.wave = chip[Math.floor(Math.random() * chip.length)]; });
-    s.lanes[3].mute = Math.random() < 0.4;
-    s.lanes[7].mute = Math.random() < 0.5;
+export function surpriseSong(shape?: 'loop' | 'long'): Song {
+  const long = shape ? shape === 'long' : (surpriseLong = !surpriseLong);
+  const s = newSong('Surprise ' + Math.floor(Math.random() * 900 + 100));
+  const scales = Object.keys(SCALES) as ScaleId[];
+  s.scale = scales[Math.floor(Math.random() * scales.length)];
+  s.bpm = 90 + Math.floor(Math.random() * 14) * 5;
+  s.root = 40 + Math.floor(Math.random() * 12);
+  s.swing = Math.random() < 0.3 ? 0.15 + Math.random() * 0.15 : 0;
+  s.crunch = Math.random() < 0.3 ? Math.random() * 0.4 : 0;
+  const chip: Lane['wave'][] = ['square', 'pulse25', 'pulse12', 'triangle', 'saw'];
+  s.lanes.forEach((l) => { if (!DRUMS.has(l.kind) && l.kind !== 'pad') l.wave = chip[Math.floor(Math.random() * chip.length)]; });
+  s.lanes[3].mute = Math.random() < 0.4;
+  s.lanes[7].mute = Math.random() < 0.5;
+  const progs = [[0, 4, 5, 3], [0, 3, 4, 4], [0, 5, 3, 4], [0, 0, 3, 4], [0, 3, 0, 4], [0, 5, 2, 6], [3, 4, 0, 5]];
+  const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+  const pr = pick(progs);
+  if (!long) {
     s.patterns = [0, 1].map(() => LANE_KINDS.map((k) => genLane(k, s)));
-    const progs = [[0, 4, 5, 3], [0, 3, 4, 4], [0, 5, 3, 4], [0, 0, 3, 4], [0, 3, 0, 4]];
-    const pr = progs[Math.floor(Math.random() * progs.length)];
     s.arrange = [...pr.map((t) => ({ p: 0, t })), ...pr.map((t) => ({ p: 1, t }))];
+    return s;
+  }
+  s.lanes[3].mute = false; s.lanes[7].mute = false; // (the sections lean on pads and blips)
+  const L = (k: LaneKind) => LANE_KINDS.indexOf(k);
+  const theme = LANE_KINDS.map((k) => genLane(k, s));
+  if (theme[L('arp')] === EMPTY || /^0\.{7}0\.{7}$/.test(theme[L('arp')])) theme[L('arp')] = '0.2.4.2.0.2.4.2.';
+  const n = SCALES[s.scale].steps.length;
+  // the lift's phrase sits higher than the theme's
+  const up = (str: string, d: number) => str.split('').map((c) => (degOf(c) >= 0 ? DEG_CHARS[Math.min(15, degOf(c) + d)] : c)).join('');
+  // the breakdown's lead: the theme's first notes of each third, held long
+  const held = (str: string) => {
+    const out = Array(STEPS).fill('-');
+    for (const [a, b] of [[0, 6], [6, 12], [12, 16]]) out[a] = str.slice(a, b).split('').find((c) => degOf(c) >= 0) ?? DEG_CHARS[0];
+    return out.join('');
+  };
+  const set = (pat: string[], o: Partial<Record<LaneKind, string>>) => { const q = [...pat]; for (const k in o) q[L(k as LaneKind)] = o[k as LaneKind]!; return q; };
+  const intro = set(theme, { lead: EMPTY, snare: EMPTY, kick: pick(['x...x...x...x...', 'x.......x.......']), perc: '..........' + DEG_CHARS[Math.min(15, n + 1)] + '...' + DEG_CHARS[Math.min(15, n + 2)] + '.' });
+  const lift = set(theme, {
+    lead: up(genLane('lead', s), Math.min(3, Math.floor(n / 2))), kick: 'x...x...x...x...', hat: pick(['xxxxxxxxxxxxxxxx', 'x.x.x.x.x.x.x.x.']),
+    snare: pick(['....x.......x.xx', '....X.......X.XX', '....x.......x..x']), perc: genLane('perc', s),
+  });
+  const breakdown = set(theme, {
+    lead: held(theme[L('lead')]), bass: '0-------' + pick(['0', '2', '3']) + '-------', kick: 'x.........x.....',
+    snare: '........x...xXXX', hat: '..x...x...x...x.', perc: DEG_CHARS[Math.min(15, n + 2)] + '.' + DEG_CHARS[n] + '.' + DEG_CHARS[Math.max(0, n - 2)] + '...........',
+  });
+  s.patterns = [intro, theme, lift, breakdown];
+  const pr2 = pick(progs.filter((q) => q !== pr));
+  s.arrange = [
+    ...pr.map((t) => ({ p: 0, t })), ...pr.map((t) => ({ p: 1, t })), ...pr2.map((t) => ({ p: 2, t })), ...pr.map((t) => ({ p: 3, t })),
+    { p: 1, t: pr[0] }, { p: 1, t: pr[1] }, { p: 2, t: pr2[2] }, { p: 2, t: pr2[3] },
+  ];
   return s;
 }
