@@ -628,7 +628,8 @@ export class Sim {
     const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
     const slip = vt + sA - sB;
     // a dash's extra punch builds with its run-up: almost nothing point blank, the full bonus after ~4m
-    const run = (t: TopState) => (t.fx.dash > 0 || t.fx.fist > 0) && t.dashX !== undefined ? Math.max(0.1, Math.min(1, Math.hypot(t.x - t.dashX, t.z - (t.dashZ ?? t.z)) / 4)) : 1;
+    // (a Power Fist still lands up close: full power after 2m, and over half even point blank)
+    const run = (t: TopState) => (t.fx.dash > 0 || t.fx.fist > 0) && t.dashX !== undefined ? Math.max(t.fx.fist > 0 ? 0.55 : 0.1, Math.min(1, Math.hypot(t.x - t.dashX, t.z - (t.dashZ ?? t.z)) / (t.fx.fist > 0 ? 2 : 4))) : 1;
     const rA = run(A), rB = run(B);
     const dashHit = (t: TopState, r: number) => (t.fx.dash > 0 || t.fx.fist > 0 ? 0.6 + 0.4 * r : 1); // (the extra impact a dash deals)
     const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1 + 0.6 * run(t) : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
