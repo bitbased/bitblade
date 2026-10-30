@@ -146,6 +146,7 @@ export class LobbyScreen implements Screen {
   joinMsg!: HTMLElement;
   /** a full lobby's + PLAYER (in the rules row) */
   joinMini?: HTMLButtonElement;
+  cpuMini?: HTMLButtonElement;
   /** join mode: listening for a new player's device (time it started, ms) */
   joining = 0;
   private lastTap: { type: 'touch' | 'mouse'; t: number } | null = null;
@@ -322,6 +323,7 @@ export class LobbyScreen implements Screen {
     this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal, count, countVal };
 
     this.slotsEl = h('div.slots');
+    new ResizeObserver(() => this.placeJoin()).observe(this.slotsEl); // (columns change with the window)
     // + PLAYER: listen for the next device (a key, a gamepad, a tap or a click) and make it a new player · + CPU
     this.joinMsg = h('div.join-msg');
     this.joinBtn = h<HTMLButtonElement>('button.btn.nav.join-btn', { onclick: () => this.toggleJoin(), title: 'Add a local player: then press a key, a gamepad button, or tap' }, '+ PLAYER');
@@ -341,8 +343,10 @@ export class LobbyScreen implements Screen {
       this.slotsEl,
       h('div.lobby-bottom', null,
         h('div.rules', null,
-          this.joinMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.toggleJoin(), title: 'Add a local player in a CPU’s place: then press a key or a gamepad button' }, '+ PLAYER'),
-          count, items, nudge, share, rubber, target, time),
+          count, items, nudge, share, rubber, target, time,
+          // (at the end of the row: showing / hiding it never shifts the settings under your pointer)
+          this.joinMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.toggleJoin(), title: 'Add a local player: then press a key or a gamepad button' }, '+ PLAYER'),
+          this.cpuMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.addCpu(), title: 'Add a computer player' }, '+ CPU')),
         this.onlineEl),
     );
     this.el = el;
@@ -611,11 +615,25 @@ export class LobbyScreen implements Screen {
     while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
     while (this.cards.length > L.slots.length) this.cards.pop()!.el.remove();
     L.slots.forEach((s, i) => this.updateCard(this.cards[i], s, i));
-    // (+ PLAYER: a card while there's room; once full, a slim button in the rules row — a player can still take a
-    // CPU's place — so a full lobby doesn't grow a whole extra row)
+    // (5+ blades: compact cards, so two rows fit — counted by players, not by the + PLAYER card)
+    this.slotsEl.classList.toggle('many', L.slots.length >= 5);
+    this.placeJoin();
+  }
+
+  /**
+   * + PLAYER / + CPU: a card in the grid while it fits on a row that already has players; when it would open a row
+   * of its own (or the lobby is full — a player can still take a CPU's place), a slim + PLAYER button at the end of
+   * the settings row instead. Nothing jumps around under your pointer.
+   */
+  placeJoin() {
+    if (!this.slotsEl || !this.joinCard) return;
     const room = L.slots.length < this.mode.maxPlayers;
-    this.joinCard.style.display = room ? '' : 'none';
-    if (this.joinMini) this.joinMini.style.display = !room && L.slots.some((s) => s.ctrl.type === 'cpu') ? '' : 'none';
+    const tpl = getComputedStyle(this.slotsEl).gridTemplateColumns;
+    const cols = !tpl || tpl === 'none' ? 0 : tpl.split(' ').filter(Boolean).length; // (0: one scrolling row — always fits)
+    const fits = room && (!cols || L.slots.length % cols !== 0);
+    this.joinCard.style.display = fits ? '' : 'none';
+    if (this.joinMini) this.joinMini.style.display = !fits && (room || L.slots.some((s) => s.ctrl.type === 'cpu')) ? '' : 'none';
+    if (this.cpuMini) this.cpuMini.style.display = !fits && (room || L.slots.some((s) => s.auto)) ? '' : 'none';
   }
 
   /** pads that joined as P2+ steer their own slot; P1's device (or keyboard) drives the menu */

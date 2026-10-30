@@ -688,14 +688,14 @@ body.hints-on .music-chip { bottom: 56px; }
 @media (orientation: landscape) { .lobby .slots { grid-auto-flow: row !important; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; grid-auto-columns: auto !important; overflow: visible !important; } }
 @media (max-height: 560px) { .lobby .slot .pname, .lobby .slot .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 
-/* many players (4+): compact cards — smaller blade picture, slim stat bars — so two rows fit; rows sized to content */
+/* many players (5+): compact cards — smaller blade picture, slim stat bars — so two rows fit; rows sized to content */
 .lobby { grid-template-rows: auto auto max-content auto; }
-@media (min-height: 561px) { .lobby .slots:has(> .slot:nth-child(5)) .slot canvas { width: 52px; height: 52px; } }
-.lobby .slots:has(> .slot:nth-child(5)) .slot .slot-stats, .lobby .slot.mini-stats .slot-stats { grid-template-columns: repeat(6, 1fr); gap: 0 4px; padding: 0 2px; }
-.lobby .slots:has(> .slot:nth-child(5)) .slot .slot-stats .ss { flex-direction: column; align-items: stretch; gap: 1px; }
-.lobby .slots:has(> .slot:nth-child(5)) .slot .slot-stats b { font-size: 6.5px; width: auto; text-align: center; letter-spacing: 0.04em; }
-.lobby .slots:has(> .slot:nth-child(5)) .slot .ssbar { flex: none; height: 3px; }
-.lobby .slots:has(> .slot:nth-child(5)) .slot { padding-top: 6px; padding-bottom: 6px; gap: 3px; }
+@media (min-height: 561px) { .lobby .slots.many .slot canvas { width: 52px; height: 52px; } }
+.lobby .slots.many .slot .slot-stats, .lobby .slot.mini-stats .slot-stats { grid-template-columns: repeat(6, 1fr); gap: 0 4px; padding: 0 2px; }
+.lobby .slots.many .slot .slot-stats .ss { flex-direction: column; align-items: stretch; gap: 1px; }
+.lobby .slots.many .slot .slot-stats b { font-size: 6.5px; width: auto; text-align: center; letter-spacing: 0.04em; }
+.lobby .slots.many .slot .ssbar { flex: none; height: 3px; }
+.lobby .slots.many .slot { padding-top: 6px; padding-bottom: 6px; gap: 3px; }
 
 /* ================= wide screens use their width (landscape): everything on one screen ================= */
 @media (orientation: landscape) and (min-width: 700px) {
