@@ -630,7 +630,8 @@ export class LobbyScreen implements Screen {
     const room = L.slots.length < this.mode.maxPlayers;
     const tpl = getComputedStyle(this.slotsEl).gridTemplateColumns;
     const cols = !tpl || tpl === 'none' ? 0 : tpl.split(' ').filter(Boolean).length; // (0: one scrolling row — always fits)
-    const fits = room && (!cols || L.slots.length % cols !== 0);
+    // (from 4 blades on it's always the slim buttons — no card popping in and out as the count changes)
+    const fits = room && L.slots.length < 4 && (!cols || L.slots.length % cols !== 0);
     this.joinCard.style.display = fits ? '' : 'none';
     if (this.joinMini) this.joinMini.style.display = !fits && (room || L.slots.some((s) => s.ctrl.type === 'cpu')) ? '' : 'none';
     if (this.cpuMini) this.cpuMini.style.display = !fits && (room || L.slots.some((s) => s.auto)) ? '' : 'none';
