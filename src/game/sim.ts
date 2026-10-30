@@ -1632,6 +1632,13 @@ export class Sim {
     }
   }
 
+  /** knock off every power-up / special effect a top has going (and the ice too, when `thaw`) */
+  stripFx(t: TopState, thaw = false) {
+    const f = t.fx;
+    f.turbo = f.shield = f.titan = f.vortex = f.surge = f.fist = f.dash = f.special = 0;
+    if (thaw) f.frozen = 0;
+  }
+
   shockwave(src: TopState, R: number, power: number, dmg: number, burst = 0) {
     this.ev({ k: 'shock', x: src.x, y: src.y + 0.2, z: src.z, r: R, c: src.color });
     for (const o of this.s.tops) {
@@ -1696,6 +1703,7 @@ export class Sim {
           const k = t.fx.shield > 0 ? 0.2 : 1;
           t.vx += (p.vx / d) * 11 * k; t.vz += (p.vz / d) * 11 * k; t.vy += 6 * k;
           t.spin -= 0.12 * k;
+          this.stripFx(t, true); // (a comet hit knocks off every effect they had — ice included)
           t.lastHit = p.owner; t.lastHitT = s.t;
           if (t.flag >= 0) this.dropFlag(t);
           this.ev({ k: 'shock', x: p.x, y: p.y, z: p.z, r: 2.5, c: '#ff9e3d' });
@@ -1711,7 +1719,9 @@ export class Sim {
       for (const t of s.tops) {
         if (!t.alive || (t.id === m.owner && m.t < 3)) continue;
         if (Math.hypot(t.x - m.x, t.z - m.z) < this.radius(t) + 0.5 && Math.abs(t.y - m.y) < 1) {
-          t.fx.frozen = t.fx.shield > 0 ? 0.3 : 1.6;
+          const shielded = t.fx.shield > 0;
+          this.stripFx(t); // (the ice knocks off whatever they had going — a shield breaks, but takes most of the freeze)
+          t.fx.frozen = shielded ? 0.3 : 1.6;
           t.vy += 6; t.spin -= 0.04;
           t.lastHit = m.owner; t.lastHitT = s.t;
           this.ev({ k: 'shock', x: m.x, y: m.y + 0.3, z: m.z, r: 2, c: '#9fe8ff' });
