@@ -1986,8 +1986,8 @@ export class GameView {
     // (the colour ring — and the landing / launch rings below — mark your own tops only: local players and their multiball balls)
     const mine = this.focus.includes(t.id) || (!!t.extra && this.focus.some((i) => s.tops[i]?.team === t.team));
     // rings under the other blades, as chosen in Settings: off, everyone (team colours in team games, each blade's
-    // own colour otherwise), only your team, or only the other side. Your own blade always has its colour ring — and
-    // in team games your team's ring round it. (Nobody here playing: everyone's.)
+    // own colour otherwise), only your team, or only the other side. Your own blade always has its colour ring — plus
+    // your team's ring round it when your team's rings are shown (Everyone / My team). (Nobody here playing: everyone's.)
     const teams = this.cfg.mode === 'tag' || this.cfg.mode === 'ctf';
     const shown = t.alive && gh > VOID && !t.drone;
     let own = mine, teamRing = false;
@@ -1997,7 +1997,7 @@ export class GameView {
       if (teams) teamRing = pick === 'all' || (pick === 'mine' && friend) || (pick === 'theirs' && !friend);
       else own = pick === 'all' || pick === 'theirs'; // (no teams: everyone else is the other side)
     }
-    if (shown && mine && teams) teamRing = true;
+    if (shown && mine && teams) teamRing = settings.rings === 'all' || settings.rings === 'mine'; // (your team's ring only when your team's are shown)
     v.ring.visible = shown && own;
     if (teamRing) (v.teamRing.material as THREE.MeshBasicMaterial).color.set(t.team === 0 ? '#ff3b4a' : '#3b8bff');
     v.teamRing.visible = teamRing;
