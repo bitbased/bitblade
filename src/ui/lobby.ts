@@ -168,6 +168,8 @@ export class LobbyScreen implements Screen {
     const ok = !!cur && this.fits(cur, id) && (m.arenas.includes(L.arenaId) || !!cur.custom);
     if (id === 'race' || L.sizeFilter === 'TRACK') L.sizeFilter = 'ALL';
     if (!keepArena || !ok) L.arenaId = m.arenas[0];
+    // (pinball: start without CPUs — one of you is a table, two or more is a party; add CPUs on purpose)
+    if (id === 'pinball' && !keepArena) L.slots = L.slots.filter((s) => s.ctrl.type !== 'cpu');
     if (L.slots.length > m.maxPlayers) L.slots = L.slots.filter((s, i) => i < m.maxPlayers || s.ctrl.type === 'remote');
     this.assignTeams();
   }
@@ -175,7 +177,7 @@ export class LobbyScreen implements Screen {
   fillCpus() {
     const m = this.mode;
     const names = ['Kai', 'Ryo', 'Mika', 'Zed', 'Nova', 'Juno', 'Rex', 'Ivy'];
-    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' || m.id === 'quest' ? 1 : 2)) {
+    while (L.slots.length < Math.max(m.minPlayers, m.id === 'gauntlet' || m.id === 'quest' || m.id === 'pinball' ? 1 : 2)) {
       const used = new Set(L.slots.map((s) => s.bladeId));
       const blade = PRESETS.find((b) => !used.has(b.id)) ?? PRESETS[L.slots.length % PRESETS.length];
       L.slots.push({ name: `CPU ${names[L.slots.length % names.length]}`, ctrl: { type: 'cpu', level: 2 }, bladeId: blade.id, team: L.slots.length });
@@ -276,7 +278,6 @@ export class LobbyScreen implements Screen {
     const arena = findArena(L.arenaId);
     const sz = arenaSize(arena);
     u.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
-    if (u.desc.textContent !== m.desc) u.desc.textContent = m.desc;
     u.mode.set(m.name.toUpperCase(), m.tag);
     u.size.set(L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`);
     u.arena.set(arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`);
@@ -286,7 +287,6 @@ export class LobbyScreen implements Screen {
     u.items.style.display = m.id !== 'gauntlet' && m.id !== 'rush' ? '' : 'none';
     u.items.classList.toggle('on', L.items);
     u.rubber.style.display = m.id === 'race' ? '' : 'none';
-    u.nudge.style.display = m.id === 'pinball' ? '' : 'none';
     u.nudge.classList.toggle('on', L.nudge);
     u.share.style.display = m.id === 'koth' ? '' : 'none';
     u.share.classList.toggle('on', L.kothShare);
@@ -500,7 +500,20 @@ export class LobbyScreen implements Screen {
   }
 
   /** sync slot cards with L.slots: reuse cards, add/remove only at the end */
+  /** what depends on who's in: pinball with company is a PINBALL PARTY (its own blurb; no nudge or table timer) */
+  rulesUi() {
+    const u = this.ui, m = this.mode;
+    if (!u) return;
+    const party = m.id === 'pinball' && L.slots.length > 1;
+    const desc = party ? 'PINBALL PARTY — a free-for-all on the table: knock rivals out or into the drain. The flippers play themselves; slots refill your spin — DASH fires you out where you steer. First to 10.' : m.desc;
+    if (u.desc.textContent !== desc) u.desc.textContent = desc;
+    u.nudge.style.display = m.id === 'pinball' && !party ? '' : 'none';
+    const tw = u.timeVal.closest<HTMLElement>('.stepper');
+    if (tw) tw.style.display = party ? 'none' : ''; // (a party plays free-for-all rounds)
+  }
+
   renderSlots() {
+    this.rulesUi();
     if (!this.slotsEl) return;
     while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
     while (this.cards.length > L.slots.length) this.cards.pop()!.el.remove();
@@ -708,6 +721,12 @@ export class LobbyScreen implements Screen {
     // compact team indices (ffa etc.)
     const teams = [...new Set(cfg.players.map((p) => p.team))].sort((a, b) => a - b);
     cfg.players.forEach((p) => (p.team = teams.indexOf(p.team)));
+    // pinball with 2+ players: a PINBALL PARTY — free-for-all rules on the table, everyone for themselves
+    if (cfg.mode === 'pinball' && cfg.players.length > 1) {
+      const ffa = MODES.find((x) => x.id === 'ffa')!;
+      Object.assign(cfg, { mode: 'ffa', target: 10, timeLimit: ffa.time, items: L.items });
+      cfg.players.forEach((p, i) => (p.team = i));
+    }
     this.app.sfx.play('go');
     const arg: MatchArg = { cfg };
     if (hostRoom.t) {

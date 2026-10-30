@@ -72,6 +72,7 @@ export class Sim {
     for (const m of bowlItems) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
     if (cfg.items || cfg.mode === 'rush' || cfg.mode === 'gauntlet' || cfg.mode === 'quest') {
       let items = this.markers.filter((m) => m.kind === 'item');
+      if (this.party) items = this.partySpawns().slice(0, 6).map((p, i, a) => { const q = a[(i + 1) % a.length]; return { kind: 'item', x: (p.x + q.x) / 2, z: (p.z + q.z) / 2 } as Marker; }); // (between the start spots)
       if (items.length === 0) items = [0, 1, 2].map(() => ({ kind: 'item', ...this.terrain.randomSafePoint(this.rnd) }) as Marker);
       for (const m of items) this.s.boxes.push({ x: m.x, y: this.ground(m.x, m.z), z: m.z, t: 0 });
       if (cfg.mode === 'rush') for (let k = 0; k < 3; k++) { const p = this.terrain.randomSafePoint(this.rnd); this.s.boxes.push({ x: p.x, y: this.ground(p.x, p.z), z: p.z, t: 0 }); }
@@ -110,6 +111,16 @@ export class Sim {
   }
 
   get rounds() { return this.mode.rounds; }
+  /** a pinball table's physics (weak steering against the slope, bouncy walls, the glass): any match on a table */
+  get tablePhys() { return !!this.cfg.arena.pinball; }
+  /** pinball party: a free-for-all (or any battle mode) on a pinball table — automatic flippers, no plunger / tilt /
+   *  multiball / guardian / swarm, spin from the saucers, table points don't score */
+  get party() { return !!this.cfg.arena.pinball && this.cfg.mode !== 'pinball'; }
+  /** pinball party: how much of a normal top's steering you get on the table (gravity has to matter) */
+  partySteer = 0.4;
+  /** pinball party: how often the self-playing flippers miss a ball */
+  partyWhiff = 0.25;
+  private flipBrain: { t: number; miss: boolean }[] = [];
 
   ground(x: number, z: number) {
     const h = this.terrain.height(x, z);
@@ -129,7 +140,33 @@ export class Sim {
     }
   }
 
+  /** pinball party: start points spread over the open playfield (clear of walls and pieces, out of the plunger lane) */
+  private partySpots?: { x: number; z: number }[];
+  partySpawns() {
+    if (this.partySpots) return this.partySpots;
+    const c = this.cfg.arena.course!, hw = (c.w * c.tile) / 2, hh = (c.h * c.tile) / 2;
+    const cand: { x: number; z: number }[] = [];
+    // (players are placed before the walls are set up: build them here if need be)
+    const segs = this.railSegs?.length ? this.railSegs : railSegments([...(this.cfg.arena.rails ?? []), ...(this.cfg.arena.ramps ?? []).flatMap(rampRails), ...this.markers.flatMap((m, mi) => (m.kind === 'arena' ? arenaRails(m, mi) : []))]);
+    for (let z = -hh * 0.62; z <= hh * 0.3; z += 1.5) for (let x = -hw + 2.5; x <= hw - 4; x += 1.5) {
+      if (this.terrain.height(x, z) <= VOID || this.terrain.deckAbove(x, z, this.terrain.height(x, z)) !== undefined) continue;
+      if (segs.some((g) => segDist(g, x, z).d < g.half + 1.3)) continue;
+      if (this.markers.some((m) => m.kind !== 'spawn' && m.kind !== 'rollover' && Math.hypot(m.x - x, m.z - z) < (m.kind === 'arena' ? arenaRing(m).R + 1 : m.kind === 'flipper' ? (m.len ?? 3) + 1 : (m.r ?? 1) + 1.2))) continue;
+      cand.push({ x, z });
+    }
+    // farthest-point picks: 8 spots spread as widely as the table allows
+    const out: { x: number; z: number }[] = [];
+    if (cand.length) out.push(cand.reduce((a, b) => (Math.hypot(b.x, b.z + hh * 0.2) < Math.hypot(a.x, a.z + hh * 0.2) ? b : a)));
+    while (out.length < 8 && out.length < cand.length) {
+      let best = cand[0], bd = -1;
+      for (const p of cand) { const d = Math.min(...out.map((o) => Math.hypot(o.x - p.x, o.z - p.z))); if (d > bd) { bd = d; best = p; } }
+      out.push(best);
+    }
+    return (this.partySpots = out.length ? out : [{ x: 0, z: 0 }]);
+  }
+
   spawnFor(top: TopState, idx: number) {
+    if (this.party) { const sp = this.partySpawns(); return sp[idx % sp.length]; }
     const teamSp = this.spawns.filter((s) => s.team === top.team);
     const list = teamSp.length && this.cfg.mode !== 'ffa' ? teamSp : this.spawns.filter((s) => s.team === undefined);
     const pick = list.length ? list[idx % list.length] : { x: 0, z: 0 };
@@ -186,7 +223,12 @@ export class Sim {
     p.dash ||= c.dash; p.jump ||= c.jump; p.item ||= c.item; p.special ||= c.special;
   }
 
-  ev(e: GameState['events'][0]) { this.s.events.push(e); }
+  ev(e: GameState['events'][0]) {
+    // (a party scores knockouts: the table's own score banners would just be noise — but a shot lighting up is news)
+    if (this.inTable && this.party && e.k === 'announce' && !/ LIT$|OPEN|UNLOCKED/.test(e.text)) return;
+    this.s.events.push(e);
+  }
+  private inTable = false;
 
   // ---------------- phases ----------------
   startLaunch() {
@@ -240,7 +282,7 @@ export class Sim {
         t.vz = (dz / d) * sp + (dx / d) * t.dir * 2;
         const TS = this.terrain.track;
         if (TS) { t.vx = TS.tx[t.prog] * (4 + p * 8); t.vz = TS.tz[t.prog] * (4 + p * 8); }
-        if (this.cfg.mode === 'pinball') { t.vx = t.vz = 0; t.spin = 1; }
+        if (this.tablePhys) { t.vx = t.vz = 0; t.spin = 1; }
         t.vy = -2;
       }
       s.phase = 'battle';
@@ -275,7 +317,7 @@ export class Sim {
     this.collideTops(dt);
     if (this.railSegs.length) this.collideRails();
     this.hazards(dt);
-    if (this.s.pin) this.pinballUpdate(dt);
+    if (this.s.pin) { this.inTable = true; this.pinballUpdate(dt); this.inTable = false; }
     this.updateObjects(dt);
     this.clearEdges();
     if (s.phase === 'battle') this.modeUpdate(dt);
@@ -349,10 +391,10 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      if (this.cfg.mode === 'pinball' && !t.duel) {
+      if (this.tablePhys && !t.duel) {
         c.jump = false; c.hold = false;
-        if (c.flipL || c.flipR) c.dash = false; // (RT is a flipper on pads)
-        if (c.dash && this.inPlunger(t)) { this.plunge(t, 1); c.dash = false; }
+        if (!this.party && (c.flipL || c.flipR)) c.dash = false; // (RT is a flipper on pads)
+        if (!this.party && c.dash && this.inPlunger(t)) { this.plunge(t, 1); c.dash = false; }
       }
       if (c.dash && t.dashCd <= 0 && t.spin > 0.08) {
         let dx = ix, dz = iz;
@@ -406,7 +448,7 @@ export class Sim {
       let ix = c.mx, iz = c.mz;
       const il = Math.hypot(ix, iz);
       if (il > 1) { ix /= il; iz /= il; }
-      if (this.cfg.mode === 'pinball' && !t.duel) { const k = this.s.pin?.tilted || t.extra || this.cfg.nudge === false ? 0 : 0.33; ix *= k; iz *= k; }
+      if (this.tablePhys && !t.duel) { const k = this.party ? this.partySteer : this.s.pin?.tilted || t.extra || this.cfg.nudge === false ? 0 : 0.33; ix *= k; iz *= k; }
       if (t.od) {
         // wider turns: the part of your input across your travel direction is weaker
         const vl0 = Math.hypot(t.vx, t.vz);
@@ -442,12 +484,12 @@ export class Sim {
       const targetTz = grad.gz * 0.35 + Math.sin(prec) * wob * 0.35;
       t.tx += (targetTx - t.tx) * Math.min(1, dt * 8);
       t.tz += (targetTz - t.tz) * Math.min(1, dt * 8);
-      const drift = t.spin * st.tipFriction * 10 * t.dir * (this.cfg.mode === 'pinball' && !t.duel ? 0.25 : 1);
+      const drift = t.spin * st.tipFriction * 10 * t.dir * (this.tablePhys && !t.duel ? 0.25 : 1);
       ax += -t.tz * drift;
       az += t.tx * drift;
       const slope = Math.hypot(grad.gx, grad.gz);
       // wall riding: steep surface + spin = grind along it (xtreme dash)
-      if (slope > 1.2 && (this.cfg.mode !== 'pinball' || t.duel)) { // (no wall-riding on a pinball table: walls just bounce)
+      if (slope > 1.2 && (!this.tablePhys || t.duel)) { // (no wall-riding on a pinball table: walls just bounce)
         const nx = -grad.gx / slope, nz = -grad.gz / slope; // horizontal normal (pointing downhill)
         const ride = t.spin * (st.tipFriction + 0.35) * 9 * t.dir;
         ax += -nz * ride; az += nx * ride;
@@ -472,17 +514,17 @@ export class Sim {
     t.vx += ax * dt; t.vz += az * dt;
     t.vy -= G * dt * (t.fx.special > 0 && t.specialKind === 'skydive' && t.vy < 0 ? 2.2 : 1);
     if (t.grounded) {
-      const k = (this.cfg.mode === 'pinball' && !t.duel ? 0.06 : 0.32 + st.tipFriction * 0.3) + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
+      const k = (this.tablePhys && !t.duel ? 0.06 : 0.32 + st.tipFriction * 0.3) + (t.fx.frozen > 0 ? 2.5 : 0) + (t.alive ? 0 : 3);
       const f = Math.max(0, 1 - k * dt);
       t.vx *= f; t.vz *= f;
     }
     const hs = Math.hypot(t.vx, t.vz);
     const race = this.cfg.mode === 'race';
-    const cap = this.cfg.mode === 'pinball' && !t.duel ? 36 : (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) * (t.od ? 1.22 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
+    const cap = this.tablePhys && !t.duel ? 36 : (race ? 16 : 12.5) * this.rpmK(t) * (this.draft[i] ? 1.12 : 1) * (1 + ((this.rubber[i] ?? 1) - 1) * 0.8) * (t.fx.turbo > 0 ? 1.4 : 1) * (t.od ? 1.22 : 1) + (t.fx.dash > 0 ? 7 : 0) + (t.fx.special > 0 && t.specialKind === 'rush' ? 10 : 0);
     if (hs > cap) { const f = 1 - Math.min(0.5, ((hs - cap) / hs) * 4 * dt); t.vx *= f; t.vz *= f; }
 
     t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
-    if (this.cfg.mode === 'pinball') this.pinballBounds(t);
+    if (this.tablePhys) this.pinballBounds(t);
 
     const wasGrounded = t.grounded;
     t.grounded = false;
@@ -504,7 +546,7 @@ export class Sim {
         const vn = t.vx * nx + t.vy * ny + t.vz * nz;
         if (vn < 0) {
           const impact = -vn;
-          const e = this.cfg.mode === 'pinball' && ny < 0.6 ? 0.42 : impact > 5 ? 0.25 : 0;
+          const e = this.tablePhys && ny < 0.6 ? 0.42 : impact > 5 ? 0.25 : 0;
           t.vx -= (1 + e) * vn * nx; t.vy -= (1 + e) * vn * ny; t.vz -= (1 + e) * vn * nz;
           if (!wasGrounded && t.air > 0.18 && impact > 3) {
             this.ev({ k: 'land', x: t.x, y: t.y, z: t.z, s: impact, id: t.id });
@@ -693,13 +735,13 @@ export class Sim {
           top.vx -= (1 + bounce) * rvn * nx; top.vz -= (1 + bounce) * rvn * nz;
         }
         // on race ribbons obstacles slow you and cost spin, but shouldn't fling you into the void every time
-        const kb = this.cfg.mode === 'race' ? 0.55 : this.cfg.mode === 'pinball' ? 1.35 : 1;
+        const kb = this.cfg.mode === 'race' ? 0.55 : this.tablePhys ? 1.35 : 1;
         if (hp.kind === 'bumper') { top.vx += nx * 9 * kb; top.vz += nz * 9 * kb; }
         if (hp.kind === 'arm' || hp.kind === 'saw') { top.vx += (hvx * 0.6 + nx * 4) * kb; top.vz += (hvz * 0.6 + nz * 4) * kb; top.vy += 2.5 * kb; }
         if (!this.hazardHitCd.has(key)) {
           this.hazardHitCd.set(key, 0.4);
           const dmg = hp.kind === 'saw' ? 0.09 : hp.kind === 'arm' ? 0.05 : hp.kind === 'bumper' ? 0.01 : 0.004;
-          if (top.fx.shield <= 0 && this.cfg.mode !== 'pinball') top.spin -= dmg;
+          if (top.fx.shield <= 0 && !this.tablePhys) top.spin -= dmg;
           if (this.s.pin && hp.kind === 'bumper') { this.addScore(top, 100); top.spin = Math.min(1, top.spin + 0.015); this.ev({ k: 'pin', what: 'bumper', x: hp.ax, y: top.y, z: hp.az, pts: 100 }); }
           this.ev({ k: 'hazard', x: px + nx * hp.r, y: top.y + 0.3, z: pz + nz * hp.r, id: top.id });
           if (top.flag >= 0 && hp.kind !== 'pillar') this.dropFlag(top);
@@ -874,7 +916,7 @@ export class Sim {
   }
 
   addScore(t: TopState, n: number) {
-    this.s.teamScores[t.team] = (this.s.teamScores[t.team] ?? 0) + n;
+    if (!this.party) this.s.teamScores[t.team] = (this.s.teamScores[t.team] ?? 0) + n; // (a party scores knockouts, not table points)
     const owner = t.extra ? this.s.tops.find((o) => o.team === t.team && !o.extra && !o.drone) ?? t : t;
     owner.score += n;
   }
@@ -1011,7 +1053,17 @@ export class Sim {
       if (m.kind !== 'flipper') return;
       let up: boolean;
       if (table) up = !pin.tilted && s.phase === 'battle' && (flipperSide(m) === 'L' ? !!c0.flipL : !!c0.flipR);
-      else {
+      else if (this.party) {
+        // pinball party: the flippers play themselves, like a person would — a moment to react, and now and then a
+        // whiff (so a drain is a real risk); held while the ball's on it
+        const P0 = flipperPose(m, m.rot ?? 0);
+        const near = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.8);
+        const st = (this.flipBrain[mi] ??= { t: -1, miss: false });
+        if (!near) st.t = -1;
+        else if (st.t < 0) { st.t = 0.06 + this.rnd() * 0.2; st.miss = this.rnd() < this.partyWhiff; }
+        else st.t -= dt;
+        up = near && !st.miss && st.t <= 0;
+      } else {
         // on a regular course a flipper is a trap: it fires by itself when a blade rolls onto it
         const P0 = flipperPose(m, m.rot ?? 0);
         up = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.6);
@@ -1170,8 +1222,22 @@ export class Sim {
       if (t.held !== undefined) {
         const m = ms[t.held];
         t.x = m.x; t.z = m.z; t.vx = t.vz = 0;
-        t.spin = Math.min(1, t.spin + dt * 0.55);
+        t.spin = Math.min(1, t.spin + dt * (this.party ? 1.2 : 0.55));
         t.heldT = (t.heldT ?? 0) - dt;
+        if (this.party) {
+          // a party slot: it fills your spin back up; DASH fires you out toward where you're steering (or along the
+          // slot's own line) — it lets go by itself after a few seconds
+          const c = this.controls[t.id] ?? NO_CONTROL;
+          if ((c.dash && t.heldT < 3.6) || t.heldT <= 0) {
+            const steer = Math.hypot(c.mx, c.mz) > 0.3;
+            const a = steer ? Math.atan2(c.mz, c.mx) : this.clearKick(m.x, m.z, m.rot ?? -Math.PI / 2, (m.r ?? 1) + 0.3), v = Math.max(16, m.len ?? 18);
+            t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
+            t.x += Math.cos(a) * ((m.r ?? 1) + 0.3); t.z += Math.sin(a) * ((m.r ?? 1) + 0.3);
+            t.held = undefined; t.portalT = 1.6; t.dashCd = 0.6;
+            this.ev({ k: 'pin', what: 'fire', x: m.x, y: t.y, z: m.z });
+          }
+          continue;
+        }
         if (m.aim) {
           // an aim lock: swing the shot with the flippers (or steering), fire with DASH — or it fires by itself
           const c = this.controls[t.extra ? owner : t.id] ?? NO_CONTROL;
@@ -1211,7 +1277,7 @@ export class Sim {
       const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8 && this.atLevel(t, m) && this.linkOn(m));
       if (mi < 0) continue;
       this.useLink(ms[mi]);
-      t.held = mi; t.heldT = ms[mi].aim ? ms[mi].hold ?? 8 : 1.6;
+      t.held = mi; t.heldT = this.party ? 4 : ms[mi].aim ? ms[mi].hold ?? 8 : 1.6;
       if (pin.skill && pin.skill.mi === mi && !t.extra) { pin.skill = null; this.addScore(t, 5000); t.spin = Math.max(t.spin, 1); this.ev({ k: 'announce', text: 'SKILL SHOT!', sub: '+5000 · full spin', color: '#ffd23a' }); this.ev({ k: 'pin', what: 'group', x: ms[mi].x, y: t.y, z: ms[mi].z, pts: 5000 }); }
       if (ms[mi].aim) { t.aimA = ms[mi].rot ?? 0; this.ev({ k: 'announce', text: 'TARGET LOCK', sub: 'aim: flippers or ← →  ·  fire: SPACE', color: '#39ff9c' }); this.ev({ k: 'pin', what: 'lock', x: ms[mi].x, y: t.y, z: ms[mi].z }); }
       this.addScore(t, 750);
@@ -1409,6 +1475,7 @@ export class Sim {
       for (const t of s.tops) if (t.alive && !t.drone && t.held === undefined && Math.hypot(t.x - m.x, t.z - m.z) < R) this.arenaEject(t, m, mi);
     });
     if (!pin.duel) {
+      if (this.party) return; // (a party brawls in an opened bowl: no guardian)
       ms.forEach((m, mi) => {
         if (m.kind !== 'arena' || !pin.lit[mi] || pin.duel) return;
         const R = m.r ?? 2.6;

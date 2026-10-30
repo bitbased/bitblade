@@ -38,6 +38,14 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
   if (sim.terrain.track && sim.cfg.mode === 'race') return raceControl(sim, t, ai, dt, c);
   if (sim.cfg.mode === 'quest' && !t.drone) return questControl(sim, t, ai, dt, c);
   if (sim.cfg.mode === 'pinball' && !t.drone && !t.duel) return pinballControl(sim, t, ai, dt, c);
+  // pinball party: sitting in a slot — aim at the nearest rival and fire out once the spin's back up
+  if (sim.party && t.held !== undefined) {
+    let best: TopState | null = null, bd = 1e9;
+    for (const o of s.tops) { if (!o.alive || o.team === t.team || o.held !== undefined) continue; const d = Math.hypot(o.x - t.x, o.z - t.z); if (d < bd) { bd = d; best = o; } }
+    if (best) { const l = bd || 1; c.mx = (best.x - t.x) / l; c.mz = (best.z - t.z) / l; }
+    c.dash = (t.heldT ?? 0) < 4 - [0, 1.6, 1.1, 0.7][ai.level] && (t.spin > 0.95 || (t.heldT ?? 0) < 1.5);
+    return c;
+  }
   // steering toward goal (with lead on moving enemy)
   let gx = ai.tx, gz = ai.tz;
   const raceBrake = 0;
