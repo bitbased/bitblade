@@ -1978,7 +1978,9 @@ export class GameView {
     const gh = this.terrain.height(t.x, t.z);
     const ground = gh <= VOID ? -50 : gh;
     const above = Math.max(0, t.y - ground);
-    v.ring.visible = t.alive && gh > VOID;
+    // (the colour ring — and the landing / launch rings below — mark your own tops only: local players and their multiball balls)
+    const mine = this.focus.includes(t.id) || (!!t.extra && this.focus.some((i) => s.tops[i]?.team === t.team));
+    v.ring.visible = t.alive && gh > VOID && mine;
     v.shadow.visible = gh > VOID;
     // ring + shadow follow the surface under the blade (bowls, ramps, pipes) instead of cutting through it
     if (gh > VOID) {
@@ -2029,7 +2031,7 @@ export class GameView {
     if (t.alive && t.spin < 0.25 && Math.random() < 0.3) this.particles.emit(t.x, t.y + 0.4, t.z, 0, 0.8, 0, new THREE.Color('#555'), 0.25, 0.8, -0.1);
     if (t.alive && t.fx.vortex > 0) { const a = this.time * 8; this.particles.emit(t.x + Math.cos(a) * 2.5, t.y + 0.3, t.z + Math.sin(a) * 2.5, -Math.cos(a) * 5, 0.5, -Math.sin(a) * 5, new THREE.Color('#b46bff'), 0.2, 0.4, 0); }
     // airborne trajectory prediction
-    const showArc = settings.trajectories && t.alive && !t.grounded && t.air > 0.08 && s.phase !== 'launch';
+    const showArc = settings.trajectories && mine && t.alive && !t.grounded && t.air > 0.08 && s.phase !== 'launch';
     v.arc.visible = showArc;
     v.landing.visible = showArc;
     if (showArc) {
@@ -2055,7 +2057,7 @@ export class GameView {
       v.arc.computeLineDistances();
     }
     // launch meter ring
-    v.launchRing.visible = s.phase === 'launch' && !this.attract;
+    v.launchRing.visible = s.phase === 'launch' && !this.attract && mine;
     if (v.launchRing.visible) {
       const pw = t.launchLocked ? t.launch : launchPower;
       this.drape(v.launchRing, t.x, t.z, 0.6 + pw * 1.2, 0.07);
