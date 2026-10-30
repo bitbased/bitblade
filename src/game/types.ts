@@ -153,5 +153,5 @@ export interface GameState {
     /** an arena duel under way (marker, ball, time left) and the guardian blade's top id (-1 = none yet) */
     duel: { mi: number; ball: number; t: number; game: 'duel' | 'koth'; hold: [number, number] } | null; foe: number;
     /** the skill shot: the lane (marker) lit by the last launch, and how long it stays lit */
-    skill?: { mi: number; t: number } | null };
+    skill?: { mi: number; t: number; best?: number } | null };
 }

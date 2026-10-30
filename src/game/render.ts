@@ -241,7 +241,7 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
     const pl = railPolyline(r);
     if (pl.length < 2) return;
     // drawn slimmer than it collides (the glow reads as the edge), flyover rails slimmest
-    const half = Math.min((r.t ?? 0.45) / 2, r.deck ? 0.07 : (r.t ?? 0.45) >= 0.6 ? 0.3 : 0.14), H0 = r.h ?? 1.3;
+    const half = Math.min((r.t ?? 0.45) / 2, r.deck ? 0.12 : (r.t ?? 0.45) >= 0.6 ? 0.3 : 0.14), H0 = r.h ?? 1.3;
     const base = into.pos.length / 3;
     for (let i = 0; i < pl.length; i++) {
       const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
@@ -252,7 +252,7 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
       const lift = r.deck ? flyLiftAlong(r.deck, x, z) : 0;
       const g = groundY(x, z) + (r.below ? 0 : lift); // (a flyover's walls stand on its deck; its skirt hangs under it)
       const f0 = r.deck && !r.below ? g - 0.12 : g - 0.3;
-      const H = r.below ? lift - 0.05 : r.deck ? 0.55 : H0; // (drawn low: the glass keeps the ball on)
+      const H = r.below ? lift - 0.05 : r.deck ? 0.85 : H0; // (a ramp's side wall)
       const cap = Math.min(0.12, H * 0.3); // only the top edge glows
       for (const [sx, yy, c] of [[1, f0, foot], [1, g + H - cap, body], [1, g + H, topCol], [-1, g + H, topCol], [-1, g + H - cap, body], [-1, f0, foot]] as const) {
         into.pos.push(x + nx * half * sx, yy, z + nz * half * sx);
@@ -289,7 +289,7 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
     slings.push({ mesh: m, mat, nx: sg?.kx ?? 0, nz: sg?.kz ?? 0, x: mid[0], z: mid[1], t: 0 });
   }
   if (plain.idx.length) group.add(mesh(plain, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false })));
-  if (deckRails.idx.length) group.add(mesh(deckRails, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false, transparent: true, opacity: 0.6, depthWrite: false })));
+  if (deckRails.idx.length) group.add(mesh(deckRails, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false })));
   return { group, slings };
 }
 
@@ -642,36 +642,65 @@ export class GameView {
   buildFlyover(rp: import('./pinball').PinRamp) {
     const pl = railPolyline({ pts: rp.pts });
     const half = (rp.w ?? 3) / 2 + 0.3;
-    // the deck: one smooth, lightly tinted see-through ribbon between the side walls (a clear plastic ramp)
-    const pos: number[] = [], idx: number[] = [];
+    const theme = this.cfg.arena.theme;
+    // the deck: a solid plastic ramp (with a thin fascia under its edges, so it has some body) and arrows up it
+    const pos: number[] = [], uv: number[] = [], idx: number[] = [], fpos: number[] = [], fidx: number[] = [];
+    let along = 0;
     for (let i = 0; i < pl.length; i++) {
       const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
       let tx = b[0] - a[0], tz = b[1] - a[1];
       const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const L = Math.max(0, flyLift(rp, pl[i][0], pl[i][1], 0));
+      if (i > 0) along += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]);
+      const L = Math.max(0, flyLift(rp, pl[i][0], pl[i][1], 0)), g = this.groundY(pl[i][0], pl[i][1]) + L;
       for (const sd of [1, -1]) {
         const x = pl[i][0] - tz * half * sd, z = pl[i][1] + tx * half * sd;
-        pos.push(x, this.groundY(pl[i][0], pl[i][1]) + L + 0.03, z);
+        pos.push(x, g + 0.03, z); uv.push(sd > 0 ? 0 : 1, along / 2.6); // (arrows point up the ramp)
+        fpos.push(x, g + 0.03, z, x, g - 0.22, z);
       }
-      if (i > 0) { const k = (i - 1) * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+      if (i > 0) {
+        const k = (i - 1) * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
+        const f = (i - 1) * 4; fidx.push(f, f + 4, f + 1, f + 1, f + 4, f + 5, f + 2, f + 6, f + 3, f + 3, f + 6, f + 7);
+      }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(idx);
-    this.scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color(this.cfg.arena.theme.glow).multiplyScalar(0.5), transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide, toneMapped: false })));
+    geo.computeVertexNormals();
+    const deckCol = new THREE.Color(theme.wall).lerp(new THREE.Color(theme.glow), 0.18);
+    this.scene.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: deckCol, roughness: 0.45, metalness: 0.15, side: THREE.DoubleSide })));
+    const arrows = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({ map: chevronTexture(theme.glow, 2), transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+    arrows.position.y = 0.02;
+    this.scene.add(arrows);
+    const fgeo = new THREE.BufferGeometry();
+    fgeo.setAttribute('position', new THREE.Float32BufferAttribute(fpos, 3));
+    fgeo.setIndex(fidx);
+    this.scene.add(new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.wall).multiplyScalar(0.6), side: THREE.DoubleSide })));
+    // a lit arrow on the floor in front of its mouth, pointing in (the shot to make)
+    {
+      const a = pl[0], b = pl[Math.min(pl.length - 1, 3)];
+      const dx = b[0] - a[0], dz = b[1] - a[1], dl = Math.hypot(dx, dz) || 1;
+      const ax = a[0] - (dx / dl) * 2.2, az = a[1] - (dz / dl) * 2.2;
+      const shape = new THREE.Shape([new THREE.Vector2(0, 1.1), new THREE.Vector2(0.9, -0.5), new THREE.Vector2(0, -0.1), new THREE.Vector2(-0.9, -0.5)]);
+      const arrow = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: theme.glow, transparent: true, opacity: 0.75, toneMapped: false, depthWrite: false }));
+      arrow.rotation.order = 'YXZ'; arrow.rotation.x = -Math.PI / 2; arrow.rotation.y = Math.atan2(-dx / dl, -dz / dl); // (tip toward the mouth)
+      arrow.position.set(ax, this.groundY(ax, az) + 0.06, az);
+      this.scene.add(arrow);
+      this.boostMeshes.push(arrow);
+    }
     const postMat = new THREE.MeshStandardMaterial({ color: '#2a3140', metalness: 0.7, roughness: 0.35 });
     let since = 0;
     for (let i = 1; i < pl.length; i++) {
       since += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]);
       const L = flyLift(rp, pl[i][0], pl[i][1], 0);
-      if (since < 5.5 || L < 1.6) continue;
+      if (since < 8 || L < 1.6) continue;
       since = 0;
       const a = pl[i - 1], b = pl[i];
       let tx = b[0] - a[0], tz = b[1] - a[1];
       const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
       for (const sd of [1, -1]) {
         const x = pl[i][0] - tz * half * sd, z = pl[i][1] + tx * half * sd, g = this.groundY(x, z);
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, L, 6), postMat);
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, L, 10), postMat);
         post.position.set(x, g + L / 2, z);
         this.scene.add(post);
       }

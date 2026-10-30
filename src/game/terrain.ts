@@ -35,7 +35,8 @@ export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; 
   /** pinball: sits on the flyover deck above it, not the floor */ fly?: boolean;
   /** pinball saucer: an aimable lock — the half-arc (rad) you can swing the shot through around `rot` */ aim?: number;
   /** pinball aim lock: seconds before it fires by itself */ hold?: number;
-  /** pinball: a skill-shot target — each launch lights one of these; reach it soon after for a bonus */ skill?: boolean;
+  /** pinball skill shot: true = a target (each launch lights one; reach it for a bonus) · a number = a rung of a
+   *  skill ladder along the launch path (1 = lowest): stop exactly on the lit rung */ skill?: boolean | number;
   /** pinball arena bowl: what's played inside — a 1v1 battle, 1v1 king of the hill, or either at random (default) */ game?: 'duel' | 'koth' | 'random' }
 
 export interface Theme { floor: string; wall: string; glow: string; sky1: string; sky2: string; grid: string }

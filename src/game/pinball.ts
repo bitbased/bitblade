@@ -521,27 +521,24 @@ function starCadet(): ArenaDef {
 const CYBER = { floor: '#03120e', wall: '#0b3a2c', glow: '#39ff9c', sky1: '#010605', sky2: '#04221a', grid: '#00e08f' };
 
 /**
- * Swarm Protocol — a cyber table where every shot leads somewhere:
- *  · PLUNGER: a skill shot — each launch lights one top lane; how hard you plunge decides how far across the top
- *    the ball runs. The top lanes drop into the bumper nest
- *  · UPLINK ramp (the left flipper's up-right shot): one smooth climb up the right side that drops the ball into
- *    the top lanes too. Its rollover + the left orbit's light the drone bay: the swarm launches
- *  · the CORE (the center shot): knock down the FIREWALL bank in front of its gate, roll in, and a guardian blade
- *    drops in for a 1v1 (a battle or king of the hill) — spin pad and power-up inside
- *  · LEFT ORBIT round the top-left into the top lanes; the TARGET LOCK at its foot aims across at the gate, the
- *    firewall and the ramp
- *  · UPPER RIGHT FLIPPER: catches what comes down the right side and fires it back up the right orbit to the top
+ * Swarm Protocol — laid out like a classic three-flipper machine (shots first, theme second):
+ *  · SKILL LADDER: the launch runs across the top past three rollovers (low · mid · high). Each launch lights one;
+ *    plunge so the ball gets exactly that far. Weak launches fall down the right orbit to the upper flipper, strong
+ *    ones run on round the top-left
+ *  · UPLINK (the right flipper's up-left shot): one smooth sweep up the left side, curving right over the
+ *    top-left to drop the ball into the bumper nest
+ *  · the CORE (center shot): knock down the FIREWALL in front of its gate, roll in, battle the guardian
+ *  · UPPER RIGHT FLIPPER a third of the way up the right side, fed by the right orbit, with the TARGET LOCK right
+ *    above it: flip into the lock, then aim across into the core gate, the firewall or the ramp
+ *  · bumper nest under the top arch, drone bay, flag rollovers, kickback, center post
  */
 function swarmProtocol(): ArenaDef {
   const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
   const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0, outlanes: 'L', kickback: 'L' });
   const xc = low.xc;
-  // (the lane guides stop well short of the arch: a ball running across the top drops into whichever lane it reaches)
-  // (slanted tops: a ball can't balance on a post)
-  const lane = (x: number): Rail => ({ pts: [[x + 0.45, -20.6], [x, -19.9], [x, -17.6]], t: 0.3, h: 1.1 });
-  const C = { x: xc, z: -7.0 }, CORE_R = 3.9; // (with its lip and ring the core is ~11m across)
+  const C = { x: 1.6, z: -9.0 }, CORE_R = 3.6; // (with its lip and ring the core is ~10.4m across)
   return {
-    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table: a skill-shot plunger, a ramp and an orbit into the top lanes, a battle core behind a firewall, an aimable target lock, an upper flipper and a drone swarm.',
+    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber three-flipper table: a skill-ladder launch, a return ramp, an upper flipper feeding an aimable lock, a battle core behind a firewall and a drone swarm.',
     theme: CYBER, custom: false, pinball: true, tilt: 0.15,
     course: flat(5, 8),
     rails: [
@@ -549,45 +546,44 @@ function swarmProtocol(): ArenaDef {
       { pts: [[12.3, 23.8], [12.3, 4], [12.3, -10], [11.6, -15.2]], h: 1.6 },
       { pts: [[12.3, 23.4], [14.5, 23.4]], h: 1.6 },
       { pts: [[11.6, -15.2], [12.5, -19.6]], h: 1.0, t: 0.3, oneWay: -1 },
-      lane(xc - 3.3), lane(xc - 1.1), lane(xc + 1.1), lane(xc + 3.3),
-      // left orbit: a lane up the left wall and round the top-left into the top lanes
-      { pts: [[-8.6, -2.2], [-9.4, -10], [-8.0, -16.2]], h: 1.1, t: 0.35 },
+      // right orbit: the lane down the right side onto the upper flipper
+      { pts: [[8.9, -15.6], [9.2, -9.5], [9.0, -6.6]], h: 1.1, t: 0.35 },
+      // the upper flipper's guide: off the wall onto the flipper (nothing wedges behind its pivot)
+      { pts: [[12.1, -5.6], [11.2, -1.8]], h: 1.3, t: 0.4 },
       ...low.rails,
     ],
     ramps: [
-      // UPLINK: mouth on the left flipper's up-right shot line; one smooth climb up the right side, curving over to
-      // drop the ball into the top lanes (no hairpin)
-      { pts: [[4.4, 2.8], [6.2, -2.5], [7.1, -8], [7.6, -13.2], [7.2, -17.6], [5.0, -20.0]], w: 1.7, rise: 3.5, fly: true, end: 1.8, exit: 6 },
+      // UPLINK: mouth on the right flipper's up-left shot (≈-115°, x≈-7); one smooth sweep up the left side that
+      // curves right over the top-left and drops the ball into the bumper nest (no hairpin)
+      { pts: [[-7.0, 2.8], [-8.6, -3.5], [-9.4, -10], [-9.4, -15.0], [-8.0, -18.4], [-5.4, -19.8]], w: 1.7, rise: 3.5, fly: true, end: 1.8, exit: 6 },
     ],
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
-      { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 0.54, speed: 17 }, // (launch 17-21.5 m/s: weak = right side, medium = top lanes, strong = round the left orbit to the lock)
+      { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 0.54, speed: 17 },
       ...low.markers,
       { kind: 'post', x: xc, z: 22.2, r: 0.45 },
-      // upper right flipper: catches what comes down the right side, fires it back up the right orbit to the top
-      { kind: 'flipper', x: 9.9, z: 3.2, len: 3.0, rot: Math.PI - 0.45, r: 0.98 },
-      // top lanes (group 1: the skill-shot lanes) over the bumpers — the bumpers sit beside the lane exits, not under
-      { kind: 'rollover', x: xc - 2.2, z: -18.9, r: 0.8, team: 1 },
-      { kind: 'rollover', x: xc, z: -18.9, r: 0.8, team: 1, skill: true },
-      { kind: 'rollover', x: xc + 2.2, z: -18.9, r: 0.8, team: 1 },
-      { kind: 'bumper', x: xc - 5.2, z: -15.2, r: 1.0 },
-      { kind: 'bumper', x: xc + 4.9, z: -15.2, r: 1.0 },
-      { kind: 'bumper', x: xc, z: C.z - CORE_R - 2.85, r: 0.9 }, // (on the core's rim: nothing rests up there)
-      // the swarm: the ramp's rollover + the left orbit's (group 2) launch it from the drone bay
-      { kind: 'rollover', x: 7.3, z: -10.5, r: 1.0, team: 2, fly: true },
-      { kind: 'rollover', x: -11.8, z: -9, r: 1.0, team: 2 },
-      { kind: 'hive', x: -6.4, z: -19.8, r: 12, len: 5, team: 2 },
-      // the right side's skill lane, just above the upper flipper (a soft plunge comes back down through it)
-      { kind: 'rollover', x: 9.2, z: -1.4, r: 1.2, skill: true },
-      // the CORE and its firewall bank (team 1) in front of the gate — the center shot
+      // the skill ladder: three rollovers along the launch's run across the top
+      { kind: 'rollover', x: 9.9, z: -19.4, r: 1.0, skill: 1 },
+      { kind: 'rollover', x: 6.2, z: -21.3, r: 1.0, skill: 2 },
+      { kind: 'rollover', x: 2.0, z: -22.1, r: 1.0, skill: 3 },
+      // upper right flipper, a third of the way up the right side; the target lock right above it
+      { kind: 'flipper', x: 11.0, z: -1.6, len: 3.2, rot: Math.PI - 0.5, r: 0.95 },
+      { kind: 'saucer', x: 7.3, z: -5.6, r: 1.0, rot: 2.6, len: 22, aim: 0.45, hold: 7 },
+      // bumper nest under the top arch
+      { kind: 'bumper', x: -2.6, z: -17.6, r: 1.0 },
+      { kind: 'bumper', x: 0.9, z: -18.4, r: 1.0 },
+      { kind: 'bumper', x: C.x, z: C.z - CORE_R - 2.75, r: 0.9 }, // (on the core's rim: nothing rests up there)
+      { kind: 'hive', x: -4.6, z: -20.6, r: 12, len: 5, team: 2 },
+      // the swarm: the ramp's rollover + the right orbit's (group 2)
+      { kind: 'rollover', x: -9.4, z: -12.5, r: 1.0, team: 2, fly: true },
+      { kind: 'rollover', x: 10.6, z: -10, r: 1.0, team: 2 },
+      // the CORE (center shot) and its firewall bank (team 1) in front of the gate
       { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random' },
-      { kind: 'spinpad', x: C.x + 1.9, z: C.z, r: 0.9 },
-      { kind: 'item', x: C.x - 1.9, z: C.z },
-      { kind: 'drop', x: xc - 1.6, z: 1.6, r: 0.75, rot: Math.PI / 2, team: 1 },
-      { kind: 'drop', x: xc, z: 1.6, r: 0.75, rot: Math.PI / 2, team: 1 },
-      { kind: 'drop', x: xc + 1.6, z: 1.6, r: 0.75, rot: Math.PI / 2, team: 1 },
-      // target lock at the foot of the left orbit, aiming across: gate (≈-0.16), firewall (≈+0.18), ramp (≈+0.18)
-      { kind: 'saucer', x: -10.0, z: 0.2, r: 1.0, rot: 0.0, len: 22, aim: 0.45, hold: 7, skill: true },
+      { kind: 'spinpad', x: C.x + 1.8, z: C.z, r: 0.85 },
+      { kind: 'item', x: C.x - 1.8, z: C.z },
+      { kind: 'drop', x: C.x - 1.6, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: C.x, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: C.x + 1.6, z: -0.6, r: 0.75, rot: Math.PI / 2, team: 1 },
       // flag rollovers above the drain (group 4)
       { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
       { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },

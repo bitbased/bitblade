@@ -920,8 +920,8 @@ export class Sim {
     const skills = this.markers.map((m, mi) => ({ m, mi })).filter(({ m }) => m.skill);
     if (this.s.pin && !t.extra && skills.length) {
       const pick = skills[Math.floor(this.rnd() * skills.length)];
-      this.s.pin.skill = { mi: pick.mi, t: 12 };
-      this.ev({ k: 'announce', text: 'SKILL SHOT', sub: pick.m.kind === 'saucer' ? 'plunge into the lit lock' : 'plunge through the lit lane', color: '#ffd23a' });
+      const ladder = typeof pick.m.skill === 'number';
+      this.s.pin.skill = { mi: pick.mi, t: ladder ? 5 : 12, best: 0 };
     }
   }
 
@@ -1039,7 +1039,18 @@ export class Sim {
     });
     for (let i = 0; i < pin.tm.length; i++) if (pin.tm[i] > 0) pin.tm[i] = Math.max(0, pin.tm[i] - dt);
     if (pin.save > 0) pin.save = Math.max(0, pin.save - dt);
-    if (pin.skill && (pin.skill.t -= dt) <= 0) pin.skill = null;
+    if (pin.skill && (pin.skill.t -= dt) <= 0) {
+      // a skill ladder: the launch made it exactly as far as the lit rung (and no further)
+      const lit = ms[pin.skill.mi];
+      const main = s.tops.find((o) => !o.drone && !o.extra && o.alive);
+      if (typeof lit?.skill === 'number' && pin.skill.best === lit.skill && main) {
+        this.addScore(main, 5000 * lit.skill);
+        main.spin = Math.max(main.spin, 1);
+        this.ev({ k: 'announce', text: 'SKILL SHOT!', sub: `+${5000 * lit.skill} · full spin`, color: '#ffd23a' });
+        this.ev({ k: 'pin', what: 'group', x: lit.x, y: main.y, z: lit.z, pts: 5000 * lit.skill });
+      }
+      pin.skill = null;
+    }
     // center post: up between the flippers while ball save runs (the first seconds after a launch)
     ms.forEach((m, mi) => {
       if (m.kind !== 'post' || pin.save <= 0) return;
@@ -1170,7 +1181,8 @@ export class Sim {
       t.rollT = 0.7;
       this.addScore(t, 100);
       this.ev({ k: 'pin', what: 'rollover', x: m.x, y: t.y, z: m.z, pts: 100 });
-      if (pin.skill && pin.skill.mi === ms.indexOf(m) && !t.extra) {
+      if (pin.skill && typeof m.skill === 'number' && !t.extra) pin.skill.best = Math.max(pin.skill.best ?? 0, m.skill); // (a ladder: judged when the launch settles)
+      else if (pin.skill && pin.skill.mi === ms.indexOf(m) && !t.extra) {
         pin.skill = null;
         this.addScore(t, 5000);
         t.spin = Math.max(t.spin, 1);
