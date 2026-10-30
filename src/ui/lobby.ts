@@ -1,4 +1,5 @@
-// Local + online-host lobby: press-to-join slots, blades, teams, arena, rules, invite codes.
+// Local + online-host lobby: player slots (+ PLAYER: press any device to join · + CPU), blades, teams, arena, rules,
+// invite codes. A lone local player follows whatever device they use (touch, keyboard, gamepad).
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { glyph } from './nav';
 import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
@@ -108,6 +109,12 @@ export class LobbyScreen implements Screen {
   /** slot cards are built once and updated in place (no flicker, focus and animations survive) */
   cards: Card[] = [];
   joinCard!: HTMLElement;
+  joinBtn!: HTMLButtonElement;
+  joinMsg!: HTMLElement;
+  /** join mode: listening for a new player's device (time it started, ms) */
+  joining = 0;
+  private lastTap: { type: 'touch' | 'mouse'; t: number } | null = null;
+  private onTap = (e: PointerEvent) => { this.lastTap = { type: e.pointerType === 'touch' ? 'touch' : 'mouse', t: performance.now() }; if (this.joining && (e.target as Element).closest?.('.join-btn')) this.lastTap = null; };
   ui!: LobbyUI;
   lastBackdrop = '';
   angle = 0;
@@ -137,7 +144,7 @@ export class LobbyScreen implements Screen {
     else if (a.mode && !a.keep) this.setMode(a.mode, true);
     if (a.arenaId && allArenas().some((x) => x.id === a.arenaId && this.fits(x))) L.arenaId = a.arenaId;
     if (!L.slots.some((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote')) {
-      L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb1' }, bladeId: PRESETS[0].id, team: 0 });
+      L.slots.unshift({ name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb' }, bladeId: PRESETS[0].id, team: 0 });
     }
     if (a.bladeId) L.slots[0].bladeId = a.bladeId;
     this.fillCpus();
@@ -151,6 +158,8 @@ export class LobbyScreen implements Screen {
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1); // START
+    this.joining = 0;
+    addEventListener('pointerdown', this.onTap, true);
     this.unsub = hostRoom.subscribe(() => this.syncMembers());
     hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
     hostRoom.inMatch = false;
@@ -244,8 +253,10 @@ export class LobbyScreen implements Screen {
     this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal };
 
     this.slotsEl = h('div.slots');
-    const hint = Input.isTouchDevice() ? 'TAP + ADD CPU' : 'PRESS SPACE · ENTER · Ⓐ';
-    this.joinCard = h('div.slot.join', null, h('div.big', null, '+'), hint, h('br'), 'TO JOIN');
+    // + PLAYER: listen for the next device (a key, a gamepad, a tap or a click) and make it a new player · + CPU
+    this.joinMsg = h('div.join-msg');
+    this.joinBtn = h<HTMLButtonElement>('button.btn.nav.join-btn', { onclick: () => this.toggleJoin(), title: 'Add a local player: then press a key, a gamepad button, or tap' }, '+ PLAYER');
+    this.joinCard = h('div.slot.join', null, this.joinBtn, h('button.btn.nav.join-btn', { onclick: () => this.addCpu(), title: 'Add a computer player' }, '+ CPU'), this.joinMsg);
     this.slotsEl.append(this.joinCard);
 
     this.onlineEl = h('div.online-box.panel');
@@ -261,7 +272,6 @@ export class LobbyScreen implements Screen {
       this.slotsEl,
       h('div.lobby-bottom', null,
         h('div.rules', null,
-          h('button.btn.small.nav', { onclick: () => this.addCpu() }, '+ CPU'),
           items, nudge, share, rubber, target, time),
         this.onlineEl),
     );
@@ -354,7 +364,7 @@ export class LobbyScreen implements Screen {
     if (c.ctrlKey !== ck) {
       c.ctrlKey = ck;
       c.ctrl.innerHTML = '';
-      c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
+      c.ctrl.append(icon(remote ? 'link' : s.ctrl.type === 'kb' || s.ctrl.type === 'kb1' || s.ctrl.type === 'kb2' ? 'keyboard' : s.ctrl.type === 'mouse' ? 'mouse' : s.ctrl.type === 'touch' ? 'phone' : s.ctrl.type === 'cpu' ? 'gear' : 'gamepad'), ' ', remote ? 'ONLINE PLAYER' : specLabel(s.ctrl));
     }
     c.pad.style.display = this.isPersonalPad(i) ? '' : 'none';
     (c.pad.querySelector('.tm') as HTMLElement).style.display = this.isTeamMode() ? '' : 'none';
@@ -492,10 +502,12 @@ export class LobbyScreen implements Screen {
   controllerOptions(current: ControllerSpec): ControllerSpec[] {
     const used = new Set(L.slots.map((s) => specKey(s.ctrl)));
     used.delete(specKey(current));
-    const opts: ControllerSpec[] = [{ type: 'kb1' }, { type: 'kb2' }, { type: 'mouse' }];
+    const opts: ControllerSpec[] = [{ type: 'kb' }, { type: 'kb1' }, { type: 'kb2' }, { type: 'mouse' }];
     for (const i of this.app.input.connectedPads()) opts.push({ type: 'pad', index: i });
     if (Input.isTouchDevice()) opts.push({ type: 'touch' }, { type: 'touch', gyro: true });
-    const free = opts.filter((o) => !used.has(specKey(o)) && !(o.type === 'mouse' && used.has('kb1')) && !(o.type === 'kb1' && used.has('mouse')));
+    // (the shared keyboard holds both layouts; the mouse player uses the WASD side for buttons)
+    const clash = (k: string) => used.has(k) || (k === 'kb' && (used.has('kb1') || used.has('kb2') || used.has('mouse'))) || ((k === 'kb1' || k === 'kb2' || k === 'mouse') && used.has('kb')) || (k === 'mouse' && used.has('kb1')) || (k === 'kb1' && used.has('mouse'));
+    const free = opts.filter((o) => !clash(specKey(o)));
     return [...free, { type: 'cpu', level: 1 }, { type: 'cpu', level: 2 }, { type: 'cpu', level: 3 }];
   }
 
@@ -573,6 +585,57 @@ export class LobbyScreen implements Screen {
     this.nav.ignorePads = mine;
   }
 
+  /** + PLAYER: start (or cancel) listening for a new player's device */
+  toggleJoin() {
+    if (!this.joining && L.slots.length >= this.mode.maxPlayers && !L.slots.some((s) => s.ctrl.type === 'cpu')) { this.app.toast('Lobby full for this mode'); return; }
+    this.joining = this.joining ? 0 : performance.now();
+    this.lastTap = null;
+    this.joinUi();
+    this.app.sfx.play(this.joining ? 'select' : 'back');
+  }
+  joinUi() {
+    this.joinCard.classList.toggle('listening', !!this.joining);
+    this.joinBtn.textContent = this.joining ? 'CANCEL' : '+ PLAYER';
+    this.joinMsg.textContent = this.joining ? (Input.isTouchDevice() ? 'TAP, PRESS A KEY OR A GAMEPAD BUTTON TO JOIN' : 'PRESS A KEY, A GAMEPAD BUTTON OR CLICK TO JOIN') : '';
+  }
+
+  /**
+   * Each frame: the device that was just used. In join mode it becomes a new player (unless someone already has it);
+   * otherwise, if there's only one local player, they follow it (touch / keyboard / gamepad — a mouse click on the
+   * menus doesn't count). Returns true when the press was used up (joining someone, or switching to a new device).
+   */
+  joinFrame() {
+    let dev = this.app.input.deviceUsed();
+    const tap = this.lastTap; this.lastTap = null;
+    if (!dev && tap) dev = tap.type === 'touch' ? { type: 'touch' } : this.joining ? { type: 'mouse' } : null;
+    if (this.joining && performance.now() - this.joining > 10000) { this.joining = 0; this.joinUi(); }
+    if (!dev) return false;
+    if (this.joining) {
+      // (someone already on that device — a shared keyboard is fine: it splits into WASD + arrows in join())
+      const taken = L.slots.find((s) => specKey(s.ctrl) === specKey(dev!) || (dev!.type === 'mouse' && (s.ctrl.type === 'kb' || s.ctrl.type === 'kb1')));
+      if (taken) {
+        this.app.toast(`${specLabel(dev)} is already ${taken.name} — use another key set, gamepad or tap`);
+        return true;
+      }
+      if (this.join(dev)) { this.joining = 0; this.joinUi(); return true; }
+      return false;
+    }
+    // a lone local player follows their device
+    const humans = L.slots.filter((s) => s.ctrl.type !== 'cpu' && s.ctrl.type !== 'remote');
+    // (with several players in, a gamepad nobody's using doesn't get to press START: tell them how to join)
+    if (humans.length > 1 && dev.type === 'pad' && !L.slots.some((s) => specKey(s.ctrl) === specKey(dev!))) {
+      this.app.toast(`${specLabel(dev)} isn't playing — press + PLAYER to add it`);
+      return true;
+    }
+    if (humans.length !== 1 || dev.type === 'mouse') return false;
+    const me = humans[0];
+    const want: ControllerSpec = dev.type === 'kb1' || dev.type === 'kb2' ? { type: 'kb' } : dev.type === 'touch' ? { type: 'touch', gyro: me.ctrl.type === 'touch' ? me.ctrl.gyro : undefined } : dev;
+    if (specKey(want) === specKey(me.ctrl)) return false;
+    me.ctrl = want; this.renderSlots(); this.dirty = true;
+    this.app.toast(`P1 now on ${specLabel(want)}`);
+    return true; // (picking up a new device only switches to it: that press doesn't also hit START)
+  }
+
   removeSlot(i: number) {
     const s = L.slots[i];
     if (s.ctrl.type === 'remote') hostRoom.t?.kick(s.ctrl.peer);
@@ -595,6 +658,10 @@ export class LobbyScreen implements Screen {
   join(spec: ControllerSpec) {
     const key = specKey(spec);
     if (L.slots.some((s) => specKey(s.ctrl) === key)) return false;
+    // a second keyboard player: whoever had the whole keyboard keeps the other half
+    const shared = L.slots.find((s) => s.ctrl.type === 'kb');
+    if (shared && (spec.type === 'kb1' || spec.type === 'kb2')) shared.ctrl = { type: spec.type === 'kb1' ? 'kb2' : 'kb1' };
+    if (spec.type === 'mouse' && L.slots.some((s) => s.ctrl.type === 'kb' || s.ctrl.type === 'kb1')) return false;
     // replace a CPU if full
     const m = this.mode;
     let idx = L.slots.length;
@@ -741,6 +808,7 @@ export class LobbyScreen implements Screen {
   }
 
   leave() {
+    if (this.joining) { this.toggleJoin(); return; } // (Esc cancels join mode first)
     if (testRide.from && !hostRoom.t) { this.app.go(testRide.from); return; } // test ride: back to the editor
     if (hostRoom.t) {
       if (!confirmTwice(this.app, 'close-room', `Room ${hostRoom.t.code} is open — press again to CLOSE it for everyone`)) return;
@@ -751,10 +819,7 @@ export class LobbyScreen implements Screen {
   }
 
   update(dt: number) {
-    for (const spec of this.app.input.joinPresses()) {
-      const joined = this.join(spec);
-      if (joined) return; // swallow the confirm press
-    }
+    if (this.joinFrame()) return; // (the press that joined someone doesn't also work the menu)
     this.personalPads(dt);
     this.nav.update(dt);
     this.angle += dt * 2.5;
@@ -772,6 +837,7 @@ export class LobbyScreen implements Screen {
   }
 
   unmount() {
+    removeEventListener('pointerdown', this.onTap, true);
     this.unsub?.();
     hostRoom.onCtl = null;
     this.el.remove();

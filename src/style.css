@@ -118,6 +118,11 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 .slot .x { position: absolute; bottom: 8px; right: 12px; color: var(--muted); cursor: pointer; font-size: 18px; }
 .slot.join { border-style: dashed; justify-content: center; min-height: 230px; color: var(--muted); font-family: var(--font-h); font-size: 13px; letter-spacing: 0.12em; text-align: center; animation: none; }
 .slot.join .big { font-size: 40px; color: var(--accent); animation: blink 1.4s infinite; }
+/* + PLAYER / + CPU, and join mode (listening for the new player's device) */
+.slot.join { gap: 10px; }
+.slot.join .join-btn { min-width: 150px; }
+.slot.join .join-msg { font-size: 11px; letter-spacing: 0.1em; line-height: 1.5; color: var(--accent); animation: blink 1s infinite; max-width: 220px; }
+.slot.join.listening { border-color: var(--accent); border-style: solid; box-shadow: 0 0 18px rgba(60, 242, 255, 0.35); }
 .lobby-bottom { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; cursor: pointer; font-family: var(--font-h); font-size: 12px; letter-spacing: 0.12em; }
 .toggle .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent); }

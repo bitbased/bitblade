@@ -5,6 +5,7 @@ const K1 = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], dash
 const K2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], dash: ['Enter', 'Numpad0'], jump: ['ShiftRight', 'NumpadDecimal'], item: ['Slash', 'NumpadEnter'], special: ['Period', 'Numpad1'] };
 
 export const CONTROL_HELP: Record<string, string> = {
+  kb: 'WASD or arrows move · Space / Enter dash (hold: overdrive) · F / Shift jump · E or / item · Q or . special',
   kb1: 'WASD move · Space dash (hold: overdrive) · F/LShift jump · E item · Q special',
   kb2: 'Arrows move · Enter dash (hold: overdrive) · RShift jump · / item · . special',
   mouse: 'Hold LMB to steer to cursor · RMB dash (hold: overdrive) · Space jump · E item · Q special',
@@ -22,6 +23,7 @@ export function specKey(s: ControllerSpec): DeviceKey {
 
 export function specLabel(s: ControllerSpec) {
   switch (s.type) {
+    case 'kb': return 'Keyboard';
     case 'kb1': return 'Keyboard (WASD)';
     case 'kb2': return 'Keyboard (Arrows)';
     case 'mouse': return 'Mouse';
@@ -153,6 +155,12 @@ export class Input {
       c.special = this.anyPressed(L.special);
     };
     switch (spec.type) {
+      case 'kb': { // (both layouts at once)
+        kb(K1); const a = { ...c }; kb(K2);
+        if (Math.hypot(a.mx, a.mz) > Math.hypot(c.mx, c.mz)) { c.mx = a.mx; c.mz = a.mz; }
+        c.dash ||= a.dash; c.hold ||= a.hold; c.jump ||= a.jump; c.item ||= a.item; c.special ||= a.special;
+        break;
+      }
       case 'kb1': kb(K1); break;
       case 'kb2': kb(K2); break;
       case 'mouse': {
@@ -220,6 +228,22 @@ export class Input {
     for (let i = 0; i < this.padNow.length; i++) if (this.padEdge(i, 0) || this.padEdge(i, 9)) out.push({ type: 'pad', index: i });
     return out;
   }
+
+  /** the device someone just used: a key (which layout it belongs to), a gamepad button or a stick push */
+  deviceUsed(): ControllerSpec | null {
+    for (const code of this.pressed) {
+      if (/^(Arrow|Numpad)|^(Enter|ShiftRight|ControlRight|Slash|Period|Comma)$/.test(code)) return { type: 'kb2' };
+      if (/^(Key|Digit|Space|ShiftLeft|ControlLeft|Tab)/.test(code)) return { type: 'kb1' };
+    }
+    for (let i = 0; i < this.padNow.length; i++) {
+      for (let b = 0; b < (this.padNow[i]?.length ?? 0); b++) if (this.padEdge(i, b)) return { type: 'pad', index: i };
+      const ax = this.padAxes[i] ?? [], was = this.padStickWas[i] ?? false, now = Math.abs(ax[0] ?? 0) > 0.6 || Math.abs(ax[1] ?? 0) > 0.6;
+      this.padStickWas[i] = now;
+      if (now && !was) return { type: 'pad', index: i };
+    }
+    return null;
+  }
+  private padStickWas: boolean[] = [];
 
   /** start/escape pressed on any device → pause */
   pausePressed() {

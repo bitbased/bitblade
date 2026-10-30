@@ -185,7 +185,9 @@ export class MatchScreen implements Screen {
       const top = this.state.tops[i];
       // online guests: their slot is 'remote' from the host's point of view; drive it with any local device
       const usingMouse = !!this.arg.client && !!(inp.mouseButtons & 7);
-      const c = this.arg.client ? this.readAnyLocal(top) : inp.read(p.ctrl, top);
+      // (a lone local player — or an online guest — plays with whatever local device they pick up)
+      const lone = !this.arg.client && p.ctrl.type !== 'cpu' && p.ctrl.type !== 'remote' && p.ctrl.type !== 'mouse' && cfg.players.filter((q) => q.ctrl.type !== 'cpu' && q.ctrl.type !== 'remote').length === 1;
+      const c = this.arg.client || lone ? this.readAnyLocal(top) : inp.read(p.ctrl, top);
       if (p.ctrl.type !== 'mouse' && !usingMouse) {
         // camera-relative steering: stick up = away from the camera
         const f = this.view.camFwdOf(i);

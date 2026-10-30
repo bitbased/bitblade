@@ -33,6 +33,8 @@ export const ITEMS: Record<ItemKind, { name: string; icon: string; color: string
 };
 
 export type ControllerSpec =
+  /** the keyboard, both layouts (WASD and arrows) — a lone keyboard player */
+  | { type: 'kb' }
   | { type: 'kb1' }
   | { type: 'kb2' }
   | { type: 'mouse' }

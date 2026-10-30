@@ -188,7 +188,7 @@ export class Hud {
    * spin back up here (use a held Spin Surge, carve the track edge, park on a green pad, wall-ride, grab boxes).
    */
   tips(s: GameState, local: number[]) {
-    const ITEM_KEY: Record<string, string> = { kb1: 'E', kb2: '/', mouse: 'E', pad: 'X', touch: 'ITEM' };
+    const ITEM_KEY: Record<string, string> = { kb: 'E', kb1: 'E', kb2: '/', mouse: 'E', pad: 'X', touch: 'ITEM' };
     const race = this.cfg.mode === 'race';
     const pads = this.cfg.arena.markers.some((m) => m.kind === 'spinpad');
     s.tops.forEach((t, i) => {
@@ -227,7 +227,7 @@ export class Hud {
 
   controlsHelp(local: number[] = []) {
     const used = new Set<string>(local.map((i) => this.cfg.players[i]?.ctrl.type as string).filter((t) => !!t && t !== 'cpu' && t !== 'remote'));
-    if (!used.size) used.add(document.body.classList.contains('dev-touch') ? 'touch' : 'kb1');
+    if (!used.size) used.add(document.body.classList.contains('dev-touch') ? 'touch' : 'kb');
     return h('div.controls-help', null, ...Object.entries(CONTROL_HELP).filter(([k]) => used.has(k)).map(([k, v]) => h('div', null, h('span.kbd', null, k.toUpperCase()), ' ', v)));
   }
 
