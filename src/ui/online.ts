@@ -13,7 +13,7 @@ import { MODES, type ModeId } from '../game/types';
 import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
-import { acceptSong, armRadio, roomMusicRow } from './roomMusic';
+import { acceptSong, onRoomSong, roomMusicRow } from './roomMusic';
 
 /** what the lobby needs to open a room the way the hub set it up */
 export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean }
@@ -310,8 +310,8 @@ export class OnlineScreen implements Screen {
     if ((song?.id ?? null) !== this.lastSong) {
       this.lastSong = song?.id ?? null;
       if (song) this.app.sfx.playSong(song, this.app.sfx.player?.song?.id !== song.id); else this.app.sfx.useMusic('menu');
-      // (my room radio, if I switched it on: the next pick goes to the room once this song's had its time)
-      if (song && canCtl) armRadio(this.app, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true }));
+      // (only one radio runs: mine keeps going if it picked this song; anyone else's pick switches mine off)
+      if (song) onRoomSong(this.app, lobby.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true }));
     }
     const ctl = (a: string, label: string, val: string, sub: string) => {
       const send = (d: number) => clientRoom.send({ t: 'ctl', a, d });

@@ -4,6 +4,7 @@
 import { h, type App } from './app';
 import { allSongs, loadCustomSongs, PRESET_SONGS, sanitizeSong, saveCustomSongs, surpriseSong, type Song } from '../game/music';
 import { icon } from './icons';
+import { clientRoom, hostRoom } from '../net/room';
 
 /** biggest song we'll accept over the network (a full 4-pattern, 32-part song is ~4KB) */
 export const MAX_SONG_BYTES = 24000;
@@ -23,6 +24,25 @@ export function acceptSong(raw: unknown): Song | null {
  * with the room like a hand-picked song, once the current one has had 45s and comes round to its start.
  */
 export const roomRadio = { mode: 'off' as 'off' | 'mine' | 'surprise' };
+/** whose radio picked the room song: the host (-1), a guest (their room id), or nobody (null: picked by hand) */
+export const RADIO_HOST = -1;
+export function myRadioId(): number | null { return hostRoom.t ? RADIO_HOST : clientRoom.t ? clientRoom.t.id : null; }
+/**
+ * The host's way to set the room song from anywhere — the lobby registers it; a match uses it for picks made
+ * mid-match (it plays the song, shares it with the room — in a match too — and keeps the radio going).
+ */
+export const roomSongHost = { set: null as null | ((s: Song | null, by: string, radioBy: number | null) => void), radioBy: (): number | null => null };
+/**
+ * Everyone, whenever a new room song starts playing here: only one radio runs — if the song came from someone
+ * else's radio, or was picked by hand, mine switches off; if it's mine, the next pick comes on schedule.
+ */
+export function onRoomSong(app: App, radioBy: number | null | undefined, onPick: (s: Song) => void) {
+  if (roomRadio.mode !== 'off' && (radioBy ?? null) !== myRadioId()) {
+    roomRadio.mode = 'off';
+    app.toast(radioBy == null ? '📻 Your radio stopped — someone picked a song' : '📻 Another player\'s radio took over');
+  }
+  if (roomRadio.mode !== 'off') armRadio(app, onPick);
+}
 export const RADIO_LABEL = { off: 'Radio off', mine: '📻 Radio: my songs', surprise: '📻 Radio: surprise songs' };
 export function radioPick(current?: string | null): Song {
   if (roomRadio.mode === 'surprise') return surpriseSong();

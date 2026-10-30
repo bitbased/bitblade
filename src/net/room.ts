@@ -39,6 +39,7 @@ class HostRoom {
   onCtl: ((peer: number, m: any) => void) | null = null; // lobby: remote room control
   onInput: ((peer: number, m: any) => void) | null = null; // match: remote player input
   onQuitMatch: ((peer: number) => void) | null = null; // match: a guest stepped out (still in the room)
+  onMemberLeft: ((peer: number) => void) | null = null; // a guest left the room (lobby or match)
   private subs = new Set<() => void>();
 
   open(t: HostTransport, info?: Partial<RoomInfo>) {
@@ -53,7 +54,7 @@ class HostRoom {
       if (this.inMatch) t.send(peer, { t: 'busy' });
       this.notify();
     });
-    t.onLeave((peer) => { this.members.delete(peer); this.notify(); });
+    t.onLeave((peer) => { this.members.delete(peer); this.onMemberLeft?.(peer); this.notify(); });
     t.onMessage((peer, m) => {
       const mem = this.members.get(peer);
       if (!mem || !m) return;

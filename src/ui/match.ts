@@ -10,6 +10,7 @@ import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from 
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
 import { clientRoom, hostRoom } from '../net/room';
+import { acceptSong, onRoomSong, RADIO_HOST, roomSongHost } from './roomMusic';
 import { editorName, testRide } from './testRide';
 import { NetClient } from '../net/netclient';
 
@@ -112,14 +113,26 @@ export class MatchScreen implements Screen {
           const top = idx !== undefined ? this.sim!.s.tops[idx] : undefined;
           if (top?.alive) { top.spin = 0; this.app.toast(`${top.name} left the match (still in the room)`); }
         };
+        // room song picks (and radios) keep working mid-match
+        hostRoom.onCtl = (peer, m) => {
+          if (m?.a !== 'song' || !hostRoom.openControl) return;
+          const s = m.song === null ? null : acceptSong(m.song);
+          if (m.song !== null && !s) return;
+          const who = hostRoom.members.get(peer)?.name ?? 'Someone';
+          roomSongHost.set?.(s, m.radio ? `📻 ${who}` : who, m.radio ? peer : null);
+        };
         this.unsubRoom = hostRoom.subscribe(() => {
           // a player who left the room spins out
           for (const [i, p] of cfg.players.entries()) if (p.ctrl.type === 'remote' && !hostRoom.members.has(p.ctrl.peer)) { const top = this.sim!.s.tops[i]; if (top?.alive) top.spin = 0; }
         });
       }
     }
-    if (cfg.song) app.sfx.playSong(cfg.song, app.sfx.player?.song?.id !== cfg.song.id);
-    else app.sfx.useMusic('game', cfg.arena);
+    if (cfg.song) {
+      app.sfx.playSong(cfg.song, app.sfx.player?.song?.id !== cfg.song.id);
+      // (a room radio keeps going through the match)
+      if (this.arg.host) onRoomSong(app, roomSongHost.radioBy(), (n) => roomSongHost.set?.(n, '📻 ' + (cfg.players[0]?.name ?? 'Host'), RADIO_HOST));
+      else if (this.arg.client) onRoomSong(app, clientRoom.lobby?.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true }));
+    } else app.sfx.useMusic('game', cfg.arena);
     app.sfx.music(true);
   }
 
@@ -154,6 +167,11 @@ export class MatchScreen implements Screen {
       this.state = this.net.latest;
       this.lastSnapAt = performance.now();
       this.consumeEvents(ev);
+    } else if (m?.t === 'song') {
+      // the room's song changed mid-match (someone's radio, or a pick): everyone hears it
+      const s = acceptSong(m.song);
+      if (s) { this.app.sfx.playSong(s, this.app.sfx.player?.song?.id !== s.id); this.app.toast(`♪ ${s.name}${m.by ? ` — ${m.by}` : ''}`); onRoomSong(this.app, m.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true })); }
+      if (clientRoom.lobby) { clientRoom.lobby.song = m.song; clientRoom.lobby.songBy = m.by; clientRoom.lobby.radioBy = m.radioBy; }
     } else if (m?.t === 'end') {
       this.finish();
     } else if (m?.t === 'start' && clientRoom.t) {
