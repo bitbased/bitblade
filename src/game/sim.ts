@@ -1957,6 +1957,12 @@ export class Sim {
     const laps = this.cfg.target || 3;
     for (const t of s.tops) {
       if (t.finishT >= 0 || !t.alive) continue;
+      // a CPU wedged somewhere it can't drive out of (below a ledge, pinned in a corner): put it back on the road
+      const ai = this.ai[t.id];
+      if (ai && s.phase === 'battle') {
+        ai.wedgedT = Math.hypot(t.vx, t.vz) < 1.2 ? (ai.wedgedT ?? 0) + 1 / 120 : 0;
+        if (ai.wedgedT > 4) { ai.wedgedT = 0; this.respawn(t, t.id); this.ev({ k: 'announce', text: 'BACK ON TRACK', sub: t.name }); continue; }
+      }
       const prev = t.prog;
       const ns = nearestSample(S, t.x, t.z, t.prog);
       const halfW = S.width / 2 + 1;
