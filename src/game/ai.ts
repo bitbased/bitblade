@@ -131,7 +131,25 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     const ed = Math.hypot(enemy.x - t.x, enemy.z - t.z);
     // (the charge in after a run-up: boost held down the straight (overdrive hits harder, but barely steers), dash just before contact)
     if (ai.charge && ai.charge > 0 && !ai.runup && t.spin > 0.35) c.hold = true;
-    if (!ai.runup && ed < 4.5 && t.dashCd <= 0 && (ai.charge ? ed < 3 : Math.random() < dt * [0, 0.8, 2, 4][ai.level])) c.dash = true;
+    // dash: aimed. The boost adds to the speed we already have, so point it to cancel our sideways drift and lead the
+    // enemy — the result heads straight at where it will be. Too much drift to line up: wait for a better moment
+    // (no wasted dashes). Easy CPUs aim sloppier.
+    if (!ai.runup && ed < 5 && ed > 0.8 && t.dashCd <= 0 && (ai.charge ? ed < 3.2 : Math.random() < dt * [0, 1, 3, 6][ai.level])) {
+      const dashV = 9 * sim.rpmK(t), sp = Math.hypot(t.vx, t.vz);
+      const lead = (ed / (sp + dashV)) * [0, 0.4, 0.8, 1][ai.level];
+      let Tx = enemy.x + enemy.vx * lead - t.x, Tz = enemy.z + enemy.vz * lead - t.z;
+      const Tl = Math.hypot(Tx, Tz) || 1; Tx /= Tl; Tz /= Tl;
+      const va = t.vx * Tx + t.vz * Tz, px = t.vx - Tx * va, pz = t.vz - Tz * va, vp = Math.hypot(px, pz);
+      if (vp < dashV * 0.85) {
+        const fwd = Math.sqrt(1 - (vp / dashV) ** 2);
+        if (va + dashV * fwd > 2) {
+          let dx = -px / dashV + Tx * fwd, dz = -pz / dashV + Tz * fwd;
+          const e = (3 - ai.level) * 0.22 * (Math.random() - 0.5), ce = Math.cos(e), se = Math.sin(e); // (sloppier when easy)
+          [dx, dz] = [dx * ce - dz * se, dx * se + dz * ce];
+          c.mx = dx; c.mz = dz; c.dash = true;
+        }
+      }
+    }
     if (ed < 3.5 && t.special >= 1 && Math.random() < dt * 2) c.special = true;
     if (Math.abs(enemy.y - t.y) > 1 && ed < 2.5 && t.grounded && Math.random() < dt * ai.level) c.jump = true;
   }
