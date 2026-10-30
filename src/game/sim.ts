@@ -122,7 +122,7 @@ export class Sim {
   partySteer = 0.4;
   /** pinball party: how often the self-playing flippers miss a ball */
   partyWhiff = 0.25;
-  private flipBrain: { t: number; miss: boolean }[] = [];
+  private flipBrain: { t: number; miss: boolean; hold: number; cool: number }[] = [];
 
   ground(x: number, z: number) {
     const h = this.terrain.height(x, z);
@@ -1075,14 +1075,21 @@ export class Sim {
       if (table) up = !pin.tilted && s.phase === 'battle' && (flipperSide(m) === 'L' ? !!c0.flipL : !!c0.flipR);
       else if (this.party) {
         // pinball party: the flippers play themselves, like a person would — a moment to react, and now and then a
-        // whiff (so a drain is a real risk); held while the ball's on it
+        // whiff (so a drain is a real risk). A flip is a whole flip: once fired it swings all the way up and holds a
+        // moment, then drops all the way back before it can fire again (no twitching as the ball leaves)
         const P0 = flipperPose(m, m.rot ?? 0);
         const near = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.8);
-        const st = (this.flipBrain[mi] ??= { t: -1, miss: false });
-        if (!near) st.t = -1;
-        else if (st.t < 0) { st.t = 0.06 + this.rnd() * 0.2; st.miss = this.rnd() < this.partyWhiff; }
-        else st.t -= dt;
-        up = near && !st.miss && st.t <= 0;
+        const st = (this.flipBrain[mi] ??= { t: -1, miss: false, hold: 0, cool: 0 });
+        st.hold = Math.max(0, st.hold - dt); st.cool = Math.max(0, st.cool - dt);
+        if (st.hold > 0) up = true;
+        else {
+          up = false;
+          if (!near) st.t = -1;
+          else if (st.cool <= 0) {
+            if (st.t < 0) { st.t = 0.06 + this.rnd() * 0.2; st.miss = this.rnd() < this.partyWhiff; }
+            else if ((st.t -= dt) <= 0 && !st.miss) { st.hold = 0.3; st.cool = 0.55; up = true; }
+          }
+        }
       } else {
         // on a regular course a flipper is a trap: it fires by itself when a blade rolls onto it
         const P0 = flipperPose(m, m.rot ?? 0);
