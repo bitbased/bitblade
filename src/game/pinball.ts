@@ -514,23 +514,22 @@ function starCadet(): ArenaDef {
 const CYBER = { floor: '#03120e', wall: '#0b3a2c', glow: '#39ff9c', sky1: '#010605', sky2: '#04221a', grid: '#00e08f' };
 
 /**
- * Swarm Protocol — a cyber table built round the CORE: a full-size battle stadium in the middle of the table.
- *  · the CORE: knock down the FIREWALL (the drop bank standing right in front of its gate) to open it; roll in and a
- *    guardian blade drops in — a real 1v1 (a battle or king of the hill, at random) with a spin pad and a power-up
- *  · UPLINK: one wireform flyover round the outside — up the left wall, over the top, down the right wall (flying over
- *    the right orbit) into the right inlane. Its deck rollover + the right orbit's rollover light the DRONE BAY: the
- *    swarm launches and hunts your ball (smash drones fast; slow balls get zapped and lose spin)
- *  · TARGET LOCK low right: aim with the flippers, fire with SPACE — into the open core, the firewall or the uplink
- *  · re-entry ports across the top, pop bumpers (server nodes), flag rollovers, kickback, center post
+ * Swarm Protocol — a cyber table built round the CORE, a battle stadium in the upper middle of the table.
+ *  · the CORE: knock down the FIREWALL (the drop bank in front of its gate) to open it; roll in and a guardian blade
+ *    drops in — a real 1v1 (a battle or king of the hill, at random) with a spin pad and a power-up inside
+ *  · UPLINK: one clear ramp up the left side, between the core and the wall (over the left orbit), dropping the ball
+ *    into the top lanes. Its deck rollover + the right orbit's rollover light the DRONE BAY: the swarm launches
+ *  · TARGET LOCK low right: aim with the flippers, fire with SPACE — into the open core, the firewall or the ramp
+ *  · top lanes, a bumper nest top right, flag rollovers, kickback, center post
  */
 function swarmProtocol(): ArenaDef {
   const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
   const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0, outlanes: 'L', kickback: 'L' });
   const xc = low.xc;
   const lane = (x: number): Rail => ({ pts: [[x, -22.0], [x, -18.4]], t: 0.3, h: 1.1 });
-  const C = { x: xc, z: -7.6 }, CORE_R = 6.2; // (the bowl; with its curved wall and ring it's ~15.6m across)
+  const C = { x: xc, z: -9.0 }, CORE_R = 5.4; // (the bowl; with its curved wall and ring ~14.4m across)
   return {
-    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table round a full-size battle core: 1v1 guardian battles and king of the hill, a wireform flyover, a drone swarm and an aimable target lock.',
+    id: 'pin-swarm-protocol', name: 'Swarm Protocol', desc: 'A cyber table round a battle core: 1v1 guardian battles and king of the hill, a ramp to the top lanes, a drone swarm and an aimable target lock.',
     theme: CYBER, custom: false, pinball: true, tilt: 0.15,
     course: flat(5, 8),
     rails: [
@@ -542,37 +541,35 @@ function swarmProtocol(): ArenaDef {
       ...low.rails,
     ],
     ramps: [
-      // UPLINK: up the left wall, over the top, down the right wall (over the right orbit) into the right inlane
-      { pts: [[-9.8, 3.5], [-10.5, -3], [-10.6, -10], [-9.0, -16.4], [-3.5, -18.6], [3.5, -18.4], [8.6, -15.2], [10.3, -9], [10.5, -2], [10.6, 3.5], [10.7, 8]], w: 2.0, rise: 4.4, fly: true, end: 1.8 },
+      // UPLINK: up the left side between the core and the wall (over the left orbit), into the top lanes
+      { pts: [[-6.6, 2.0], [-8.6, -4], [-10.4, -10], [-10.6, -15], [-9.4, -18.6], [-6.6, -20.2]], w: 1.7, rise: 4.0, fly: true, end: 1.8, exit: 6 },
     ],
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
       { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 1.05 },
       ...low.markers,
       { kind: 'post', x: xc, z: 22.2, r: 0.45 },
-      // re-entry ports (group 1)
+      // top lanes (group 1)
       { kind: 'rollover', x: xc - 2.2, z: -19.7, r: 0.8, team: 1 },
       { kind: 'rollover', x: xc, z: -19.7, r: 0.8, team: 1 },
       { kind: 'rollover', x: xc + 2.2, z: -19.7, r: 0.8, team: 1 },
-      // server nodes: pop bumpers top right, and the core node on top of the core (nothing rests on its rim)
-      { kind: 'bumper', x: 5.4, z: -20.2, r: 1.0 },
-      { kind: 'bumper', x: 9.0, z: -18.8, r: 1.0 },
-      { kind: 'bumper', x: C.x, z: C.z - CORE_R - 2.85, r: 1.0 },
-      // the uplink's deck rollover + the right orbit (on the floor, under the uplink) light the drone bay (group 2)
-      { kind: 'rollover', x: -10.6, z: -10, r: 1.1, team: 2, fly: true },
-      { kind: 'rollover', x: 10.5, z: -6, r: 1.0, team: 2 },
-      { kind: 'hive', x: -6.6, z: -20.6, r: 13, len: 5, team: 2 },
-      // the CORE: a battle stadium; the firewall bank (team 1) opens it; inside: a spin pad and a power-up
-      { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random' }, // (+1.6m of wall and ring round it)
-      { kind: 'spinpad', x: C.x + 3.0, z: C.z, r: 1.1 },
-      { kind: 'item', x: C.x - 3.0, z: C.z },
-      // the FIREWALL: a drop bank standing right in front of the core's gate — knock it down to get in
-      { kind: 'drop', x: xc - 1.6, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
-      { kind: 'drop', x: xc, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
-      { kind: 'drop', x: xc + 1.6, z: 2.9, r: 0.75, rot: Math.PI / 2, team: 1 },
-      // target lock, low right: aim it with the flippers, fire with SPACE (fires itself after 7s) — the core's gate,
-      // the firewall and the uplink's entrance are all in its arc
-      { kind: 'saucer', x: 4.8, z: 5.0, r: 1.0, rot: -2.49, len: 22, aim: 0.75, hold: 7 },
+      // server nodes: a bumper nest top right
+      { kind: 'bumper', x: 7.4, z: -18.6, r: 1.0 },
+      { kind: 'bumper', x: 10.4, z: -16.6, r: 1.0 },
+      { kind: 'bumper', x: 8.6, z: -13.8, r: 1.0 },
+      { kind: 'hive', x: 4.8, z: -20.6, r: 12, len: 5, team: 2 },
+      // the uplink's deck rollover + the right orbit (group 2) launch the swarm
+      { kind: 'rollover', x: -10.4, z: -10, r: 1.0, team: 2, fly: true },
+      { kind: 'rollover', x: 9.6, z: -6, r: 1.0, team: 2 },
+      // the CORE (+1.6m of wall and ring round the bowl), its firewall bank (team 1) right in front of the gate
+      { kind: 'arena', x: C.x, z: C.z, r: CORE_R, rot: Math.PI / 2, team: 1, len: 1.8, game: 'random' },
+      { kind: 'spinpad', x: C.x + 2.6, z: C.z, r: 1.0 },
+      { kind: 'item', x: C.x - 2.6, z: C.z },
+      { kind: 'drop', x: xc - 1.6, z: 1.4, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: xc, z: 1.4, r: 0.75, rot: Math.PI / 2, team: 1 },
+      { kind: 'drop', x: xc + 1.6, z: 1.4, r: 0.75, rot: Math.PI / 2, team: 1 },
+      // target lock, low right: aim it with the flippers, fire with SPACE (fires itself after 7s)
+      { kind: 'saucer', x: 4.8, z: 4.0, r: 1.0, rot: -2.6, len: 22, aim: 0.75, hold: 7 },
       // flag rollovers above the drain (group 4)
       { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
       { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },

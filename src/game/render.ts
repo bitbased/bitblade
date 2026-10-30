@@ -252,7 +252,7 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
       const lift = r.deck ? flyLiftAlong(r.deck, x, z) : 0;
       const g = groundY(x, z) + (r.below ? 0 : lift); // (a flyover's walls stand on its deck; its skirt hangs under it)
       const f0 = r.deck && !r.below ? g - 0.12 : g - 0.3;
-      const H = r.below ? lift - 0.05 : H0;
+      const H = r.below ? lift - 0.05 : r.deck ? 0.55 : H0; // (drawn low: the glass keeps the ball on)
       const cap = Math.min(0.12, H * 0.3); // only the top edge glows
       for (const [sx, yy, c] of [[1, f0, foot], [1, g + H - cap, body], [1, g + H, topCol], [-1, g + H, topCol], [-1, g + H - cap, body], [-1, f0, foot]] as const) {
         into.pos.push(x + nx * half * sx, yy, z + nz * half * sx);
@@ -274,19 +274,9 @@ export function buildRailMeshes(rails: import('./pinball').Rail[], theme: Theme,
   };
   const segs = railSegments(rails);
   const deckRails = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
-  const wireMat = new THREE.MeshBasicMaterial({ color: theme.glow, toneMapped: false });
   for (const r of rails) {
-    if (r.deck && !r.below) {
-      // a flyover's side: two thin glowing wires following the deck (a wireform — you can see the play under it)
-      const pl = railPolyline(r);
-      for (const hh of [0.3, 1.05]) {
-        const pts = pl.map(([x, z]) => new THREE.Vector3(x, groundY(x, z) + flyLiftAlong(r.deck!, x, z) + hh, z));
-        if (pts.length < 2) continue;
-        group.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), Math.max(8, pts.length * 2), 0.055, 6, false), wireMat));
-      }
-      continue;
-    }
-    if (r.deck) { addRail(r, deckRails, new THREE.Color(theme.wall)); continue; }
+    if (r.below) continue; // (a flyover's underside skirt: hidden under its deck)
+    if (r.deck) { addRail(r, deckRails, new THREE.Color(theme.glow)); continue; } // (a flyover's side: low, slim, see-through)
     if (!r.kick) { addRail(r, plain, new THREE.Color(r.oneWay ? '#ffd23a' : theme.glow)); continue; } // (gates in gold)
     const one = { pos: [] as number[], col: [] as number[], idx: [] as number[] };
     addRail(r, one, new THREE.Color('#ffffff'));
@@ -652,20 +642,23 @@ export class GameView {
   buildFlyover(rp: import('./pinball').PinRamp) {
     const pl = railPolyline({ pts: rp.pts });
     const half = (rp.w ?? 3) / 2 + 0.3;
-    // the deck: thin cross ties under the ball's path (a wireform), dark with a faint glow
-    const tieMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(this.cfg.arena.theme.glow).multiplyScalar(0.45), toneMapped: false });
-    let acc = 0;
-    for (let i = 1; i < pl.length; i++) {
-      acc += Math.hypot(pl[i][0] - pl[i - 1][0], pl[i][1] - pl[i - 1][1]);
-      if (acc < 1.4) continue;
-      acc = 0;
-      const [x, z] = pl[i], L = flyLift(rp, x, z, 0);
-      if (L < 0.15) continue;
-      const tie = new THREE.Mesh(new THREE.BoxGeometry(half * 2, 0.06, 0.12), tieMat);
-      tie.position.set(x, this.groundY(x, z) + L + 0.02, z);
-      tie.rotation.y = -Math.atan2(pl[i][1] - pl[i - 1][1], pl[i][0] - pl[i - 1][0]) + Math.PI / 2;
-      this.scene.add(tie);
+    // the deck: one smooth, lightly tinted see-through ribbon between the side walls (a clear plastic ramp)
+    const pos: number[] = [], idx: number[] = [];
+    for (let i = 0; i < pl.length; i++) {
+      const a = pl[Math.max(0, i - 1)], b = pl[Math.min(pl.length - 1, i + 1)];
+      let tx = b[0] - a[0], tz = b[1] - a[1];
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const L = Math.max(0, flyLift(rp, pl[i][0], pl[i][1], 0));
+      for (const sd of [1, -1]) {
+        const x = pl[i][0] - tz * half * sd, z = pl[i][1] + tx * half * sd;
+        pos.push(x, this.groundY(pl[i][0], pl[i][1]) + L + 0.03, z);
+      }
+      if (i > 0) { const k = (i - 1) * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
     }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
+    this.scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color(this.cfg.arena.theme.glow).multiplyScalar(0.5), transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide, toneMapped: false })));
     const postMat = new THREE.MeshStandardMaterial({ color: '#2a3140', metalness: 0.7, roughness: 0.35 });
     let since = 0;
     for (let i = 1; i < pl.length; i++) {
