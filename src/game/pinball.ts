@@ -250,6 +250,30 @@ export function rampRails(r: PinRamp): Rail[] {
  * and a guardian blade drops in for a 1v1 battle.
  */
 /** an arena bowl's ring: its radius (outside the stadium's curved wall), the gate's direction and half-angle */
+/** link colours, the same scheme on every table: the things that light a shot wear its colour as diamond inserts,
+ *  the shot itself a ring with arrows pointing in (dim while unlit, pulsing while lit) */
+export const LINK_COLORS = ['#3bd8ff', '#ff9a2b', '#c86bff', '#7dff5a', '#ff4f8b', '#ffe14a'];
+export interface PinLink { color: string; sources: number[]; targets: number[]; /** a link channel (else an arena / hive link) */ ch?: number }
+/** what lights what on a table: link channels (arms → need), drop banks → their arena bowl, lane groups → their hive */
+export function pinLinks(ms: Marker[]): PinLink[] {
+  const idx = (f: (m: Marker) => boolean) => ms.map((m, i) => (f(m) ? i : -1)).filter((i) => i >= 0);
+  const links: Omit<PinLink, 'color'>[] = [];
+  const chans = [...new Set(ms.filter((m) => m.need !== undefined).map((m) => m.need!))].sort((a, b) => a - b);
+  for (const ch of chans) links.push({ ch, sources: idx((m) => m.arms === ch), targets: idx((m) => m.need === ch) });
+  ms.forEach((m, i) => {
+    if (m.kind === 'arena') links.push({ sources: idx((q) => q.kind === 'drop' && (q.team ?? 0) === (m.team ?? 0)), targets: [i] });
+    if (m.kind === 'hive') links.push({ sources: idx((q) => q.kind === 'rollover' && q.team === m.team), targets: [i] });
+  });
+  return links.filter((l) => l.sources.length && l.targets.length).map((l, k) => ({ ...l, color: LINK_COLORS[k % LINK_COLORS.length] }));
+}
+/** what a link shot is called when it lights */
+export function linkName(ms: Marker[], m: Marker) {
+  if (m.name) return m.name;
+  if (m.kind === 'kickback') return 'KICKBACK';
+  if (m.kind === 'portal') return 'PORTAL';
+  return m.team !== undefined && ms.some((q) => q !== m && q.kind === 'saucer' && q.team === m.team) ? 'WORMHOLE' : 'LOCK';
+}
+
 export function arenaRing(m: Marker) {
   const R = (m.r ?? 6) + ARENA_WALL_W + 0.3;
   return { R, g: m.rot ?? Math.PI / 2, gap: 1.4 / R };
@@ -461,7 +485,7 @@ function starCadet(): ArenaDef {
   const outer: [number, number][] = [[-14.5, 24], [-14.5, 6], [-14.5, -12], [-13, -19], [-8, -22.4], [0, -23.3], [8, -22.4], [13, -19], [14.5, -12], [14.5, 6], [14.5, 24]];
   const low = lowerPlayfield({ wallL: -14.5, wallR: 12.3, zF: 19.6, flip: 4.0, outlanes: 'L', kickback: 'L' }); // (the right side is an inlane: the fuel chute feeds the right flipper)
   const xc = low.xc;
-  const lane = (x: number): Rail => ({ pts: [[x, -22.0], [x, -18.4]], t: 0.3, h: 1.1 }); // (tops nearly meet the arch: no gap to wedge in)
+  const lane = (x: number): Rail => ({ pts: [[x, -21.2], [x, -18.4]], t: 0.3, h: 1.1 }); // (a ~1.6-1.9m gap under the arch: a ball crossing the top can glance off their tops into the lanes)
   return {
     id: 'pin-star-cadet', name: 'Star Cadet', desc: 'A space table: re-entry lanes over the bumper nest, a launch ramp, hyperspace and fuel chutes, booster drop targets, linked wormholes, a kickback and a center post.',
     theme: COSMOS, custom: false, pinball: true, tilt: 0.15,
@@ -483,12 +507,13 @@ function starCadet(): ArenaDef {
     markers: [
       { kind: 'spawn', x: 13.45, z: 21.6 },
       { kind: 'plunger', x: 13.45, z: 21.6, r: 1.1, len: 1.05 },
-      ...low.markers,
+      // (links: the re-entry lanes open the wormholes, the booster bank the black hole, the flag lanes the kickback)
+      ...low.markers.map((m) => (m.kind === 'kickback' ? { ...m, need: 3 } : m)),
       { kind: 'post', x: xc, z: 22.2, r: 0.45 },
       // re-entry lanes (group 1) and the bumper nest below them
-      { kind: 'rollover', x: xc - 2.2, z: -19.7, r: 0.8, team: 1 },
-      { kind: 'rollover', x: xc, z: -19.7, r: 0.8, team: 1 },
-      { kind: 'rollover', x: xc + 2.2, z: -19.7, r: 0.8, team: 1 },
+      { kind: 'rollover', x: xc - 2.2, z: -19.7, r: 0.8, team: 1, arms: 1, laneChange: true },
+      { kind: 'rollover', x: xc, z: -19.7, r: 0.8, team: 1, arms: 1, laneChange: true },
+      { kind: 'rollover', x: xc + 2.2, z: -19.7, r: 0.8, team: 1, arms: 1, laneChange: true },
       { kind: 'bumper', x: xc - 2.5, z: -14.8, r: 1.05 },
       { kind: 'bumper', x: xc + 2.5, z: -14.8, r: 1.05 },
       { kind: 'bumper', x: xc, z: -11.2, r: 1.05 },
@@ -501,18 +526,18 @@ function starCadet(): ArenaDef {
       // the launch ramp's kickout (sends the ball back down the ramp)
       { kind: 'saucer', x: xc - 5.0, z: -6.8, r: 1.0, rot: 1.25, len: 13 },
       // booster drop targets (bank 0) on the right, facing the left flipper
-      { kind: 'drop', x: 4.0, z: -0.6, r: 0.8, rot: 2.55, team: 0 },
-      { kind: 'drop', x: 4.9, z: -2.0, r: 0.8, rot: 2.55, team: 0 },
-      { kind: 'drop', x: 5.8, z: -3.4, r: 0.8, rot: 2.55, team: 0 },
+      { kind: 'drop', x: 4.0, z: -0.6, r: 0.8, rot: 2.55, team: 0, arms: 2 },
+      { kind: 'drop', x: 4.9, z: -2.0, r: 0.8, rot: 2.55, team: 0, arms: 2 },
+      { kind: 'drop', x: 5.8, z: -3.4, r: 0.8, rot: 2.55, team: 0, arms: 2 },
       // wormholes: in one, out of the other
-      { kind: 'saucer', x: 5.6, z: -9.6, r: 1.0, rot: 2.4, len: 15, team: 1 },
-      { kind: 'saucer', x: xc + 2.6, z: 6.6, r: 1.0, rot: -1.62, len: 15, team: 1 }, // (straight up the middle, clear of the ramp)
+      { kind: 'saucer', x: 5.6, z: -9.6, r: 1.0, rot: 2.4, len: 15, team: 1, need: 1 },
+      { kind: 'saucer', x: xc + 2.6, z: 6.6, r: 1.0, rot: -1.62, len: 15, team: 1, need: 1 }, // (straight up the middle, clear of the ramp)
       // black hole kickout on the left
-      { kind: 'saucer', x: -8.2, z: 2.6, r: 1.0, rot: 1.05, len: 14 }, // (down toward the flippers, clear of the ramp wall)
+      { kind: 'saucer', x: -8.2, z: 2.6, r: 1.0, rot: 1.05, len: 14, need: 2, name: 'BLACK HOLE' }, // (down toward the flippers, clear of the ramp wall)
       // flag rollovers above the drain (group 4)
-      { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4 },
-      { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4 },
-      { kind: 'rollover', x: xc + 2.0, z: 11.0, r: 0.75, team: 4 },
+      { kind: 'rollover', x: xc - 2.0, z: 11.0, r: 0.75, team: 4, arms: 3 },
+      { kind: 'rollover', x: xc, z: 10.6, r: 0.75, team: 4, arms: 3 },
+      { kind: 'rollover', x: xc + 2.0, z: 11.0, r: 0.75, team: 4, arms: 3 },
       { kind: 'item', x: xc + 1.6, z: -4.6 },
     ],
   } as ArenaDef;

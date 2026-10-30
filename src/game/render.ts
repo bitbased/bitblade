@@ -11,7 +11,7 @@ import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import { computeStats } from '../core/blade';
 import { Terrain, VOID, type Theme } from './terrain';
 import type { TrackSamples } from './track';
-import { arenaRails, railPolyline, railSegments, rampRails, flipperHalf, flyLift, flyLiftAlong } from './pinball';
+import { arenaRails, arenaRing, pinLinks, railPolyline, railSegments, rampRails, flipperHalf, flyLift, flyLiftAlong } from './pinball';
 import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
@@ -711,6 +711,10 @@ export class GameView {
   arenaRings: { mat: THREE.MeshBasicMaterial; mi: number }[] = [];
   hiveZones: THREE.Object3D[] = [];
   skillRings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; mi: number }[] = [];
+  linkShots: { mi: number; ch?: number; ring: THREE.MeshBasicMaterial; glow: THREE.MeshBasicMaterial; cap?: THREE.Object3D }[] = [];
+  linkTrails: { srcs: number[]; ch?: number; mi: number; dots: THREE.MeshBasicMaterial[] }[] = [];
+  /** pinball links: each linked piece's link colour (what lights a shot and the shot itself wear it) */
+  linkCol = new Map<number, string>();
   droneMeshes: { g: THREE.Group; rotors: THREE.Mesh[] }[] = [];
   boxMeshes: THREE.Mesh[] = [];
   crystalMeshes = new Map<number, THREE.Mesh>();
@@ -794,6 +798,7 @@ export class GameView {
     this.composer.setSize(innerWidth, innerHeight);
 
     this.buildMarkers();
+    this.buildLinkDecals();
     this.buildRails();
     if (import.meta.env.DEV) (window as any).__r = this; // for the headless visual checks
     const T = this.terrain.track;
@@ -902,6 +907,7 @@ export class GameView {
     const tiltA = this.cfg.arena.tilt ? Math.atan(this.cfg.arena.tilt) : 0;
     // (draped decals already follow the surface; arena dishes are level; arms and saws are posed every frame)
     const UNTILTED = new Set(['arena', 'arm', 'saw', 'hive', 'boost', 'checkpoint', 'goal', 'spinpad']);
+    if (this.cfg.arena.pinball) for (const l of pinLinks(this.cfg.arena.markers)) for (const i of [...l.sources, ...l.targets]) this.linkCol.set(i, l.color);
     this.cfg.arena.markers.forEach((m, mi) => {
       const before = this.scene.children.length, nDrops = this.drops.length, nPosts = this.posts.length, hadRod = !!this.plungerRod;
       // on bridge tracks a marker belongs to the road it was placed on (its y), not the top surface
@@ -1016,7 +1022,7 @@ export class GameView {
           const cup = new THREE.Mesh(new THREE.CircleGeometry(r * 0.85, 32), new THREE.MeshBasicMaterial({ color: '#05060c' }));
           cup.rotation.x = -Math.PI / 2;
           cup.position.set(m.x, y + 0.04, m.z);
-          const wcol = m.team === undefined ? '#38ffb0' : ['#ff3b4a', '#38ffb0', '#ffd23a', '#3cf2ff'][m.team % 4];
+          const wcol = this.linkCol.get(mi) ?? (m.team === undefined ? '#38ffb0' : ['#ff3b4a', '#38ffb0', '#ffd23a', '#3cf2ff'][m.team % 4]);
           const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.88, 0.1, 8, 40), new THREE.MeshBasicMaterial({ color: wcol, toneMapped: false }));
           rim.rotation.x = Math.PI / 2;
           rim.position.set(m.x, y + 0.1, m.z);
@@ -1081,19 +1087,20 @@ export class GameView {
         case 'rollover': {
           // spin rollover: a lane light on the floor
           const r = m.r ?? 0.9;
-          const lmat = new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.8, toneMapped: false, side: THREE.DoubleSide, depthWrite: false });
+          const lcol = this.linkCol.get(mi) ?? '#ffd23a';
+          const lmat = new THREE.MeshBasicMaterial({ color: lcol, transparent: true, opacity: 0.8, toneMapped: false, side: THREE.DoubleSide, depthWrite: false });
           const disc = new THREE.Mesh(new THREE.RingGeometry(r * 0.45, r * 0.7, 6), lmat);
           disc.rotation.x = -Math.PI / 2;
           disc.position.set(m.x, y + 0.05, m.z);
           this.scene.add(disc);
           this.portals.push(disc);
-          if (m.team !== undefined) this.lights.push({ mat: lmat, mi, base: '#ffd23a' });
+          if (m.team !== undefined) this.lights.push({ mat: lmat, mi, base: lcol });
           break;
         }
         case 'drop': {
           // a drop-target plate: stands up facing rot; sinks into the floor when hit (see update)
           const w = (m.r ?? 0.8) * 2;
-          const plate = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.0, w), new THREE.MeshStandardMaterial({ color: '#2a1d10', emissive: '#ff9a2a', emissiveIntensity: 0.8, metalness: 0.3, roughness: 0.4 }));
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.0, w), new THREE.MeshStandardMaterial({ color: '#2a1d10', emissive: this.linkCol.get(mi) ?? '#ff9a2a', emissiveIntensity: 0.8, metalness: 0.3, roughness: 0.4 }));
           plate.position.set(m.x, y + 0.5, m.z);
           plate.rotation.y = -(m.rot ?? 0);
           plate.castShadow = true;
@@ -1120,7 +1127,7 @@ export class GameView {
         }
         case 'portal': {
           const colors = ['#b46bff', '#3cf2ff', '#ffd23a', '#38ffb0'];
-          const col = colors[(m.team ?? 0) % colors.length];
+          const col = this.linkCol.get(mi) ?? colors[(m.team ?? 0) % colors.length];
           const r = m.r ?? 1;
           const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.12, 8, 40), new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
           ring.rotation.x = Math.PI / 2;
@@ -1289,6 +1296,73 @@ export class GameView {
   }
 
   /** surface height for placing props (bowls go below 0; void counts as 0) */
+  /** link decals, one standard look on every table. A link's colour is worn by what lights a shot (its rollovers /
+   *  drop targets) and by the shot; a dotted trail runs between them on the floor (filling as the group is made,
+   *  running toward the shot once it's lit). A closed shot has a cap over it with an X; open, the cap's gone and it
+   *  glows. (Each decal laid flat on the table's slope.) */
+  buildLinkDecals() {
+    if (!this.cfg.arena.pinball) return;
+    const ms = this.cfg.arena.markers, tiltA = this.cfg.arena.tilt ? Math.atan(this.cfg.arena.tilt) : 0;
+    const lay = (x: number, z: number, parts: THREE.Object3D[], flat = true) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(x, this.groundY(x, z), z);
+      pivot.rotation.x = tiltA;
+      for (const p of parts) { if (flat) { p.rotation.x = -Math.PI / 2; p.position.y = 0.06; } pivot.add(p); }
+      this.scene.add(pivot);
+      return pivot;
+    };
+    const mat = (color: string, opacity = 0.3) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, toneMapped: false, depthWrite: false, side: THREE.DoubleSide });
+    const dotGeo = new THREE.CircleGeometry(0.17, 12);
+    for (const l of pinLinks(ms)) {
+      // (the trail starts from the middle of the group that lights it)
+      const sx = l.sources.reduce((a, i) => a + ms[i].x, 0) / l.sources.length, sz = l.sources.reduce((a, i) => a + ms[i].z, 0) / l.sources.length;
+      for (const mi of l.targets) {
+        const m = ms[mi];
+        let x = m.x, z = m.z, r = m.r ?? 1;
+        if (m.kind === 'arena') { const { R, g } = arenaRing(m); x = m.x + Math.cos(g) * (R + 1.4); z = m.z + Math.sin(g) * (R + 1.4); r = 0.9; } // (at its gate)
+        else if (m.kind === 'hive') r = 1.3;
+        else if (m.kind === 'kickback') r = 0.8;
+        // the shot: a ring with arrows pointing in, and a glow while it's open
+        const ring = mat(l.color), glow = new THREE.MeshBasicMaterial({ color: l.color, transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
+        const parts: THREE.Object3D[] = [new THREE.Mesh(new THREE.CircleGeometry(r * 1.45, 40), glow), new THREE.Mesh(new THREE.RingGeometry(r * 1.2, r * 1.42, 40), ring)];
+        for (let k = 0; k < 3; k++) {
+          const a = (k / 3) * Math.PI * 2 + Math.PI / 2, d = r * 1.75, w = r * 0.28;
+          const tri = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape([new THREE.Vector2(0, -w * 1.3), new THREE.Vector2(w, w * 0.6), new THREE.Vector2(-w, w * 0.6)])), ring);
+          tri.geometry.rotateZ(a + Math.PI / 2);
+          tri.geometry.translate(Math.cos(a) * d, Math.sin(a) * d, 0);
+          parts.push(tri);
+        }
+        lay(x, z, parts);
+        // closed: a cap over a saucer / portal / kickback, with an X in the link's colour
+        let cap: THREE.Object3D | undefined;
+        if (m.kind === 'saucer' || m.kind === 'portal' || m.kind === 'kickback') {
+          const lid = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.98, r * 0.98, 0.16, 32), new THREE.MeshStandardMaterial({ color: '#1b1f2c', metalness: 0.6, roughness: 0.4 }));
+          lid.position.y = 0.2;
+          const xm = new THREE.MeshBasicMaterial({ color: l.color, toneMapped: false });
+          const bars = [Math.PI / 4, -Math.PI / 4].map((a) => { const b = new THREE.Mesh(new THREE.BoxGeometry(r * 1.5, 0.04, 0.16), xm); b.rotation.y = a; b.position.y = 0.3; return b; });
+          cap = lay(m.x, m.z, [lid, ...bars], false);
+        }
+        this.linkShots.push({ mi, ch: l.ch, ring, glow, cap });
+        // the trail: dots from the group to the shot
+        const dx = x - sx, dz = z - sz, L = Math.hypot(dx, dz), n = Math.floor((L - 2.6) / 1.0);
+        const dots: THREE.MeshBasicMaterial[] = [];
+        for (let k = 0; k < n; k++) {
+          const f = (1.3 + (k + 0.5) * ((L - 2.6) / n)) / L, dm = mat(l.color, 0.2);
+          lay(sx + dx * f, sz + dz * f, [new THREE.Mesh(dotGeo, dm)]);
+          dots.push(dm);
+        }
+        this.linkTrails.push({ srcs: l.sources, ch: l.ch, mi, dots });
+      }
+    }
+  }
+
+  /** is this link's shot open? (a channel lit · an arena unlocked · a hive's swarm out) */
+  linkOpen(s: GameState, mi: number, ch?: number) {
+    const pin = s.pin!, m = this.cfg.arena.markers[mi];
+    if (ch !== undefined) return !!pin.armed?.[ch];
+    return m.kind === 'arena' ? pin.lit[mi] || pin.duel?.mi === mi : pin.swarmHive === mi && pin.swarm.length > 0;
+  }
+
   groundY(x: number, z: number) {
     const h = this.terrain.height(x, z);
     return h <= VOID ? 0 : h;
@@ -1619,8 +1693,19 @@ export class GameView {
     for (const p of this.portals) p.rotation.z += dt * 2.5;
     if (s.pin) {
       for (const d of this.drops) { const down = s.pin.lit[d.mi]; const ty = d.y + (down ? -0.55 : 0.5); d.g.position.y += (ty - d.g.position.y) * Math.min(1, dt * 18); }
-      for (const k of this.kickbacks) { const armed = (s.pin.tm[k.mi] ?? 0) <= 0; k.mat.color.set(armed ? '#38ffb0' : '#3a4250'); k.mat.opacity = armed ? 0.6 + 0.35 * Math.sin(this.time * 6) : 0.5; }
+      for (const k of this.kickbacks) { const km = this.cfg.arena.markers[k.mi], armed = (s.pin.tm[k.mi] ?? 0) <= 0 && (km.need === undefined || !!s.pin.armed?.[km.need]); k.mat.color.set(armed ? this.linkCol.get(k.mi) ?? '#38ffb0' : '#3a4250'); k.mat.opacity = armed ? 0.6 + 0.35 * Math.sin(this.time * 6) : 0.5; }
       for (const p of this.posts) { const ty = p.y + (s.pin.save > 0 ? 0.55 : -0.6); p.g.position.y += (ty - p.g.position.y) * Math.min(1, dt * 12); }
+      for (const d of this.linkShots) {
+        const open = this.linkOpen(s, d.mi, d.ch);
+        d.ring.opacity = open ? 0.8 + 0.2 * Math.sin(this.time * 7) : 0.35;
+        d.glow.opacity = open ? 0.4 + 0.2 * Math.sin(this.time * 7) : 0;
+        if (d.cap) d.cap.visible = !open;
+      }
+      for (const tr of this.linkTrails) {
+        // filling from the group as it's made · running toward the shot once it's open
+        const open = this.linkOpen(s, tr.mi, tr.ch), made = tr.srcs.filter((i) => s.pin!.lit[i]).length / tr.srcs.length, n = tr.dots.length;
+        tr.dots.forEach((m, k) => { m.opacity = open ? (((this.time * 1.6 - k / 4) % 1) + 1) % 1 < 0.4 ? 0.95 : 0.35 : k < Math.round(made * n) ? 0.75 : 0.16; });
+      }
       for (const l of this.lights) l.mat.color.set(s.pin.skill?.mi === l.mi ? (Math.sin(this.time * 14) > 0 ? '#ffffff' : '#ff3bd0') : s.pin.lit[l.mi] ? '#ffffff' : l.base); // (the skill-shot lane flashes)
       // arena gates: solid red while locked, gone while open (a flicker as it shuts)
       for (const g of this.gates) {

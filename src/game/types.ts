@@ -13,7 +13,7 @@ export const MODES: ModeInfo[] = [
   { id: 'ffa', name: 'All For One', tag: 'Free-for-all', desc: 'Everyone for themselves. KOs score, last spinner gets a bonus.', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: true, target: 6, time: 100, arenas: ['crater', 'hex-colosseum', 'ramp-park', 'kidney-pool', 'titan-colosseum', 'mega-bowl', 'ramp-park-xl'] },
   { id: 'ctf', name: 'Capture the Flag', tag: 'Teams', desc: 'Grab the enemy core and bring it home. Hard hits make carriers drop it.', minPlayers: 2, maxPlayers: 8, teams: 2, rounds: false, target: 3, time: 240, arenas: ['twin-forts', 'twin-forts-xl', 'ramp-park', 'ramp-park-xl', 'crater'] },
   { id: 'rush', name: 'Crystal Rush', tag: 'Items', desc: 'Collect crystals, smash rivals to make them spill. Item boxes everywhere.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 0, time: 150, arenas: ['ramp-park', 'ramp-park-xl', 'crater', 'mega-bowl', 'kidney-pool', 'twin-forts'] },
-  { id: 'koth', name: 'King of the Hill', tag: 'Zone', desc: 'Hold the zone alone to score. The zone moves!', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: false, target: 45, time: 180, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'ramp-park', 'titan-colosseum', 'mega-bowl'] },
+  { id: 'koth', name: 'King of the Hill', tag: 'Zone', desc: 'Stay in the zone to score — everyone inside banks time (or only a lone holder, with SHARED TIME off). The zone moves!', minPlayers: 2, maxPlayers: 8, teams: 0, rounds: false, target: 45, time: 180, arenas: ['hex-colosseum', 'crater', 'kidney-pool', 'ramp-park', 'titan-colosseum', 'mega-bowl'] },
   { id: 'race', name: 'Grand Prix', tag: 'Race', desc: 'F-Zero style laps on floating sky tracks. Boost strips, jumps, items. Fall off and you respawn behind.', minPlayers: 1, maxPlayers: 8, teams: 0, rounds: false, target: 3, time: 300, arenas: ['neon-circuit', 'sky-serpent', 'crystal-canyon', 'inferno-gauntlet', 'frost-byte', 'hyper-tube', 'crossfire-8', 'trefoil'] },
   { id: 'gauntlet', name: 'Gauntlet', tag: 'Solo / Co-op', desc: 'Collect 15 gems through automated hazards and drones before your spin dies.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 15, time: 300, arenas: ['gauntlet-works', 'gauntlet-mega', 'ramp-park', 'kidney-pool'] },
   { id: 'quest', name: 'Blade Quest', tag: 'Adventure', desc: 'Platforming adventure: jump gaps, climb levels, dodge drone hives, grab gems and reach the goal. Checkpoints respawn you and refill your spin.', minPlayers: 1, maxPlayers: 4, teams: 1, rounds: false, target: 0, time: 600, arenas: ['quest-neon-run', 'quest-coaster', 'quest-sky-steps', 'quest-glacier', 'quest-hive-valley', 'quest-gauntlet-peak'] },
@@ -54,7 +54,7 @@ export interface MatchConfig {
   rubber?: number;
   /** pinball: steering nudges the table (default on); off = flippers only */
   nudge?: boolean;
-  /** king of the hill: every top in the zone banks time, not only one holding it alone (faster, scrappier games) */
+  /** king of the hill: every top in the zone banks time, not only one holding it alone (default on; false = alone only) */
   kothShare?: boolean;
   /** online rooms: the room's chosen song (whole song, so guests without it hear it too) */
   song?: import('./music').Song;
@@ -154,6 +154,8 @@ export interface GameState {
     swarm: { x: number; z: number; vx: number; vz: number; hp: number; zap: number; ph: number }[]; swarmT: number; swarmHive: number;
     /** an arena duel under way (marker, ball, time left) and the guardian blade's top id (-1 = none yet) */
     duel: { mi: number; ball: number; t: number; game: 'duel' | 'koth'; hold: [number, number] } | null; foe: number;
+    /** link channels that are lit (by channel number): their shooters work until used */
+    armed?: boolean[];
     /** the skill shot: the lane (marker) lit by the last launch, and how long it stays lit */
     skill?: { mi: number; t: number; best?: number } | null };
 }

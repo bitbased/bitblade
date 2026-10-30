@@ -41,7 +41,7 @@ const L = {
   /** pinball: steering nudges the table (fills the tilt meter); off = flippers only, like a classic table */
   nudge: true,
   /** king of the hill: everyone in the zone banks time */
-  kothShare: false,
+  kothShare: true,
   target: 4,
   time: 90,
   slots: [] as Slot[],

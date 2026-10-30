@@ -2,7 +2,7 @@
 import { computeStats, type BladeStats } from '../core/blade';
 import { Terrain, VOID, type Marker } from './terrain';
 import { hazardPose, closestOnSeg } from './hazards';
-import { arenaRails, arenaRing, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
+import { arenaRails, arenaRing, linkName, pinLinks, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
 import { aiControl, newAI, type AIState } from './ai';
 import { globalNearest, nearestSample } from './track';
 import {
@@ -104,7 +104,7 @@ export class Sim {
     this.railSegs = railSegments([...(this.cfg.arena.rails ?? []), ...(this.cfg.arena.ramps ?? []).flatMap(rampRails), ...this.markers.flatMap((m, mi) => (m.kind === 'arena' ? arenaRails(m, mi) : []))]);
     // pinball tables (and any arena with flippers): table state
     if (this.cfg.mode === 'pinball' || this.markers.some((m) => m.kind === 'flipper')) {
-      this.s.pin = { flip: this.markers.map((m) => (m.kind === 'flipper' ? m.rot ?? 0 : 0)), lit: this.markers.map(() => false), charge: 0, mult: 0, litT: 0, tilt: 0, tilted: false, warned: false, tm: this.markers.map(() => 0), save: 0, swarm: [], swarmT: 0, swarmHive: -1, duel: null, foe: -1 };
+      this.s.pin = { flip: this.markers.map((m) => (m.kind === 'flipper' ? m.rot ?? 0 : 0)), lit: this.markers.map(() => false), charge: 0, mult: 0, litT: 0, tilt: 0, tilted: false, warned: false, tm: this.markers.map(() => 0), save: 0, swarm: [], swarmT: 0, swarmHive: -1, duel: null, foe: -1, armed: [] };
     }
     this.startLaunch();
   }
@@ -548,6 +548,30 @@ export class Sim {
       }
   }
 
+  flipWas = [false, false];
+  laneChange(dir: number) {
+    const pin = this.s.pin!;
+    for (const team of new Set(this.markers.filter((m) => m.kind === 'rollover' && m.laneChange).map((m) => m.team))) {
+      const g = this.markers.map((m, i) => ({ m, i })).filter(({ m }) => m.kind === 'rollover' && m.laneChange && m.team === team).sort((a, b) => a.m.x - b.m.x);
+      const lit = g.map(({ i }) => pin.lit[i]), n = g.length;
+      g.forEach(({ i }, j) => { pin.lit[i] = lit[(j - dir + n) % n]; });
+    }
+  }
+  /** pinball links: a shot with `need` works only while its channel is lit */
+  linkOn(m: Marker) { return m.need === undefined || !!this.s.pin?.armed?.[m.need]; }
+  useLink(m: Marker) { if (m.need !== undefined && this.s.pin?.armed) this.s.pin.armed[m.need] = false; }
+  /** a completed rollover group / drop bank lights its link channel (if it has one) */
+  armLink(group: Marker[]) {
+    const pin = this.s.pin, ch = group.find((q) => q.arms !== undefined)?.arms;
+    if (!pin || ch === undefined || pin.armed?.[ch]) return;
+    (pin.armed ??= [])[ch] = true;
+    const shot = this.markers.find((q) => q.need === ch);
+    if (!shot) return;
+    const color = pinLinks(this.markers).find((l) => l.ch === ch)?.color;
+    this.ev({ k: 'announce', text: `${linkName(this.markers, shot)} LIT`, sub: 'shoot it while it is lit', color });
+    this.ev({ k: 'pin', what: 'unlock', x: shot.x, y: this.ground(shot.x, shot.z), z: shot.z });
+  }
+
   clash(A: TopState, B: TopState, nx: number, nz: number, vn: number, dy: number) {
     const sa = this.st[A.id], sb = this.st[B.id];
     const mA = this.mass(A), mB = this.mass(B);
@@ -970,6 +994,15 @@ export class Sim {
       if (pin.tilt < 0.45) pin.warned = false;
       if (pin.tilt >= 1) { pin.tilted = true; this.ev({ k: 'announce', text: 'TILT', sub: 'flippers are dead until this ball drains' }); this.ev({ k: 'pin', what: 'tilt', x: 0, y: 0, z: 0 }); }
     }
+    // lane change: a flipper press shifts the lit lanes of a lane-change group one step that way (so you can move the
+    // unlit one under the ball)
+    if (table && !pin.tilted && s.phase === 'battle') {
+      for (const side of [-1, 1]) {
+        const down = side < 0 ? !!c0.flipL : !!c0.flipR, k = side < 0 ? 0 : 1;
+        if (down && !this.flipWas[k]) this.laneChange(side);
+        this.flipWas[k] = down;
+      }
+    }
     // flippers
     ms.forEach((m, mi) => {
       if (m.kind !== 'flipper') return;
@@ -1072,15 +1105,16 @@ export class Sim {
     });
     // kickback: an outlane saver — fires the ball straight back up, then needs ~25s to recharge
     ms.forEach((m, mi) => {
-      if (m.kind !== 'kickback' || pin.tm[mi] > 0) return;
+      if (m.kind !== 'kickback' || pin.tm[mi] > 0 || !this.linkOn(m)) return;
       for (const t of s.tops) {
         if (!t.alive || Math.hypot(t.x - m.x, t.z - m.z) > (m.r ?? 0.9) || !this.atLevel(t, m)) continue;
         const a = m.rot ?? -Math.PI / 2, v = m.len ?? 30;
         t.vx = Math.cos(a) * v; t.vz = Math.sin(a) * v;
-        pin.tm[mi] = 25;
+        pin.tm[mi] = m.need !== undefined ? 1 : 25;
+        this.useLink(m);
         this.addScore(t, 250);
         this.ev({ k: 'pin', what: 'kickback', x: m.x, y: t.y, z: m.z, pts: 250 });
-        this.ev({ k: 'announce', text: 'KICKBACK!', sub: 'recharging…' });
+        this.ev({ k: 'announce', text: 'KICKBACK!', sub: m.need !== undefined ? 'light it again to relight it' : 'recharging…' });
         break;
       }
     });
@@ -1108,6 +1142,7 @@ export class Sim {
           this.ev({ k: 'announce', text: 'BANK DOWN!', sub: '+3000 · full spin' });
           this.ev({ k: 'pin', what: 'bank', x: m.x, y: t.y, z: m.z, pts: 3000 });
           for (const { qi } of bank) pin.tm[qi] = 3; // pop back up in 3s
+          this.armLink(bank.map(({ q }) => q));
           ms.forEach((a, ai) => {
             if (a.kind !== 'arena' || (a.team ?? 0) !== (m.team ?? 0) || pin.lit[ai] || pin.duel?.mi === ai) return;
             pin.lit[ai] = true;
@@ -1168,8 +1203,9 @@ export class Sim {
       }
       if (t.noCapT) t.noCapT = Math.max(0, t.noCapT - dt);
       if (t.portalT || t.noCapT) continue;
-      const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8 && this.atLevel(t, m));
+      const mi = ms.findIndex((m) => m.kind === 'saucer' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) * 0.8 && this.atLevel(t, m) && this.linkOn(m));
       if (mi < 0) continue;
+      this.useLink(ms[mi]);
       t.held = mi; t.heldT = ms[mi].aim ? ms[mi].hold ?? 8 : 1.6;
       if (pin.skill && pin.skill.mi === mi && !t.extra) { pin.skill = null; this.addScore(t, 5000); t.spin = Math.max(t.spin, 1); this.ev({ k: 'announce', text: 'SKILL SHOT!', sub: '+5000 · full spin', color: '#ffd23a' }); this.ev({ k: 'pin', what: 'group', x: ms[mi].x, y: t.y, z: ms[mi].z, pts: 5000 }); }
       if (ms[mi].aim) { t.aimA = ms[mi].rot ?? 0; this.ev({ k: 'announce', text: 'TARGET LOCK', sub: 'aim: flippers or ← →  ·  fire: SPACE', color: '#39ff9c' }); this.ev({ k: 'pin', what: 'lock', x: ms[mi].x, y: t.y, z: ms[mi].z }); }
@@ -1204,6 +1240,7 @@ export class Sim {
           t.spin = Math.max(t.spin, 1);
           this.ev({ k: 'announce', text: 'LANES COMPLETE', sub: '+2500 · full spin' });
           this.ev({ k: 'pin', what: 'group', x: m.x, y: t.y, z: m.z, pts: 2500 });
+          this.armLink(group.map(({ q }) => q));
           const hive = ms.findIndex((q) => q.kind === 'hive' && q.team === m.team);
           if (hive >= 0 && table) this.launchSwarm(hive);
         }
@@ -1213,7 +1250,7 @@ export class Sim {
     for (const t of s.tops) {
       if (!t.alive) continue;
       if (t.portalT) { t.portalT = Math.max(0, t.portalT - dt); continue; }
-      const a = ms.find((m) => m.kind === 'portal' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) && this.atLevel(t, m));
+      const a = ms.find((m) => m.kind === 'portal' && Math.hypot(t.x - m.x, t.z - m.z) < (m.r ?? 1) && this.atLevel(t, m) && this.linkOn(m));
       if (!a) continue;
       const b = ms.find((m) => m.kind === 'portal' && m !== a && (m.team ?? 0) === (a.team ?? 0));
       if (!b) continue;
@@ -1222,6 +1259,7 @@ export class Sim {
       t.x = b.x + dir.x * ((b.r ?? 1) + 0.4); t.z = b.z + dir.z * ((b.r ?? 1) + 0.4); t.y = this.ground(t.x, t.z) + 0.3;
       t.vx = dir.x * sp; t.vz = dir.z * sp;
       t.portalT = 0.8;
+      this.useLink(a);
       this.addScore(t, 250);
       this.ev({ k: 'pin', what: 'portal', x: b.x, y: t.y, z: b.z, pts: 250 });
     }
@@ -1384,8 +1422,8 @@ export class Sim {
       // king of the hill: whoever has the ring to themselves banks time; 8s wins
       const inB = Math.hypot(b.x - s.zone.x, b.z - s.zone.z) < s.zone.r, inF = Math.hypot(f.x - s.zone.x, f.z - s.zone.z) < s.zone.r;
       s.zone.owner = inB && !inF ? b.team : inF && !inB ? f.team : inB && inF ? -2 : -1;
-      if (inB && (!inF || this.cfg.kothShare)) d.hold[0] += dt;
-      if (inF && (!inB || this.cfg.kothShare)) d.hold[1] += dt;
+      if (inB && (!inF || this.cfg.kothShare !== false)) d.hold[0] += dt;
+      if (inF && (!inB || this.cfg.kothShare !== false)) d.hold[1] += dt;
       if (d.hold[0] >= 8) res = 1; else if (d.hold[1] >= 8) res = -1;
     }
     if (res) { /* decided on the ring */ }
@@ -1706,7 +1744,7 @@ export class Sim {
       const inside = new Set(s.tops.filter((t) => t.alive && Math.hypot(t.x - z.x, t.z - z.z) < z.r).map((t) => t.team));
       z.owner = inside.size === 1 ? [...inside][0] : inside.size > 1 ? -2 : -1;
       // (shared time: everyone in the zone banks it, contested or not)
-      for (const team of z.owner >= 0 || this.cfg.kothShare ? inside : []) {
+      for (const team of z.owner >= 0 || this.cfg.kothShare !== false ? inside : []) {
         s.teamScores[team] += dt;
         for (const t of s.tops) if (t.team === team && t.alive) t.special = Math.min(1, t.special + dt * 0.05);
       }

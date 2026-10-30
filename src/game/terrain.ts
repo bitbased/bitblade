@@ -35,6 +35,11 @@ export interface Marker { kind: MarkerKind; x: number; z: number; rot?: number; 
   /** pinball: sits on the flyover deck above it, not the floor */ fly?: boolean;
   /** pinball saucer: an aimable lock — the half-arc (rad) you can swing the shot through around `rot` */ aim?: number;
   /** pinball aim lock: seconds before it fires by itself */ hold?: number;
+  /** pinball links: completing this rollover group / drop bank lights link channel `arms` */ arms?: number;
+  /** pinball links: this shooter (saucer, wormhole, kickback, portal) only works while channel `need` is lit — using
+   *  it spends it */ need?: number;
+  /** pinball: what it's called when it lights up ("BLACK HOLE LIT") */ name?: string;
+  /** pinball rollover group: lane change — a flipper press shifts the group's lit lanes one step that way */ laneChange?: boolean;
   /** pinball skill shot: true = a target (each launch lights one; reach it for a bonus) · a number = a rung of a
    *  skill ladder along the launch path (1 = lowest): stop exactly on the lit rung */ skill?: boolean | number;
   /** pinball arena bowl: what's played inside — a 1v1 battle, 1v1 king of the hill, or either at random (default) */ game?: 'duel' | 'koth' | 'random' }
