@@ -726,3 +726,37 @@ body.hints-on .music-chip { bottom: 56px; }
 
 /* phones: the team tag is just RED / BLUE (outlined = auto) — " · AUTO" doesn't fit the card */
 @media (max-width: 700px) { .slot .team-tag .tauto { display: none; } .slot .team-tag { letter-spacing: 0.1em; padding: 2px 6px; } }
+
+/* the online room box: compact (code + invite link on one line, one-line status), and never taller than the space
+   the lobby has for it — so the rules row and START stay on screen in short landscape windows */
+.online-box > .hint:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.online-box .code-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.online-box .code-row .code { font-size: 26px; letter-spacing: 0.22em; flex: none; }
+.online-box .code-row .url { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; }
+.lobby .online-box { max-height: 46vh; overflow-y: auto; }
+@media (max-height: 640px) {
+  .lobby .online-box { gap: 4px; }
+  .lobby .online-box .rm-status { display: none; }
+  .lobby .online-box .code-row .code { font-size: 20px; }
+}
+
+/* the lobby: the cards' row takes what's left of the window (never pushes the rules row off it); in an online room
+   the room box sits beside the cards */
+.lobby { grid-template-rows: auto auto minmax(0, 1fr) auto !important; }
+.lobby .lobby-mid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-height: 0; }
+.lobby .lobby-mid > .slots { min-height: 0 !important; overflow-y: auto !important; overflow-x: hidden !important; align-content: start; }
+.lobby.in-room .lobby-mid { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); }
+.lobby.in-room .lobby-mid > .online-box { margin: 0; max-height: 100%; overflow-y: auto; align-self: start; flex: none; }
+@media (orientation: portrait) {
+  .lobby { grid-template-rows: auto auto auto auto !important; }
+  .lobby .lobby-mid > .slots { overflow: visible !important; }
+  .lobby.in-room .lobby-mid { grid-template-columns: minmax(0, 1fr); }
+}
+/* (in a room the cards share the row with the room box: as many columns as fit, names never cut) */
+@media (orientation: landscape) { .lobby.in-room .lobby-mid > .slots { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)) !important; } }
+.lobby.in-room .lobby-mid { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
+/* (5+ blades beside the room box: four to a row so two rows fit — long names end in … rather than scrolling) */
+@media (orientation: landscape) { .lobby.in-room .lobby-mid > .slots.many { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; } }
+.lobby .slots.many .slot .pname, .lobby .slots.many .slot .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.lobby.in-room .slots.many .slot .bname { font-size: 11px; letter-spacing: 0.02em; text-align: center; display: block; min-width: 0; }
+.lobby.in-room .slots.many .slot .bladepick { grid-template-columns: 22px minmax(0, 1fr) 22px; }

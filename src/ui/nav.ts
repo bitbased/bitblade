@@ -470,7 +470,9 @@ export class MenuNav {
     if (typeof document === 'undefined') return;
     if (!hintsEl) { hintsEl = document.createElement('div'); hintsEl.className = 'nav-hints'; document.body.append(hintsEl); }
     if (activeNav !== this) return;
-    const show = !this.osk && ((lastDevice !== 'mouse' && navUsed) || typing) && this.container.isConnected;
+    // (keyboard / pad navigation only — clicking into a text box with the mouse or a finger shows nothing, and so
+    // never shifts the screen under you)
+    const show = !this.osk && lastDevice !== 'mouse' && navUsed && this.container.isConnected;
     hintsEl.classList.toggle('on', show);
     document.body.classList.toggle('hints-on', show);
     if (!show) return;

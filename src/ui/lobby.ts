@@ -149,6 +149,8 @@ export class LobbyScreen implements Screen {
   /** a full lobby's + PLAYER (in the rules row) */
   joinMini?: HTMLButtonElement;
   startBtn?: HTMLButtonElement;
+  midEl?: HTMLElement;
+  bottomEl?: HTMLElement;
   cpuMini?: HTMLButtonElement;
   /** join mode: listening for a new player's device (time it started, ms) */
   joining = 0;
@@ -424,8 +426,9 @@ export class LobbyScreen implements Screen {
         desc,
         this.startBtn = h<HTMLButtonElement>('button.btn.primary.nav.start-btn', { onclick: () => this.start(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ START')),
       h('div.lobby-top', null, mode.el, size.el, arena.el),
-      this.slotsEl,
-      h('div.lobby-bottom', null,
+      // (the cards, and — in an online room — the room box beside them, so the rules row below stays on screen)
+      this.midEl = h('div.lobby-mid', null, this.slotsEl),
+      this.bottomEl = h('div.lobby-bottom', null,
         h('div.rules', null,
           count, items, nudge, share, rubber, target, time,
           // (at the end of the row: showing / hiding it never shifts the settings under your pointer)
@@ -910,6 +913,11 @@ export class LobbyScreen implements Screen {
   // -------------------------------------------------------------- online host
   renderOnline() {
     const el = this.onlineEl;
+    // in a room: the room box beside the cards; otherwise the small invite box at the end of the rules row
+    const inRoom = this.guest || !!hostRoom.t;
+    const home = inRoom ? this.midEl : this.bottomEl;
+    if (home && el.parentElement !== home) home.append(el);
+    this.el?.classList.toggle('in-room', inRoom);
     if (this.guest) { this.renderGuestBox(); return; }
     if (this.ui) this.ui.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
     // typing a room name: redraw once they're done instead of wiping the field mid-word
@@ -922,7 +930,7 @@ export class LobbyScreen implements Screen {
       ctl.classList.toggle('on', hostRoom.openControl);
       ctl.addEventListener('click', () => this.pushSummary());
       const info = hostRoom.info;
-      const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'Host'}'s room` });
+      const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'Host'}'s room`, title: 'Room name — type to rename' });
       rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; this.app.toast(`Room renamed to ${rname.value.trim() || rname.placeholder}`); });
       rname.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') rname.blur(); });
       const pub = h('div.toggle.panel.nav', { title: t.listable ? 'List this room in Public Rooms' : 'Desktop LAN / tunnel rooms can\'t be listed — host a Cloud room to go public', onclick: () => { if (!t.listable) { this.app.toast('Host a Cloud room to list it publicly'); return; } hostRoom.setInfo({ public: !info.public }); this.app.toast(hostRoom.info.public ? 'Room is now PUBLIC — listed for everyone' : 'Room is now private (invite only)'); this.pushSummary(); this.renderOnline(); } }, h('span.dot'), 'PUBLIC');
@@ -937,10 +945,10 @@ export class LobbyScreen implements Screen {
           } }, 'KEEP ROOM');
       el.append(
         h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'TUNNEL ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
-        h('label.room-name-lbl', null, 'ROOM NAME — type to rename'),
         rname,
-        h('div.code', null, t.code),
-        ...t.invites.slice(1).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', u)),
+        // (the code and the invite link share a line — the room box stays short enough for any screen)
+        h('div.code-row', null, h('div.code', null, t.code),
+          ...t.invites.slice(1, 2).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: `${u} — click to copy` }, icon('link'), ' ', u))),
         roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host'), radio ? RADIO_HOST : null), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
         h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
           h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
@@ -1066,8 +1074,8 @@ export class LobbyScreen implements Screen {
     const watching = lb && !L.slots.some((s) => s.mine);
     el.append(...([
       h('div.hint', null, `${lb?.roomName ? String(lb.roomName).toUpperCase() : 'ONLINE ROOM'} · ${lb ? (this.canCtl ? 'OPEN CONTROL' : `LED BY ${String(lb.leader).toUpperCase()}`) : 'CONNECTING…'}`),
-      h('div.code', null, t.code),
-      h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast('Invite link copied'); }, title: 'Click to copy' }, icon('link'), ' ', link),
+      h('div.code-row', null, h('div.code', null, t.code),
+        h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast('Invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
       watching ? h('div.hint', { style: { color: 'var(--gold)' } }, clientRoom.busy ? 'A match is on — you\'ll join the next one' : 'Room full for this mode — you\'ll play when a place frees up') : null,
       clientRoom.busy && !watching ? h('div.hint', { style: { color: 'var(--gold)' } }, 'A match is on — you\'ll join the next one') : null,
       lb ? roomMusicRow(this.app, { song, by: lb.songBy, canSet: this.canCtl, onSet: (s, radio) => clientRoom.send({ t: 'ctl', a: 'song', song: s, radio }), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }) : null,
