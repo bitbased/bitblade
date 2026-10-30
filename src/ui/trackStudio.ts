@@ -8,7 +8,8 @@
 import * as THREE from 'three';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { buildRibbon, getRenderer } from '../game/render';
-import { BUILTIN_ARENAS, COASTER, THEMES, loadTrackCourses, saveTrackCourses } from '../game/terrain';
+import { BUILTIN_ARENAS, COASTER, THEMES, loadTrackCourses, rideDraft, saveTrackCourses } from '../game/terrain';
+import { draftBar, draftsOf, dropDraft, getDraft, lastOpen, putDraft, setLastOpen } from './drafts';
 import { MODES } from '../game/types';
 import { testRide } from './testRide';
 import { allSongs, songById } from '../game/music';
@@ -69,8 +70,11 @@ class TrackStudio {
   drawing = false;
   hover = -1;
   saveT = 0;
-  /** an untouched copy (a game track, or the starting Rollercoaster copy): not saved into My Tracks until edited */
-  pristine = false;
+  /** the track has edits that aren't saved yet (kept as a draft until SAVE / DISCARD) */
+  dirty = false;
+  /** not in My Tracks yet (new, a copy of a game track, a duplicate, an import): SAVE adds it */
+  fresh = false;
+  bar!: ReturnType<typeof draftBar>;
   // 3D view
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
@@ -91,11 +95,13 @@ class TrackStudio {
     sun.position.set(80, 160, 60);
     this.scene.add(sun);
     this.courses = loadTrackCourses();
-    // back from a test ride: reopen the track you were riding
-    const back = testRide.from === 'tracks' ? this.courses.find((c) => c.id === testRide.id) : undefined;
-    testRide.from = null;
-    this.cur = back ? clone(back) : this.courses[0] ? clone(this.courses[0]) : this.fromCoaster();
-    this.pristine = !back && !this.courses[0];
+    // reopen the track you were on (back from a test ride, or last time) — on its draft, if it has one
+    const want = testRide.from === 'tracks' ? testRide.id : lastOpen('track');
+    testRide.from = null; rideDraft.track = null;
+    const saved = want ? this.courses.find((c) => c.id === want) : undefined, draft = want ? getDraft<NodeCourse>('track', want) : null;
+    if (saved || draft) this.cur = this.load(saved ?? draft!.work);
+    else if (this.courses[0]) this.cur = this.load(this.courses[0]);
+    else { this.cur = this.fromCoaster(); this.fresh = true; }
     this.root = this.build();
     app.root.append(this.root);
     this.nav = new MenuNav(app, this.el.panel, () => this.escape());
@@ -120,6 +126,7 @@ class TrackStudio {
 
   // ------------------------------------------------------------------ layout
   build() {
+    this.bar = draftBar(this.app, { what: 'track', state: () => ({ dirty: this.dirty, fresh: this.fresh }), onSave: () => this.save(), onDiscard: () => this.discard() });
     const name = h<HTMLInputElement>('input.ts-name', { type: 'text', maxLength: 32, title: 'Track name' });
     name.addEventListener('change', () => { this.cur.name = name.value.trim() || 'Untitled'; this.changed(false); this.renderList(); });
     this.el.name = name;
@@ -128,20 +135,20 @@ class TrackStudio {
     this.el.stats = h('div.ts-stats');
     const top = h('div.ts-top', null,
       h('button.btn.small.nav', { onclick: () => this.back(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back'),
-      h('div.ts-title', null, 'TRACK STUDIO'), name, this.el.tabs, this.el.stats, h('div.spacer'),
+      h('div.ts-title', null, 'TRACK STUDIO'), name, this.bar.el, this.el.tabs, this.el.stats, h('div.spacer'),
       h('button.btn.small.nav.ts-drawbtn', { onclick: () => this.toggleDraw(), title: 'Sketch a new path; it becomes points you can then shape' }, icon('ramp'), ' Draw new path'),
       h('button.btn.primary.nav', { onclick: () => this.testRide(), 'data-p': 'START', 'data-ps': 'OPTIONS' }, '▶ TEST RIDE'));
 
     this.el.list = h('div.ts-list');
     // the game's own tracks: open an editable copy of any of them
-    const builtin = h('div.ts-list.ts-builtin', null, ...this.builtins().map((b) => h('div.ts-item.nav', { title: `Open an editable copy of ${b.name}`, onclick: () => { this.persist(); this.open(b.make()); this.pristine = true; this.saveT = 0; } }, h('b', null, b.name), h('span', null, 'copy ›'))));
+    const builtin = h('div.ts-list.ts-builtin', null, ...this.builtins().map((b) => h('div.ts-item.nav', { title: `Open an editable copy of ${b.name}`, onclick: () => this.open(b.make(), true) }, h('b', null, b.name), h('span', null, 'copy ›'))));
     const left = h('div.ts-panel.ts-left', null,
       h('h3', null, 'MY TRACKS'), this.el.list,
       h('h3', null, 'GAME TRACKS'), builtin,
       h('div.ts-btns', null,
-        h('button.btn.small.nav', { onclick: () => this.open(starter(true)) }, '+ New race track'),
-        h('button.btn.small.nav', { onclick: () => this.open(starter(false)) }, '+ New adventure'),
-        h('button.btn.small.nav', { onclick: () => this.open({ ...clone(this.cur), id: newId(), name: this.cur.name + ' copy' }) }, 'Duplicate'),
+        h('button.btn.small.nav', { onclick: () => this.open(starter(true), true) }, '+ New race track'),
+        h('button.btn.small.nav', { onclick: () => this.open(starter(false), true) }, '+ New adventure'),
+        h('button.btn.small.nav', { onclick: () => this.open({ ...clone(this.cur), id: newId(), name: this.cur.name + ' copy' }, true) }, 'Duplicate'),
         h('button.btn.small.nav', { onclick: () => this.exportJson() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importJson() }, 'Import'),
         h('button.btn.small.nav.ts-danger', { onclick: () => this.deleteCourse() }, 'Delete')));
@@ -191,11 +198,18 @@ class TrackStudio {
   changed(geometry = true, snapshot = false) {
     if (snapshot) this.snapshot();
     if (geometry) this.recompute();
-    this.saveT = 0.5; this.pristine = false;
+    this.edited();
+  }
+
+  /** an edit: the work in progress is kept as a draft (My Tracks only changes on SAVE) */
+  edited() {
+    this.saveT = 0.5;
+    if (!this.dirty) { this.dirty = true; this.renderList(); }
+    this.bar?.update();
   }
 
   snapshot() { this.undoStack.push(JSON.stringify(this.cur)); if (this.undoStack.length > 60) this.undoStack.shift(); }
-  undo() { const s = this.undoStack.pop(); if (!s) return; this.cur = JSON.parse(s); this.sel = { kind: 'none' }; this.recompute(); this.renderPanel(); this.saveT = 0.5; this.pristine = false; }
+  undo() { const s = this.undoStack.pop(); if (!s) return; this.cur = JSON.parse(s); this.sel = { kind: 'none' }; this.recompute(); this.renderPanel(); this.edited(); }
 
   // ------------------------------------------------------------------ map view
   w2s(x: number, z: number): [number, number] { const r = this.map; return [r.width / 2 + (x - this.cx) * this.scale, r.height / 2 + (z - this.cz) * this.scale]; }
@@ -454,7 +468,7 @@ class TrackStudio {
     this.cur.spans.splice(k, 1, a, b);
     this.recompute();
     this.select({ kind: 'node', i: k + 1 });
-    this.saveT = 0.5; this.pristine = false;
+    this.edited();
     this.app.sfx.play('tick');
   }
 
@@ -619,7 +633,7 @@ class TrackStudio {
         h('button.ts-segbtn.nav' + (!c.closed ? '.on' : ''), { onclick: () => this.setClosed(false), title: 'Open: start → goal with checkpoints (Blade Quest)' }, 'ADVENTURE')),
       h('div.ts-grid', null, num('ROAD WIDTH m', c.width, 6, 20, 0.5, (v) => { c.width = v; }, 'Default width (points can override it)'), h('div.ts-field', null, h('label', null, 'THEME'), theme)),
       h('div.ts-field', null, h('label', null, 'MUSIC'), h<HTMLSelectElement>('select', {
-        onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; c.song = v || undefined; this.pristine = false; this.persist(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
+        onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; c.song = v || undefined; this.edited(); if (v) this.app.sfx.playSong(songById(v)); else this.app.sfx.useMusic('menu'); },
       }, h('option', { value: '' }, 'Auto (a fitting preset)'), ...allSongs().map((s) => h('option', { value: s.id, selected: c.song === s.id }, `♪ ${s.name}${s.custom ? '' : ' ★'}`)))),
       h('div.ts-row', null,
         h('button.btn.small.nav', { onclick: () => this.transform((x, z) => [x * 0.9, z * 0.9]), title: 'Shrink the whole track 10%' }, 'Scale −'),
@@ -641,26 +655,67 @@ class TrackStudio {
   renderList() {
     const el = this.el.list;
     el.innerHTML = '';
+    // (tracks with unsaved edits are marked; new unsaved ones sit at the top until saved or thrown away)
+    const drafts = new Map(draftsOf<NodeCourse>('track').map((x) => [x.id, x.d]));
+    if (this.dirty || this.fresh) drafts.set(this.cur.id, { work: this.cur, fresh: this.fresh, t: Date.now() });
     const all = [...this.courses];
-    if (!all.some((x) => x.id === this.cur.id)) all.unshift(this.cur);
-    for (const c of all) el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : ''), { onclick: () => { if (c.id !== this.cur.id) { this.persist(); this.open(clone(c)); } } }, h('b', null, c.name), h('span', null, c.closed ? 'Race loop' : 'Adventure')));
+    for (const [id, d] of [...drafts].sort((a, b) => a[1].t - b[1].t)) if (d.fresh && !all.some((x) => x.id === id)) all.unshift(id === this.cur.id ? this.cur : d.work);
+    for (const c of all) {
+      const d = drafts.get(c.id), show = c.id === this.cur.id ? this.cur : d ? d.work : c;
+      el.append(h('div.ts-item.nav' + (c.id === this.cur.id ? '.on' : '') + (d ? '.draft' : ''), { onclick: () => { if (c.id !== this.cur.id) this.open(c); } },
+        h('b', null, (d ? '● ' : '') + show.name), h('span', null, d?.fresh ? 'New · unsaved' : d ? 'Unsaved' : show.closed ? 'Race loop' : 'Adventure')));
+    }
   }
 
-  open(c: NodeCourse) { this.pristine = false; this.cur = c; this.sel = { kind: 'none' }; this.undoStack = []; this.framed3d = false; this.recompute(); this.fit(); if (this.view === '3d') this.frame3d(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = c.name; this.saveT = 0.3; }
+  /** the working copy of a track: its draft if it has one, else a copy of the saved track */
+  load(c: NodeCourse): NodeCourse {
+    const d = getDraft<NodeCourse>('track', c.id);
+    this.dirty = !!d; this.fresh = d ? d.fresh : false;
+    setLastOpen('track', c.id);
+    return clone(d ? d.work : c);
+  }
 
+  /** switch tracks (what you were on stays as a draft); fresh: a new track that isn't in My Tracks yet */
+  open(c: NodeCourse, fresh = false) {
+    this.persist();
+    if (fresh) { this.cur = c; this.dirty = false; this.fresh = true; setLastOpen('track', c.id); } else this.cur = this.load(c);
+    this.bar?.update();
+    this.sel = { kind: 'none' }; this.undoStack = []; this.framed3d = false; this.recompute(); this.fit(); if (this.view === '3d') this.frame3d(); this.renderPanel(); this.renderList(); (this.el.name as HTMLInputElement).value = this.cur.name; this.saveT = 0; }
+
+  /** keep the work in progress as a draft (never touches My Tracks — SAVE does that) */
   persist() {
-    if (this.pristine) return;
+    if (!this.dirty) return;
+    putDraft('track', this.cur.id, this.cur, this.fresh);
+  }
+
+  save() {
+    if (!this.dirty && !this.fresh) return;
     const i = this.courses.findIndex((c) => c.id === this.cur.id);
     const copy = clone(this.cur);
     if (i >= 0) this.courses[i] = copy; else this.courses.unshift(copy);
     saveTrackCourses(this.courses);
+    dropDraft('track', this.cur.id);
+    this.dirty = false; this.fresh = false; this.saveT = 0;
+    this.bar.update(); this.renderList();
+    this.app.toast(`Saved ${this.cur.name}`);
+  }
+
+  discard() {
+    dropDraft('track', this.cur.id);
+    const saved = this.courses.find((c) => c.id === this.cur.id);
+    this.dirty = false; this.fresh = false; this.saveT = 0;
+    if (saved) this.open(saved); else if (this.courses[0]) this.open(this.courses[0]); else this.open(this.fromCoaster(), true);
+    this.app.toast(saved ? 'Changes discarded' : 'Unsaved track thrown away');
   }
 
   deleteCourse() {
+    if (this.fresh) { this.app.toast('Not saved yet — DISCARD throws it away'); return; }
     if (!confirmTwice(this.app, 'ts-del-' + this.cur.id, `Press again to delete ${this.cur.name}`)) return;
     this.courses = this.courses.filter((c) => c.id !== this.cur.id);
     saveTrackCourses(this.courses);
-    this.open(this.courses[0] ? clone(this.courses[0]) : starter(true));
+    dropDraft('track', this.cur.id);
+    this.dirty = false;
+    if (this.courses[0]) this.open(this.courses[0]); else this.open(starter(true), true);
   }
 
   exportJson() { navigator.clipboard?.writeText(JSON.stringify(this.cur)); this.app.toast('Track copied to the clipboard'); }
@@ -668,14 +723,15 @@ class TrackStudio {
   importJson() {
     const txt = prompt('Paste a Track Studio track');
     if (!txt) return;
-    try { const c = JSON.parse(txt) as NodeCourse; if (!Array.isArray(c.nodes) || c.nodes.length < 2) throw new Error('no points'); c.id = newId(); c.theme ??= THEMES.neon; c.spans ??= []; this.open(c); this.fixSpans(); }
+    try { const c = JSON.parse(txt) as NodeCourse; if (!Array.isArray(c.nodes) || c.nodes.length < 2) throw new Error('no points'); c.id = newId(); c.theme ??= THEMES.neon; c.spans ??= []; this.open(c, true); this.fixSpans(); }
     catch (e) { this.app.toast(`Couldn't import: ${(e as Error).message}`); }
   }
 
   testRide() {
-    this.pristine = false; // (riding it saves it: the lobby loads it from My Tracks)
-    this.persist();
     if (this.issues.some((x) => x.includes('passes over itself'))) { this.app.toast('Fix the overlap first: a track can’t pass over itself'); return; }
+    // (rides the draft as it is — nothing is saved; back in the studio you're still on your draft)
+    this.persist();
+    rideDraft.track = clone(this.cur);
     testRide.from = 'tracks'; testRide.id = this.cur.id;
     this.app.go('lobby', { mode: this.cur.closed ? 'race' : 'quest', arenaId: this.cur.id });
   }
@@ -735,6 +791,7 @@ class TrackStudio {
   }
 
   onKey = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.save(); return; } // (from the name box too)
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.undo(); return; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel.kind === 'node') { e.preventDefault(); this.deleteNode(this.sel.i); }
@@ -891,7 +948,7 @@ class TrackStudio {
 
   update(dt: number) {
     this.nav.update(dt);
-    if (this.saveT > 0) { this.saveT -= dt; if (this.saveT <= 0) { this.persist(); this.renderList(); } }
+    if (this.saveT > 0) { this.saveT -= dt; if (this.saveT <= 0) this.persist(); }
     if (this.view === '3d') {
       const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
       this.camera.position.set(this.target.x + Math.sin(this.yaw) * cp * this.dist, this.target.y + sp * this.dist, this.target.z + Math.cos(this.yaw) * cp * this.dist);

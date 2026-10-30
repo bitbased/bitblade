@@ -1183,8 +1183,15 @@ export function saveTrackCourses(list: NodeCourse[]) {
   compiledCache.clear();
 }
 const compiledCache = new Map<string, ArenaDef>();
+/**
+ * A test ride rides what's in the editor — the draft — without saving it: while it's set, the lobby and the match
+ * find this version (it replaces the saved one with the same id, or joins the list if it's never been saved).
+ */
+export const rideDraft = { track: null as NodeCourse | null, course: null as ArenaDef | null };
 function trackStudioArenas(): ArenaDef[] {
-  return loadTrackCourses().map((c) => {
+  const list = loadTrackCourses(), d = rideDraft.track;
+  if (d) { const i = list.findIndex((c) => c.id === d.id); if (i >= 0) list[i] = d; else list.unshift(d); }
+  return list.map((c) => {
     const key = JSON.stringify(c);
     let a = compiledCache.get(key);
     if (!a) { a = { ...compileNodeCourse(c).arena, custom: true }; compiledCache.set(key, a); }
@@ -1192,7 +1199,9 @@ function trackStudioArenas(): ArenaDef[] {
   });
 }
 export function allArenas(): ArenaDef[] {
-  return [...BUILTIN_ARENAS, ...loadCustomArenas(), ...trackStudioArenas()];
+  const custom = loadCustomArenas(), d = rideDraft.course;
+  if (d) { const i = custom.findIndex((a) => a.id === d.id); if (i >= 0) custom[i] = d; else custom.unshift(d); }
+  return [...BUILTIN_ARENAS, ...custom, ...trackStudioArenas()];
 }
 export function findArena(id: string) {
   return allArenas().find((a) => a.id === id) ?? BUILTIN_ARENAS[0];

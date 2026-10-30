@@ -3,6 +3,7 @@
 // auto-orienting walls, drag-to-aim/size markers, brush + rectangle fill, mirror symmetry, templates.
 import * as THREE from 'three';
 import { testRide } from './testRide';
+import { draftBar, draftsOf, dropDraft, getDraft, lastOpen, putDraft, setLastOpen } from './drafts';
 import { allSongs, songById } from '../game/music';
 import { PadCursor } from './padCursor';
 import './courseDesigner.css';
@@ -12,7 +13,7 @@ import { getRenderer, buildArenaMesh, buildSky, buildRailMeshes } from '../game/
 import { arenaRails, pinballStarter, railPolyline, rampRails, segDist, tiltLift, type Rail } from '../game/pinball';
 import { hazardPose } from '../game/hazards';
 import {
-  Terrain, VOID, PIECES, THEMES, BUILTIN_ARENAS, loadCustomArenas, saveCustomArenas, courseHeight, pieceAt,
+  Terrain, VOID, PIECES, THEMES, BUILTIN_ARENAS, loadCustomArenas, saveCustomArenas, rideDraft, courseHeight, pieceAt,
   type ArenaDef, type Marker, type MarkerKind, type PieceKind, type Piece, type CourseDef,
 } from '../game/terrain';
 
@@ -307,6 +308,11 @@ class CourseEditor {
   time = 0;
   rebuildT = -1;
   saveT = -1;
+  /** the course has edits that aren't saved yet (kept as a draft until SAVE / DISCARD) */
+  dirty = false;
+  /** not in My Courses yet (new, a copy of a built-in, a duplicate, an import): SAVE adds it */
+  fresh = false;
+  bar: ReturnType<typeof draftBar> | null = null;
   drag: DragState | null = null;
   rightDown: { x: number; y: number; moved: boolean } | null = null;
   midDown: { x: number; y: number } | null = null;
@@ -344,12 +350,17 @@ class CourseEditor {
     this.padHint = h('div.cd-padhint', null, ...['Ⓐ use tool / click', 'Ⓧ erase', 'Ⓑ back', 'Ⓨ courses', 'LB RB rotate', '✚ ◀▶ tool · ▲▼ level', 'LT RT zoom', 'R-stick orbit', 'L3 frame', 'SELECT undo', 'START test'].map((t) => h('span', null, t)));
     this.root.append(this.padHint);
     app.root.appendChild(this.root);
-    const back = testRide.from === 'courses' ? this.custom.find((a) => a.id === testRide.id) : undefined;
-    testRide.from = null;
-    const first = back ?? this.custom[0] ?? BUILTIN_ARENAS.find((a) => a.course)!;
+    // reopen the course you were on (back from a test ride, or last time) — on its draft, if it has one
+    const want = testRide.from === 'courses' ? testRide.id : lastOpen('course');
+    testRide.from = null; rideDraft.course = null;
+    const draft = want ? getDraft<ArenaDef>('course', want) : null;
+    const first = (want && (this.custom.find((a) => a.id === want) ?? BUILTIN_ARENAS.find((a) => a.id === want && a.course) ?? draft?.work)) || this.custom[0] || BUILTIN_ARENAS.find((a) => a.course)!;
     this.select(first);
     this.resize();
+    addEventListener('keydown', this.onSaveKey);
   }
+  /** Ctrl+S saves (and the browser's own save-page dialog stays away) */
+  onSaveKey = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.save(true); } };
 
   // ============================================================ DOM
   buildDom() {
@@ -407,11 +418,13 @@ class CourseEditor {
     const c = this.def.course!;
     const modeSel = h<HTMLSelectElement>('select.cd-input', { onchange: (e: Event) => { this.testMode = (e.target as HTMLSelectElement).value; } },
       ...TEST_MODES.map((m) => h('option', { value: m.id, selected: m.id === this.testMode }, m.label)));
+    this.bar = this.def.custom ? draftBar(this.app, { what: 'course', state: () => ({ dirty: this.dirty, fresh: this.fresh }), onSave: () => this.save(true), onDiscard: () => this.discard() }) : null;
     T.append(
       h('div.cd-top-name', { onclick: () => { if (!this.drawerOpen) this.toggleDrawer(); } },
-        h('b', null, this.def.name), h('span', null, `${c.w}×${c.h} · ${this.def.custom ? 'auto-saved' : 'template — edits make your copy'}`)),
+        h('b', null, this.def.name), h('span', null, `${c.w}×${c.h}${this.def.custom ? '' : ' · built-in — edits make your copy'}`)),
+      ...(this.bar ? [this.bar.el] : []),
       modeSel,
-      h('button.btn.cd-go', { title: 'Save and try it in the lobby', onclick: () => this.testRide() }, icon('play'), ' TEST'),
+      h('button.btn.cd-go', { title: 'Try it in the lobby (rides your draft as it is — nothing is saved)', onclick: () => this.testRide() }, icon('play'), ' TEST'),
     );
   }
 
@@ -420,12 +433,19 @@ class CourseEditor {
     L.innerHTML = '';
     const lib = h('div.cd-lib');
     const templates = BUILTIN_ARENAS.filter((a) => a.course);
-    const item = (a: ArenaDef, tag: string) =>
-      h('div.cd-lib-item' + (this.def?.id === a.id ? '.cd-active' : ''), { onclick: () => this.select(a) },
-        h('span.cd-lib-name', null, a.name), h('span.cd-tag', null, tag));
+    // (courses with unsaved edits are marked; new unsaved ones sit at the top until saved or thrown away)
+    const drafts = new Map(draftsOf<ArenaDef>('course').map((x) => [x.id, x.d]));
+    if (this.def?.custom && (this.dirty || this.fresh)) drafts.set(this.def.id, { work: this.def, fresh: this.fresh, t: Date.now() });
+    const item = (a: ArenaDef, tag: string) => {
+      const d = drafts.get(a.id), show = this.def?.id === a.id ? this.def : d ? d.work : a;
+      return h('div.cd-lib-item' + (this.def?.id === a.id ? '.cd-active' : '') + (d ? '.draft' : ''), { onclick: () => { if (this.def?.id !== a.id) this.select(a); } },
+        h('span.cd-lib-name', null, (d ? '● ' : '') + show.name), h('span.cd-tag', null, d?.fresh ? 'new · unsaved' : d ? 'unsaved' : tag));
+    };
+    const mine = [...this.custom];
+    for (const [id, d] of [...drafts].sort((a, b) => a[1].t - b[1].t)) if (d.fresh && !mine.some((a) => a.id === id)) mine.unshift(id === this.def?.id ? this.def : d.work);
     lib.append(h('div.cd-sub', null, 'MY COURSES'));
-    if (!this.custom.length) lib.append(h('div.cd-muted', null, 'None yet — start from a template below.'));
-    for (const a of this.custom) lib.append(item(a, `${a.course!.w}×${a.course!.h}`));
+    if (!mine.length) lib.append(h('div.cd-muted', null, 'None yet — start from a template below.'));
+    for (const a of mine) lib.append(item(a, `${a.course!.w}×${a.course!.h}`));
     lib.append(h('div.cd-sub', null, 'BUILT-IN'));
     for (const a of templates) lib.append(item(a, `${a.course!.w}×${a.course!.h}`));
 
@@ -442,11 +462,14 @@ class CourseEditor {
     const del = h<HTMLButtonElement>('button.btn.cd-danger', {
       onclick: () => {
         if (!this.def.custom) return this.app.toast('Built-in courses cannot be deleted');
+        if (this.fresh) return this.app.toast('Not saved yet — DISCARD throws it away');
         if (!this.delArmed) { this.delArmed = true; del.textContent = 'Confirm?'; setTimeout(() => { this.delArmed = false; del.textContent = 'Delete'; }, 2500); return; }
         this.delArmed = false;
         this.custom = this.custom.filter((a) => a.id !== this.def.id);
-        this.persist();
-        this.select(this.custom[0] ?? templates[0]);
+        this.writeLibrary();
+        dropDraft('course', this.def.id);
+        this.dirty = false;
+        this.select(this.custom[0] ?? templates[0], false, false);
       },
     }, 'Delete');
     const fileIn = h<HTMLInputElement>('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onchange: (e: Event) => this.importFile(e) });
@@ -700,8 +723,23 @@ class CourseEditor {
   }
 
   // ============================================================ course management
-  select(a: ArenaDef) {
-    this.def = a;
+  /**
+   * Open a course. Your own: a working copy (its draft, if it has one — the saved one only changes on SAVE).
+   * Built-ins open read-only; the first edit makes your copy. fresh: a new course that isn't in My Courses yet.
+   * keep: what you were on stays as a draft (off when it was just saved / thrown away / deleted).
+   */
+  select(a: ArenaDef, fresh = false, keep = true) {
+    if (keep && this.def) this.persist();
+    this.saveT = -1;
+    if (fresh) { this.def = a; this.dirty = false; this.fresh = true; setLastOpen('course', a.id); }
+    else if (!a.custom && !getDraft('course', a.id)) { this.def = a; this.dirty = false; this.fresh = false; setLastOpen('course', a.id); }
+    else {
+      const d = getDraft<ArenaDef>('course', a.id);
+      this.def = JSON.parse(JSON.stringify(d ? d.work : a));
+      this.def.custom = true;
+      this.dirty = !!d; this.fresh = d ? d.fresh : false;
+      setLastOpen('course', a.id);
+    }
     this.selected = -1;
     this.undo = [];
     this.redo = [];
@@ -724,12 +762,12 @@ class CourseEditor {
     copy.id = newId();
     copy.name = this.def.name + ' Copy';
     copy.custom = true;
-    this.custom.push(copy);
     this.def = copy;
+    this.fresh = true; this.dirty = true;
     this.persist();
     this.renderDrawer();
     this.renderTop();
-    this.app.toast('Built-in course copied — editing your own version');
+    this.app.toast('Editing your own copy — SAVE keeps it in My Courses');
     return true;
   }
 
@@ -743,10 +781,8 @@ class CourseEditor {
       ...(t === 'pinball' ? (({ rails, tilt, pinball }) => ({ rails, tilt, pinball }))(pinballStarter()) : {}),
     };
     if (t === 'pinball') this.testMode = 'pinball';
-    this.custom.push(def);
-    this.persist();
-    this.select(def);
-    this.app.toast('Course created');
+    this.select(def, true);
+    this.app.toast('New course — SAVE keeps it in My Courses');
   }
 
   duplicate() {
@@ -754,28 +790,61 @@ class CourseEditor {
     copy.id = newId();
     copy.name = this.def.name + ' Copy';
     copy.custom = true;
-    this.custom.push(copy);
-    this.persist();
-    this.select(copy);
+    this.select(copy, true);
   }
 
-  persist() {
+  /** My Courses, as saved */
+  writeLibrary() {
     const others = loadCustomArenas().filter((a) => !a.course);
     saveCustomArenas([...others, ...this.custom]);
   }
 
-  scheduleSave() { if (this.def.custom) this.saveT = 0.6; }
+  /** keep the work in progress as a draft (never touches My Courses — SAVE does that) */
+  persist() {
+    if (!this.def?.custom || !this.dirty) return;
+    putDraft('course', this.def.id, this.def, this.fresh);
+  }
+
+  /** an edit: mark it unsaved and keep the draft fresh */
+  scheduleSave() {
+    if (!this.def.custom) return;
+    this.saveT = 0.6;
+    if (!this.dirty) {
+      this.dirty = true;
+      // (mark it in the course list without rebuilding the drawer — you may be typing its name there)
+      const on = this.el.drawer?.querySelector('.cd-lib-item.cd-active');
+      if (on && !on.classList.contains('draft')) { on.classList.add('draft'); const n = on.querySelector('.cd-lib-name'); if (n) n.textContent = '● ' + this.def.name; const t = on.querySelector('.cd-tag'); if (t) t.textContent = this.fresh ? 'new · unsaved' : 'unsaved'; }
+    }
+    this.bar?.update();
+  }
 
   save(explicit = false) {
     if (!this.def.course?.pieces.length) { this.app.toast('Course needs at least one piece'); return false; }
     if (!this.def.custom) { if (explicit) this.ensureEditable(); else return true; }
-    this.persist();
-    if (explicit && !this.def.markers.some((m) => m.kind === 'spawn')) this.app.toast('Saved — no spawns placed, they will be auto-generated');
+    if (!this.dirty && !this.fresh) return true;
+    const copy: ArenaDef = JSON.parse(JSON.stringify(this.def));
+    const i = this.custom.findIndex((a) => a.id === copy.id);
+    if (i >= 0) this.custom[i] = copy; else this.custom.push(copy);
+    this.writeLibrary();
+    dropDraft('course', this.def.id);
+    this.dirty = false; this.fresh = false; this.saveT = -1;
+    this.renderDrawer(); this.renderTop();
+    this.app.toast(this.def.markers.some((m) => m.kind === 'spawn') ? `Saved ${this.def.name}` : `Saved ${this.def.name} — no spawns placed, they will be auto-generated`);
     return true;
   }
 
+  discard() {
+    dropDraft('course', this.def.id);
+    const saved = this.custom.find((a) => a.id === this.def.id);
+    this.dirty = false; this.fresh = false; this.saveT = -1;
+    this.select(saved ?? this.custom[0] ?? BUILTIN_ARENAS.find((a) => a.course)!, false, false);
+    this.app.toast(saved ? 'Changes discarded' : 'Unsaved course thrown away');
+  }
+
   testRide() {
-    if (!this.save(true)) return;
+    if (!this.def.course?.pieces.length) { this.app.toast('Course needs at least one piece'); return; }
+    // (rides the draft as it is — nothing is saved; back in the builder you're still on your draft)
+    if (this.def.custom) { this.persist(); rideDraft.course = JSON.parse(JSON.stringify(this.def)); }
     testRide.from = 'courses'; testRide.id = this.def.id;
     this.app.go('lobby', { mode: this.def.pinball ? 'pinball' : this.testMode === 'pinball' ? 'duel' : this.testMode, arenaId: this.def.id });
   }
@@ -801,10 +870,8 @@ class CourseEditor {
       d.theme ??= { ...THEMES.concrete };
       d.name ??= 'Imported Course';
       d.desc ??= '';
-      this.custom.push(d);
-      this.persist();
-      this.select(d);
-      this.app.toast('Course imported');
+      this.select(d, true);
+      this.app.toast('Course imported — SAVE keeps it in My Courses');
     } catch {
       this.app.toast('Import failed — not a BitBlade course file');
     }
@@ -2070,7 +2137,8 @@ class CourseEditor {
   }
 
   dispose() {
-    if (this.saveT > 0) this.persist();
+    this.persist(); // (unsaved work stays as a draft: it's here next time)
+    removeEventListener('keydown', this.onSaveKey);
     this.root.remove();
     disposeTree(this.scene);
     this.scene.clear();

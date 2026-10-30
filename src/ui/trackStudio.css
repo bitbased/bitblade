@@ -98,3 +98,7 @@
   .ts-item span { display: none; }
   .ts-help { font-size: 10px; }
 }
+
+/* (the SAVE / DISCARD bar makes the top busier: keep the view tabs on one line, let the stats give way) */
+.ts-top .ts-tab { white-space: nowrap; }
+.ts-top .ts-stats { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

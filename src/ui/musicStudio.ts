@@ -8,6 +8,7 @@ import {
   type Lane, type ScaleId, type Song,
 } from '../game/music';
 import { setBackdropVisible } from './backdrop';
+import { draftBar, draftsOf, dropDraft, getDraft, lastOpen, putDraft, setLastOpen } from './drafts';
 import './musicStudio.css';
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -26,8 +27,13 @@ class MusicStudio {
   lane = 0; // selected lane
   holdMode = false; // roll: click extends a held note instead of placing one
   playing = false;
-  loopPattern = true;
+  loopPattern = false; // (▶ plays the whole song, as people expect — PATTERN loops just the one you're editing)
   saveT = 0;
+  /** the song has edits that aren't saved yet (kept as a draft until SAVE / DISCARD) */
+  dirty = false;
+  /** not in My Songs yet (new, a copy, a surprise, an import): SAVE adds it */
+  fresh = false;
+  private bar: ReturnType<typeof draftBar> | null = null;
   private el: Record<string, HTMLElement> = {};
   private cells: HTMLElement[][] = []; // [lane][step]
   private rollCells: HTMLElement[][] = []; // [row][step]
@@ -40,38 +46,82 @@ class MusicStudio {
   constructor(private app: App) {
     setBackdropVisible(true, app.canvas);
     app.sfx.playSong(null); // quiet while editing; ▶ plays the song you're working on
-    this.song = clone(this.custom[0] ?? PRESET_SONGS[0]);
+    // reopen where you left off (on its draft, if it has one)
+    const last = lastOpen('song'), lastDraft = last ? getDraft<Song>('song', last) : null;
+    const from = (last && (this.custom.find((s) => s.id === last) ?? PRESET_SONGS.find((s) => s.id === last) ?? (lastDraft ? sanitizeSong(lastDraft.work) : null))) || this.custom[0] || PRESET_SONGS[0];
+    this.song = this.load(from);
     this.root = h('div.ms-root');
     app.root.append(this.root);
     this.render();
     this.nav = new MenuNav(app, this.root, () => this.app.back());
+    addEventListener('keydown', this.onKey);
+  }
+  private onKey = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.save(); } };
+
+  /** the working copy of a song: its draft if it has one, else a copy of the saved song */
+  load(s: Song): Song {
+    const d = getDraft<Song>('song', s.id);
+    this.dirty = !!d; this.fresh = !!d?.fresh;
+    setLastOpen('song', s.id);
+    return d ? { ...sanitizeSong(d.work), id: s.id, custom: true } : clone(s);
   }
 
   get isPreset() { return !this.song.custom; }
 
   // ------------------------------------------------------------------ editing helpers
-  /** presets are read-only: the first edit makes your own copy */
+  /** presets are read-only: the first edit starts your own (unsaved) copy */
   editable() {
     if (!this.isPreset) return true;
-    const copy = { ...clone(this.song), id: newSong().id, name: this.song.name + ' (mine)', custom: true };
-    this.custom.unshift(copy);
-    this.song = copy;
-    this.app.toast('Made your own copy to edit');
-    this.renderList();
-    this.renderTop();
+    this.song = { ...clone(this.song), id: newSong().id, name: this.song.name + ' (mine)', custom: true };
+    this.fresh = true; this.dirty = true;
+    this.app.toast('Editing your own copy — SAVE keeps it in My Songs');
+    this.persist();
+    this.renderListSoon();
+    this.renderBarSlot();
     return true;
   }
-  changed() { this.saveT = 0.4; if (this.playing) this.app.sfx.player?.play(this.song, false); }
+  changed() {
+    this.saveT = 0.4;
+    if (!this.dirty) { this.dirty = true; this.renderListSoon(); }
+    this.bar?.update();
+    if (this.playing) this.app.sfx.player?.play(this.song, false);
+  }
+  /** keep the work in progress as a draft (never touches My Songs — SAVE does that) */
   persist() {
-    if (this.isPreset) return;
+    if (this.isPreset || !(this.dirty || this.fresh)) return;
+    putDraft('song', this.song.id, this.song, this.fresh);
+  }
+  save() {
+    if (this.isPreset) { this.app.toast('Presets are read-only — edit it to make your own copy'); return; }
+    if (!this.dirty && !this.fresh) return;
     const i = this.custom.findIndex((s) => s.id === this.song.id);
     if (i >= 0) this.custom[i] = clone(this.song); else this.custom.unshift(clone(this.song));
     saveCustomSongs(this.custom);
+    dropDraft('song', this.song.id);
+    this.dirty = false; this.fresh = false; this.saveT = 0;
+    this.bar?.update(); this.renderList();
+    this.app.toast(`Saved ${this.song.name}`);
   }
-  open(s: Song) {
-    this.persist();
-    this.song = clone(s);
+  discard() {
+    dropDraft('song', this.song.id);
+    const saved = this.custom.find((s) => s.id === this.song.id) ?? PRESET_SONGS.find((s) => s.id === this.song.id);
+    this.saveT = 0; this.dirty = false; this.fresh = false;
+    this.open(saved ?? this.custom[0] ?? PRESET_SONGS[0], false);
+    this.app.toast(saved ? 'Changes discarded' : 'Unsaved song thrown away');
+  }
+  open(s: Song, keep = true) {
+    if (keep) this.persist();
+    this.song = this.load(s);
     this.pat = 0; this.part = 0;
+    if (this.playing) this.app.sfx.playSong(this.song);
+    this.render();
+  }
+  /** start on a song that isn't in My Songs yet (new / surprise / copy / import) */
+  openFresh(s: Song) {
+    this.persist();
+    this.song = s; this.fresh = true; this.dirty = true;
+    this.pat = 0; this.part = 0;
+    this.persist();
     if (this.playing) this.app.sfx.playSong(this.song);
     this.render();
   }
@@ -110,6 +160,8 @@ class MusicStudio {
   renderTop() {
     const s = this.song, T = this.el.top;
     T.innerHTML = '';
+    this.el.barSlot = h('span.ms-barslot');
+    this.renderBarSlot();
     const name = h<HTMLInputElement>('input.ms-name.nav', { value: s.name, placeholder: 'Song name', oninput: () => { this.editable(); this.song.name = name.value; this.changed(); this.renderListSoon(); } });
     const slider = (label: string, val: number, min: number, max: number, step: number, fmt: (v: number) => string, on: (v: number) => void) => {
       const out = h('b', null, fmt(val));
@@ -127,6 +179,7 @@ class MusicStudio {
       h('button.btn.small.nav', { onclick: () => this.app.back(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back'),
       h('div.ms-title', null, 'MUSIC STUDIO'),
       name,
+      this.el.barSlot,
       h('button.btn.primary.nav.ms-play', { onclick: () => this.togglePlay() }, this.playing ? '■ STOP' : '▶ PLAY'),
       h('div.ms-seg', null,
         h('button.nav' + (this.loopPattern ? '.on' : ''), { onclick: () => this.setLoopPattern(true), title: 'Loop the pattern you are editing' }, 'PATTERN'),
@@ -141,26 +194,43 @@ class MusicStudio {
 
   private listT = 0;
   renderListSoon() { this.listT = 0.3; }
+  /** the top bar's SAVE / DISCARD (or, on a preset, a note that edits make your own copy) */
+  renderBarSlot() {
+    const slot = this.el.barSlot;
+    if (!slot) return;
+    slot.innerHTML = '';
+    if (this.isPreset) { this.bar = null; slot.append(h('span.draft-status.ms-preset', { title: 'Presets are read-only: any edit starts your own copy' }, '★ Preset — edits make your copy')); return; }
+    this.bar = draftBar(this.app, { what: 'song', state: () => ({ dirty: this.dirty, fresh: this.fresh }), onSave: () => this.save(), onDiscard: () => this.discard() });
+    slot.append(this.bar.el);
+  }
   renderList() {
     const L = this.el.left;
     L.innerHTML = '';
-    const item = (s: Song) => h('div.ms-item.nav' + (s.id === this.song.id ? '.on' : ''), { onclick: () => { if (s.id !== this.song.id) this.open(s); } },
-      h('b', null, s.name), h('span', null, `${s.custom ? '' : '★ '}${SCALES[s.scale].mood} · ${s.bpm}`));
+    // (songs with unsaved edits are marked; brand-new unsaved ones sit at the top of My Songs until saved or thrown away)
+    const drafts = new Map(draftsOf<Song>('song').map((x) => [x.id, x.d]));
+    if (this.dirty || this.fresh) drafts.set(this.song.id, { work: this.song, fresh: this.fresh, t: Date.now() });
+    const item = (s: Song) => {
+      const d = drafts.get(s.id), cur = s.id === this.song.id ? this.song : d ? d.work : s;
+      return h('div.ms-item.nav' + (s.id === this.song.id ? '.on' : '') + (d ? '.draft' : ''), { onclick: () => { if (s.id !== this.song.id) this.open(s); } },
+        h('b', null, (d ? '● ' : '') + cur.name), h('span', null, d?.fresh ? 'new · not saved yet' : `${d ? 'unsaved changes · ' : ''}${s.custom ? '' : '★ '}${SCALES[cur.scale]?.mood ?? ''} · ${cur.bpm}`));
+    };
+    const freshOnes = [...drafts].filter(([id, d]) => d.fresh && !this.custom.some((c) => c.id === id)).sort((a, b) => b[1].t - a[1].t).map(([id, d]) => ({ ...sanitizeSong(d.work), id, custom: true }));
+    const mine = [...freshOnes, ...this.custom];
     const isMenu = musicPrefs.menu === this.song.id;
     // actions stay pinned at the top; only the song lists scroll (a long library never hides them)
     L.append(
       h('div.ms-actions', null,
-        h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.custom.unshift(s); saveCustomSongs(this.custom); this.open(s); } }, '+ New'),
+        h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.openFresh(s); } }, '+ New'),
         h('button.btn.small.nav', { onclick: () => this.surprise() }, '🎲 Surprise'),
-        h('button.btn.small.nav', { onclick: () => { const c = { ...clone(this.song), id: newSong().id, name: this.song.name + ' copy', custom: true }; this.custom.unshift(c); saveCustomSongs(this.custom); this.open(c); } }, 'Duplicate'),
+        h('button.btn.small.nav', { onclick: () => this.openFresh({ ...clone(this.song), id: newSong().id, name: this.song.name + ' copy', custom: true }) }, 'Duplicate'),
         h('button.btn.small.nav', { onclick: () => this.exportSong() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importSong() }, 'Import'),
-        this.isPreset ? null : h('button.btn.small.nav.ms-danger', { onclick: () => this.deleteSong() }, 'Delete'),
-        h('button.btn.small.nav.ms-wide' + (isMenu ? '.on' : ''), { onclick: () => { musicPrefs.menu = isMenu ? 'neon-drive' : this.song.id; saveMusicPrefs(); this.persist(); this.renderList(); this.app.toast(isMenu ? 'Menu music back to Neon Drive' : `${this.song.name} is now the menu music`); } }, isMenu ? '♪ Menu music ✓' : '♪ Use as menu music'),
+        this.isPreset || this.fresh ? null : h('button.btn.small.nav.ms-danger', { onclick: () => this.deleteSong() }, 'Delete'),
+        h('button.btn.small.nav.ms-wide' + (isMenu ? '.on' : ''), { onclick: () => { if (this.fresh) { this.app.toast('Save the song first'); return; } musicPrefs.menu = isMenu ? 'neon-drive' : this.song.id; saveMusicPrefs(); this.renderList(); this.app.toast(isMenu ? 'Menu music back to Neon Drive' : `${this.song.name} is now the menu music`); } }, isMenu ? '♪ Menu music ✓' : '♪ Use as menu music'),
       ),
       h('div.ms-scroll', null,
         h('h3', null, `MY SONGS (${this.custom.length})`),
-        h('div.ms-list', null, ...(this.custom.length ? this.custom.map(item) : [h('div.ms-muted', null, 'Nothing yet — start from a preset or a new song.')])),
+        h('div.ms-list', null, ...(mine.length ? mine.map(item) : [h('div.ms-muted', null, 'Nothing yet — start from a preset or a new song.')])),
         h('h3', null, 'PRESETS'),
         h('div.ms-list', null, ...PRESET_SONGS.map(item)),
         h('div.ms-muted', null, 'Pick a song for a track or course in Track Studio / Course Builder. Settings chooses menu & match music.'),
@@ -330,10 +400,7 @@ class MusicStudio {
 
   // ------------------------------------------------------------------ songs
   surprise() {
-    const s = surpriseSong();
-    this.custom.unshift(s);
-    saveCustomSongs(this.custom);
-    this.open(s);
+    this.openFresh(surpriseSong());
     if (!this.playing) this.togglePlay();
     this.setLoopPattern(false);
   }
@@ -349,7 +416,7 @@ class MusicStudio {
       try {
         const s = sanitizeSong(JSON.parse(await inp.files![0].text()));
         s.id = newSong().id; s.custom = true;
-        this.custom.unshift(s); saveCustomSongs(this.custom); this.open(s);
+        this.openFresh(s);
       } catch (e) { this.app.toast(`Couldn't import: ${(e as Error).message}`); }
     };
     inp.click();
@@ -358,8 +425,9 @@ class MusicStudio {
     if (!confirmTwice(this.app, 'ms-del-' + this.song.id, `Press again to delete ${this.song.name}`)) return;
     this.custom = this.custom.filter((s) => s.id !== this.song.id);
     saveCustomSongs(this.custom);
-    this.song = clone(this.custom[0] ?? PRESET_SONGS[0]);
-    this.render();
+    dropDraft('song', this.song.id);
+    this.dirty = false; this.fresh = false;
+    this.open(this.custom[0] ?? PRESET_SONGS[0], false);
   }
 
   // ------------------------------------------------------------------ frame
@@ -385,7 +453,8 @@ class MusicStudio {
   }
 
   dispose() {
-    this.persist();
+    this.persist(); // (unsaved work stays as a draft: it's here next time)
+    removeEventListener('keydown', this.onKey);
     this.root.remove();
     this.app.sfx.useMusic('menu');
   }
