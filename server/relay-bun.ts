@@ -1,9 +1,11 @@
 // BitBlade relay (Bun). Same protocol as electron/relay-node.cjs and worker/src/index.ts.
 //   ws  /room/<CODE|new>?role=host|client&name=<name>
+//   ws  /mm?name=<name>  -> the QUICK MATCH queue (server/matchmaker.ts)
 //   GET /health -> ok ; GET /api/rooms -> public room list ; static ./dist ; /join/<code> -> dist/index.html
 import { existsSync, statSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 import type { ServerWebSocket } from "bun";
+import { Matchmaker } from "./matchmaker";
 
 const PORT = Number(process.env.RELAY_PORT ?? 8787);
 const DIST = resolve(import.meta.dir, "..", "dist");
@@ -11,7 +13,7 @@ const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_RE = /^[A-Z0-9]{4,10}$/;
 const LISTING_TTL = 75_000;
 
-type Peer = { id: number; role: "host" | "client"; name: string; code: string; key: string };
+type Peer = { id: number; role: "host" | "client" | "mm"; name: string; code: string; key: string };
 type Room = { code: string; host: ServerWebSocket<Peer> | null; clients: Map<number, ServerWebSocket<Peer>>; nextId: number };
 
 const rooms = new Map<string, Room>();
@@ -31,6 +33,12 @@ function genCode(): string {
 }
 
 const send = (ws: ServerWebSocket<Peer>, m: unknown) => { try { ws.send(JSON.stringify(m)); } catch {} };
+
+// the QUICK MATCH queue: one matchmaker for everyone connected to this relay
+const queued = new Map<number, ServerWebSocket<Peer>>();
+let nextQ = 1;
+const mm = new Matchmaker((id, m) => { const ws = queued.get(id); if (ws) send(ws, m); }, genCode);
+setInterval(() => { if (mm.tickets.size) mm.tick(); }, 1000);
 
 function serveStatic(path: string): Response {
   if (!existsSync(DIST)) return new Response("BitBlade relay (no dist build)", { status: 200 });
@@ -52,6 +60,10 @@ const server = Bun.serve<Peer>({
       const list = [...listings.values()].sort((a, b) => Number(a.inMatch) - Number(b.inMatch) || b.players - a.players || b.updated - a.updated);
       return Response.json({ rooms: list.slice(0, 100), now }, { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } });
     }
+    if (url.pathname === "/mm") {
+      if (srv.upgrade(req, { data: { id: nextQ++, role: "mm", name: (url.searchParams.get("name") ?? "").slice(0, 16), code: "", key: "" } })) return;
+      return new Response("upgrade failed", { status: 400 });
+    }
     const m = url.pathname.match(/^\/room\/([A-Za-z0-9]+)$/);
     if (m) {
       const role = url.searchParams.get("role") === "host" ? "host" : "client";
@@ -68,6 +80,7 @@ const server = Bun.serve<Peer>({
   websocket: {
     open(ws) {
       const p = ws.data;
+      if (p.role === "mm") { queued.set(p.id, ws); return; }
       let room = rooms.get(p.code);
       if (p.role === "host") {
         if (!p.code || room?.host) { send(ws, { t: "error", msg: "room already hosted" }); ws.close(); return; }
@@ -87,6 +100,7 @@ const server = Bun.serve<Peer>({
     },
     message(ws, raw) {
       const p = ws.data;
+      if (p.role === "mm") { let q: any; try { q = JSON.parse(String(raw)); } catch { return; } mm.message(p.id, { ...q, name: q?.name ?? p.name }); return; }
       const room = rooms.get(p.code);
       if (!room) return;
       let msg: any;
@@ -114,6 +128,7 @@ const server = Bun.serve<Peer>({
     },
     close(ws) {
       const p = ws.data;
+      if (p.role === "mm") { queued.delete(p.id); mm.remove(p.id); return; }
       const room = rooms.get(p.code);
       if (!room) return;
       if (p.role === "host" && room.host === ws) {

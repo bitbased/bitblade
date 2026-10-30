@@ -2,11 +2,15 @@
 // public room directory. Same protocol as server/relay-bun.ts and electron/relay-node.cjs.
 //   ws  /room/<CODE|new>?role=host|client&name=<name>[&key=<owner key>]
 //   GET /api/rooms -> public room list (JSON)
+//   ws  /mm?name=<name> -> the QUICK MATCH queue (one global instance; server/matchmaker.ts)
+
+import { Matchmaker } from "../../server/matchmaker";
 
 export interface Env {
   ASSETS: Fetcher;
   ROOMS: DurableObjectNamespace;
   DIR: DurableObjectNamespace;
+  QUEUE: DurableObjectNamespace;
 }
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -36,6 +40,10 @@ export default {
     // has to be served from the root — at /join/<CODE> its scripts resolved to /join/assets/… and the page was blank)
     const join = url.pathname.match(/^\/join\/([A-Za-z0-9]{4,10})\/?$/);
     if (join) return Response.redirect(`${url.origin}/?join=${join[1].toUpperCase()}`, 302);
+    if (url.pathname === "/mm") {
+      if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
+      return env.QUEUE.get(env.QUEUE.idFromName("global")).fetch(req);
+    }
     if (url.pathname === "/api/rooms") {
       if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
       const r = await dir(env).fetch(new Request("https://dir/list"));
@@ -200,5 +208,45 @@ export class Directory {
       return new Response("ok");
     }
     return new Response("not found", { status: 404 });
+  }
+}
+
+/**
+ * The QUICK MATCH queue (one global instance). It holds its sockets in memory while anyone's queued, ticks every
+ * second, and hands out room codes no room is using right now (the Room objects check codes when the host connects).
+ */
+export class Queue {
+  private socks = new Map<number, WebSocket>();
+  private next = 1;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private mm = new Matchmaker((id, m) => { const ws = this.socks.get(id); if (ws) try { ws.send(JSON.stringify(m)); } catch {} }, genCode);
+  constructor(private state: DurableObjectState, private env: Env) {}
+
+  async fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const pair = new WebSocketPair();
+    const [clientSide, ws] = [pair[0], pair[1]];
+    ws.accept();
+    const id = this.next++;
+    const name = (url.searchParams.get("name") ?? "").slice(0, 16);
+    this.socks.set(id, ws);
+    ws.addEventListener("message", (e) => {
+      let m: any;
+      try { m = JSON.parse(typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data as ArrayBuffer)); } catch { return; }
+      this.mm.message(id, { ...m, name: m?.name ?? name });
+      this.ensureTimer();
+    });
+    const gone = () => { this.socks.delete(id); this.mm.remove(id); };
+    ws.addEventListener("close", gone);
+    ws.addEventListener("error", gone);
+    return new Response(null, { status: 101, webSocket: clientSide });
+  }
+
+  private ensureTimer() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      if (!this.mm.tickets.size) { clearInterval(this.timer!); this.timer = null; return; }
+      this.mm.tick();
+    }, 1000);
   }
 }

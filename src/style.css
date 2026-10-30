@@ -760,3 +760,19 @@ body.hints-on .music-chip { bottom: 56px; }
 .lobby .slots.many .slot .pname, .lobby .slots.many .slot .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .lobby.in-room .slots.many .slot .bname { font-size: 11px; letter-spacing: 0.02em; text-align: center; display: block; min-width: 0; }
 .lobby.in-room .slots.many .slot .bladepick { grid-template-columns: 22px minmax(0, 1fr) 22px; }
+
+/* QUICK MATCH window */
+.qm-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(2, 3, 8, 0.6); padding: 16px; }
+.qm-panel { width: min(640px, 100%); max-height: 100%; overflow-y: auto; padding: 18px 20px; }
+.qm-body { display: flex; flex-direction: column; gap: 12px; }
+.qm-head { display: flex; align-items: center; justify-content: space-between; }
+.qm-head h2 { margin: 0; font-family: var(--font-h); letter-spacing: 0.12em; color: var(--accent); }
+.qm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.qm-chip { font-family: var(--font-h); font-size: 11px; letter-spacing: 0.1em; padding: 7px 10px; background: rgba(0, 0, 0, 0.35); color: var(--muted); border: 1px solid var(--line); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.qm-chip.on { color: #05060a; background: var(--accent); border-color: var(--accent); }
+.qm-chip:disabled { cursor: default; opacity: 0.75; }
+.qm-status { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--gold); background: rgba(255, 210, 58, 0.06); }
+.qm-status b { font-family: var(--font-h); letter-spacing: 0.12em; color: var(--gold); }
+.qm-status span { font-size: 13px; color: var(--text); }
+.qm-status .qm-modes { color: var(--muted); font-size: 12px; }
+.qm-searching { border-color: var(--gold) !important; color: var(--gold) !important; }

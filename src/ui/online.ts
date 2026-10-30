@@ -14,6 +14,8 @@ import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
 import { acceptSong, onRoomSong, roomMusicRow } from './roomMusic';
+import { quickMatchPanel } from './quickMatch';
+import { queue } from '../net/queue';
 
 /** what the lobby needs to open a room the way the hub set it up */
 export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean }
@@ -48,14 +50,17 @@ export class OnlineScreen implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(true, app.canvas);
-    const a = (arg ?? {}) as { join?: string; resume?: boolean; rejoin?: string };
+    const a = (arg ?? {}) as { join?: string; resume?: boolean; rejoin?: string; match?: string };
     try { this.myBlade = findBlade(localStorage.getItem('bitblade.lastBlade') || ''); } catch { /* ignore */ }
     this.el = this.buildHub(a.join ?? '');
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1);
+    queue.listeners.add(this.renderQmBtn);
+    this.renderQmBtn();
     // in a room: it's shown in the lobby (the same screen the host uses)
     if (a.resume && clientRoom.t) { queueMicrotask(() => this.app.go('lobby', { guest: true })); return; }
+    else if (a.match) this.joinMatch(a.match);
     else if (a.join) this.join(a.join);
     else if (a.rejoin) this.startRetry(a.rejoin);
     this.refreshList();
@@ -101,7 +106,7 @@ export class OnlineScreen implements Screen {
     const col = (w: string, ...kids: (Node | null)[]) => h('div.panel', { style: { padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', width: w, flex: '1 1 auto' } }, ...kids);
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.leave() }, '◀ Back'), h('div.screen-title', null, 'ONLINE'), h('div.screen-sub', null, 'Public rooms · quick match · your saved rooms'),
-        h('div.spacer'), h('button.btn.primary.nav', { onclick: () => this.quickMatch() }, icon('bolt'), ' QUICK MATCH')),
+        h('div.spacer'), h('button.btn.primary.nav.qm-open', { onclick: () => this.quickMatch() }, '⚡ QUICK MATCH')),
       h('div.online-grid', null,
         col('min(520px, 100%)',
           h('div.row-head', null, h('h3', null, 'PUBLIC ROOMS'), h('div.spacer'), filter, h('button.btn.small.nav', { onclick: () => this.refreshList(true) }, '↻')),
@@ -171,15 +176,18 @@ export class OnlineScreen implements Screen {
   }
 
   /** join the busiest public room that has a free slot (lobby first); otherwise offer to host one */
-  async quickMatch() {
-    await this.refreshList();
-    const open = this.filtered().filter((r) => r.players < r.max);
-    const pick = open.find((r) => !r.inMatch) ?? open[0];
-    if (pick) { this.app.toast(`Quick match: ${pick.name || pick.code}`); this.join(publicJoinInput(pick.code)); return; }
-    const mode: ModeId = this.modeFilter === 'all' ? 'duel' : this.modeFilter;
-    if (!confirmTwice(this.app, 'qm-host', 'No open public rooms — press QUICK MATCH again to host a public one')) return;
-    this.app.go('lobby', { mode, online: true, room: { name: '', public: true, persistent: false } satisfies RoomOpts });
+  /** QUICK MATCH: the queue window (pick modes, search; a match takes you straight into the room) */
+  quickMatch() {
+    if (this.el.querySelector('.qm-overlay')) return;
+    const p = quickMatchPanel(this.app, () => { this.nav = new MenuNav(this.app, this.el, () => this.leave()); this.renderQmBtn(); });
+    this.el.append(p);
+    this.nav = new MenuNav(this.app, p, () => p.querySelector<HTMLButtonElement>('.qm-head .btn')?.click());
   }
+  /** the head's QUICK MATCH button shows a search that's still going */
+  renderQmBtn = () => {
+    const b = this.el?.querySelector<HTMLElement>('.qm-open');
+    if (b) b.textContent = queue.active ? `⚡ SEARCHING ${queue.waited()}` : '⚡ QUICK MATCH';
+  };
 
   // -------------------------------------------------------------- my rooms
   renderMyRooms() {
@@ -266,8 +274,22 @@ export class OnlineScreen implements Screen {
       h('button.btn.small.nav', { onclick: () => { this.retry = null; this.roomEl.innerHTML = ''; } }, 'Stop waiting'));
   }
 
-  async join(input: string, quiet = false) {
-    if (!input.trim()) { this.app.toast('Enter a room code or link'); return; }
+  /** a match from the queue: the host is opening the room right now — keep trying for a little while */
+  async joinMatch(code: string) {
+    const until = performance.now() + 20_000;
+    this.roomEl.innerHTML = '';
+    this.roomEl.append(h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — joining room ${code}…`));
+    while (this.el.isConnected && performance.now() < until) {
+      if (await this.join(code, true)) return;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!this.el.isConnected) return;
+    this.roomEl.innerHTML = '';
+    this.roomEl.append(h('div.hint', { style: { color: 'var(--red)' } }, 'The match\'s room didn\'t open — try QUICK MATCH again'));
+  }
+
+  async join(input: string, quiet = false): Promise<boolean> {
+    if (!input.trim()) { this.app.toast('Enter a room code or link'); return false; }
     if (!quiet) { this.retry = null; this.roomEl.innerHTML = ''; this.roomEl.append(h('div.hint', null, 'Connecting…')); }
     try {
       const t = await joinAny(input, settings.playerName || 'Guest');
@@ -278,10 +300,12 @@ export class OnlineScreen implements Screen {
       clientRoom.send({ t: 'hello', name: settings.playerName || 'Guest', blade: this.myBlade });
       this.app.sfx.play('select');
       this.app.go('lobby', { guest: true });
+      return true;
     } catch (e) {
-      if (quiet) return;
+      if (quiet) return false;
       this.roomEl.innerHTML = '';
       this.roomEl.append(h('div.hint', { style: { color: 'var(--red)' } }, `Could not join: ${(e as Error).message || e}`));
+      return false;
     }
   }
 
@@ -361,6 +385,7 @@ export class OnlineScreen implements Screen {
   }
 
   unmount() {
+    queue.listeners.delete(this.renderQmBtn);
     clientRoom.handler = null;
     clientRoom.closeHandler = null;
     this.el.remove();

@@ -14,6 +14,8 @@ import { courseDesignerScreen } from './ui/courseDesigner';
 import { trackStudioScreen } from './ui/trackStudio';
 import { musicStudioScreen } from './ui/musicStudio';
 import { updateBackdrop, resizeBackdrop, setBackdropVisible } from './ui/backdrop';
+import { queue } from './net/queue';
+import { onQueueMatch } from './ui/quickMatch';
 
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
 const root = document.getElementById('ui') as HTMLElement;
@@ -103,6 +105,9 @@ addEventListener('resize', () => {
   resizeBackdrop();
   current?.resize?.();
 });
+
+// QUICK MATCH: what a match found by the queue does, from whatever screen you're on
+queue.onMatch = (m) => onQueueMatch(app, m);
 
 // deep link: /join/CODE or ?join=CODE  → straight to the online join flow
 const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);

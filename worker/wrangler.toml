@@ -9,7 +9,7 @@ routes = [{ pattern = "bitblade.bitbased.net", custom_domain = true }]
 directory = "../dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/room/*", "/health", "/api/*", "/join/*"]
+run_worker_first = ["/room/*", "/health", "/api/*", "/join/*", "/mm"]
 
 [[durable_objects.bindings]]
 name = "ROOMS"
@@ -19,6 +19,10 @@ class_name = "Room"
 name = "DIR"
 class_name = "Directory"
 
+[[durable_objects.bindings]]
+name = "QUEUE"
+class_name = "Queue"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
@@ -26,3 +30,7 @@ new_sqlite_classes = ["Room"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Directory"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Queue"]

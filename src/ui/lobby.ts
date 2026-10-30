@@ -19,6 +19,8 @@ import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
 import { acceptSong, armRadio, onRoomSong, RADIO_HOST, roomMusicRow, roomRadio, roomSongHost } from './roomMusic';
+import { queue } from '../net/queue';
+import { MATCH_COUNTDOWN, pendingMatch, travel } from './quickMatch';
 import type { Song } from '../game/music';
 
 /** auto: a ghost CPU — a place the mode needs filled; it plays as a CPU unless a player takes it (+ PLAYER) or it's
@@ -226,6 +228,8 @@ export class LobbyScreen implements Screen {
     this.joining = 0;
     addEventListener('pointerdown', this.onTap, true);
     this.unsub = hostRoom.subscribe(() => this.syncMembers());
+    queue.listeners.add(this.onQueue);
+    travel.room = (code) => this.travelTo(code);
     hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
     hostRoom.inMatch = false;
     this.syncMembers();
@@ -249,6 +253,7 @@ export class LobbyScreen implements Screen {
       if (m?.t === 'lobby') this.applyRemote();
       else if (m?.t === 'busy') this.renderOnline();
       else if (m?.t === 'full') app.toast('The room is full for this mode — you\'ll play when a place frees up');
+      else if (m?.t === 'travel' && typeof m.code === 'string') { app.toast('Your room found a match — heading there'); clientRoom.leave(); app.go('online', { match: m.code }); }
       else if (m?.t === 'start' && clientRoom.t) app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } } as MatchArg);
     };
     clientRoom.closeHandler = (r) => {
@@ -449,7 +454,8 @@ export class LobbyScreen implements Screen {
     const arena = this.guest && this.remoteArena ? this.remoteArena : findArena(L.arenaId); // (a guest: the host's — maybe custom — arena)
     const sz = arenaSize(arena);
     u.back.textContent = this.guest ? '◀ Leave Room' : hostRoom.t ? '◀ Close Room' : '◀ Back';
-    if (this.startBtn) this.startBtn.textContent = this.guest && !this.canCtl ? `WAITING FOR ${String(clientRoom.lobby?.leader ?? 'HOST').toUpperCase()}` : '▶ START';
+    const startIn = this.guest ? clientRoom.lobby?.startIn : undefined;
+    if (this.startBtn && !(pendingMatch.cur && !this.guest)) this.startBtn.textContent = typeof startIn === 'number' && startIn >= 0 ? `▶ START · ${startIn}` : this.guest && !this.canCtl ? `WAITING FOR ${String(clientRoom.lobby?.leader ?? 'HOST').toUpperCase()}` : '▶ START';
     u.mode.set(m.name.toUpperCase(), m.tag);
     u.size.set(L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter], `${order.length} arena${order.length === 1 ? '' : 's'}`);
     u.arena.set(arena.name.toUpperCase(), `${SIZE_LABEL[sz]}${arena.custom ? ' · CUSTOM' : ''} · ${arena.desc}`);
@@ -950,6 +956,7 @@ export class LobbyScreen implements Screen {
         h('div.code-row', null, h('div.code', null, t.code),
           ...t.invites.slice(1, 2).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: `${u} — click to copy` }, icon('link'), ' ', u))),
         roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host'), radio ? RADIO_HOST : null), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
+        this.findBtn(),
         h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
           h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
       );
@@ -958,6 +965,7 @@ export class LobbyScreen implements Screen {
     const p = getPlatform();
     el.append(
       h('div.hint', null, 'INVITE ONLINE FRIENDS'),
+      this.findBtn(),
       h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
         h('button.btn.small.nav', { onclick: () => this.openRoom('lan'), title: p ? 'Direct connection on your network' : 'Same-origin relay' }, 'LAN'),
         p ? h('button.btn.small.nav', { onclick: () => this.openRoom('tunnel') }, 'Public Link') : null,
@@ -969,7 +977,7 @@ export class LobbyScreen implements Screen {
     const el = this.onlineEl;
     const name = L.slots[0]?.name ?? 'host';
     const o = this.roomOpts;
-    const hostOpts = o.code && o.key ? { code: o.code, key: o.key } : {};
+    const hostOpts = o.code ? { code: o.code, ...(o.key ? { key: o.key } : {}) } : {}; // (a matched room: the matchmaker's code, nobody's key)
     el.innerHTML = '';
     el.append(h('div.hint', null, `Opening ${o.name || (kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room')}…`));
     try {
@@ -978,6 +986,7 @@ export class LobbyScreen implements Screen {
       hostRoom.openControl = !!o.openControl;
       this.pushSummary();
       this.app.toast(`${o.name || 'Room'} ${t.code} open${hostRoom.info.public ? ' · listed in Public Rooms' : ''} — share the code!`);
+      if (this.findAfterOpen) { this.findAfterOpen = false; this.findPlayers(); }
     } catch (e) {
       const msg = String((e as Error).message || e);
       this.app.toast(msg === 'room already hosted' ? `${o.code ?? 'This room'} is already open (another tab or device?) — join it from ONLINE instead` : msg);
@@ -1001,6 +1010,7 @@ export class LobbyScreen implements Screen {
     const arena = findArena(L.arenaId);
     return {
       t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
+      startIn: pendingMatch.cur && !hostRoom.inMatch ? this.lastLeft : undefined,
       items: L.items, target: L.target, time: L.time, nudge: L.nudge, kothShare: L.kothShare, rubber: L.rubber, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
       slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i), lock: !!s.teamLock, auto: !!s.auto })),
     };
@@ -1009,6 +1019,7 @@ export class LobbyScreen implements Screen {
   // -------------------------------------------------------------- start / leave
   start() {
     if (this.guestCtl('start')) return;
+    pendingMatch.cur = null;
     const m = this.mode;
     this.fillCpus();
     if (L.slots.length < m.minPlayers) { this.app.toast(`${m.name} needs ${m.minPlayers} players`); return; }
@@ -1057,10 +1068,24 @@ export class LobbyScreen implements Screen {
     if (testRide.from && !hostRoom.t) { this.app.go(testRide.from); return; } // test ride: back to the editor
     if (hostRoom.t) {
       if (!confirmTwice(this.app, 'close-room', `Room ${hostRoom.t.code} is open — press again to CLOSE it for everyone`)) return;
+      if (queue.ticket?.room === hostRoom.t.code) queue.cancel();
+      pendingMatch.cur = null;
       hostRoom.close();
       L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
     }
     this.app.go('menu');
+  }
+
+  /** FIND PLAYERS (queue this room for its mode) — or, while searching, how long and CANCEL */
+  findBtn() {
+    const pm = pendingMatch.cur;
+    if (pm && hostRoom.t) return h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${pm.expect})`);
+    if (queue.active) {
+      const st = queue.status;
+      return h('button.btn.small.nav.qm-searching', { onclick: () => queue.cancel(), title: 'Searching for players for this mode — click to stop' },
+        `SEARCHING ${queue.waited()}${st ? ` · ${st.modes[L.mode] ?? 0} queued` : ''} · CANCEL`);
+    }
+    return h('button.btn.small.primary.nav', { onclick: () => this.findPlayers(), title: 'Quick match: find players online for this mode — they join this room' }, icon('bolt'), ' FIND PLAYERS');
   }
 
   /** a guest's room box: the room, its invite link, its music, and leaving */
@@ -1096,6 +1121,7 @@ export class LobbyScreen implements Screen {
     this.angle += dt * 2.5;
     this.iconT += dt;
     if (this.iconT > 0.05) { this.iconT = 0; for (const c of this.cards) if (c.d) drawBladeIcon(c.cv, c.d, this.angle * c.d.spinDir); }
+    this.matchCountdown();
     if (hostRoom.t) {
       this.broadcastT -= dt;
       if (this.dirty && this.broadcastT <= 0) {
@@ -1107,7 +1133,44 @@ export class LobbyScreen implements Screen {
     }
   }
 
+  /** the queue changed (searching, status, cancelled): the room box shows it */
+  onQueue = () => { if (!this.guest) this.renderOnline(); };
+
+  /** QUICK MATCH for the whole room: everyone here (players and online guests) queues for this mode together */
+  findPlayers() {
+    if (!hostRoom.t) { this.findAfterOpen = true; this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud'); return; }
+    queue.start({ modes: [L.mode], size: Math.max(1, L.slots.filter((s) => s.ctrl.type !== 'cpu').length), room: hostRoom.t.code, name: L.slots[0]?.name ?? settings.playerName });
+  }
+  findAfterOpen = false;
+  private lastLeft = -1;
+
+  /** our room was matched into another room: send the guests there, close this room and follow them */
+  travelTo(code: string) {
+    hostRoom.send('all', { t: 'travel', code });
+    setTimeout(() => {
+      hostRoom.close();
+      L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
+      this.app.go('online', { match: code });
+    }, 700);
+  }
+
+  /** a matched room: start once everyone's in (a short countdown), or when the wait runs out (CPUs fill in) */
+  matchCountdown() {
+    const pm = pendingMatch.cur;
+    if (!pm || !hostRoom.t || hostRoom.inMatch) return;
+    const now = performance.now();
+    const people = L.slots.filter((s) => s.ctrl.type !== 'cpu').length;
+    if (people >= pm.expect && pm.go === undefined) { pm.go = now + MATCH_COUNTDOWN * 1000; this.app.toast(`Everyone's here — starting in ${MATCH_COUNTDOWN}s (anyone can press START)`); }
+    const at = Math.min(pm.go ?? Infinity, pm.until);
+    const left = Math.max(0, Math.ceil((at - now) / 1000));
+    if (this.startBtn) this.startBtn.textContent = `▶ START · ${left}`;
+    if (left !== this.lastLeft) { this.lastLeft = left; this.dirty = true; } // (the guests' START shows it too)
+    if (now >= at) { pendingMatch.cur = null; this.start(); }
+  }
+
   unmount() {
+    queue.listeners.delete(this.onQueue);
+    travel.room = null;
     if (this.guest) {
       // (your own lobby comes back as you left it)
       try { Object.assign(L, JSON.parse(this.guestBackup)); } catch { /* ignore */ }
