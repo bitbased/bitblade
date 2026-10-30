@@ -51,7 +51,8 @@ export function aiControl(sim: Sim, t: TopState, ai: AIState, dt: number): Contr
     let best: TopState | null = null, bd = 1e9;
     for (const o of s.tops) { if (!o.alive || o.team === t.team || o.held !== undefined) continue; const d = Math.hypot(o.x - t.x, o.z - t.z); if (d < bd) { bd = d; best = o; } }
     if (best) { const l = bd || 1; c.mx = (best.x - t.x) / l; c.mz = (best.z - t.z) / l; }
-    c.dash = (t.heldT ?? 0) < 4 - [0, 1.6, 1.1, 0.7][ai.level] && (t.spin > 0.95 || (t.heldT ?? 0) < 1.5);
+    // (healing: stay in until the slot lets go — it heals burst health while you sit there)
+    c.dash = !ai.healUntil && (t.heldT ?? 0) < 4 - [0, 1.6, 1.1, 0.7][ai.level] && (t.spin > 0.95 || (t.heldT ?? 0) < 1.5);
     return c;
   }
   // steering toward goal (with lead on moving enemy)

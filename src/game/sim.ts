@@ -1268,8 +1268,9 @@ export class Sim {
         t.spin = Math.min(1, t.spin + dt * (this.party ? 1.2 : 0.55));
         t.heldT = (t.heldT ?? 0) - dt;
         if (this.party) {
-          // a party slot: it fills your spin back up; DASH fires you out toward where you're steering (or along the
-          // slot's own line) — it lets go by itself after a few seconds
+          // a party slot: it fills your spin back up (and heals burst health); DASH fires you out toward where you're
+          // steering (or along the slot's own line) — it lets go by itself after a few seconds
+          t.burst = Math.max(0, t.burst - 0.04 * dt);
           const c = this.controls[t.id] ?? NO_CONTROL;
           if ((c.dash && t.heldT < 3.6) || t.heldT <= 0) {
             const steer = Math.hypot(c.mx, c.mz) > 0.3;
