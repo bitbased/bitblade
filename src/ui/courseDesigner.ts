@@ -8,7 +8,8 @@ import { PadCursor } from './padCursor';
 import './courseDesigner.css';
 import { h, type App, type Screen } from './app';
 import { icon } from './icons';
-import { getRenderer, buildArenaMesh, buildSky } from '../game/render';
+import { getRenderer, buildArenaMesh, buildSky, buildRailMeshes } from '../game/render';
+import { arenaRails, pinballStarter, railPolyline, rampRails, segDist, tiltLift, type Rail } from '../game/pinball';
 import { hazardPose } from '../game/hazards';
 import {
   Terrain, VOID, PIECES, THEMES, BUILTIN_ARENAS, loadCustomArenas, saveCustomArenas, courseHeight, pieceAt,
@@ -19,7 +20,7 @@ const LEVEL_H = 1.6;
 const MAX_GRID = 40;
 const TEAM_COL = ['#ff3b4a', '#3b8bff'];
 
-type Tool = 'paint' | 'level' | 'erase' | 'place' | 'select' | 'pick';
+type Tool = 'paint' | 'level' | 'erase' | 'place' | 'select' | 'pick' | 'wall';
 const TOOLS: { id: Tool; icon: string; label: string; key: string; tip: string }[] = [
   { id: 'paint', icon: 'ramp', label: 'Paint', key: 'B', tip: 'Paint pieces (B) — Shift-drag fills a rectangle, wheel / Q / E rotates' },
   { id: 'level', icon: 'arrowUp', label: 'Level', key: 'L', tip: 'Raise (click) / lower (right-click) tile level (L)' },
@@ -27,9 +28,10 @@ const TOOLS: { id: Tool; icon: string; label: string; key: string; tip: string }
   { id: 'place', icon: 'star', label: 'Place', key: 'P', tip: 'Place items & hazards (P) — click to place, drag to aim / size' },
   { id: 'select', icon: 'target', label: 'Select', key: 'V', tip: 'Select & move markers (V) — drag handles to resize / aim' },
   { id: 'pick', icon: 'eye', label: 'Pick', key: 'I', tip: 'Eyedropper (I) — copy a tile or marker type' },
+  { id: 'wall', icon: 'road', label: 'Walls', key: 'C', tip: 'Curved walls (C) — click points along the wall, click the last point again (or Enter) to finish; Esc cancels. Works on any course. Erase removes walls' },
 ];
 
-interface MarkerInfo { kind: MarkerKind; label: string; color: string; icon: string; drag: 'none' | 'aim' | 'radius' | 'arm' | 'orbit'; tip: string }
+interface MarkerInfo { kind: MarkerKind; label: string; color: string; icon: string; drag: 'none' | 'aim' | 'radius' | 'arm' | 'orbit' | 'kick'; tip: string; pin?: boolean }
 const MARKERS: MarkerInfo[] = [
   { kind: 'spawn', label: 'Spawn', color: '#ffffff', icon: 'play', drag: 'none', tip: 'Where blades launch from' },
   { kind: 'item', label: 'Item Box', color: '#b46bff', icon: 'star', drag: 'none', tip: 'Random power-up box' },
@@ -44,7 +46,18 @@ const MARKERS: MarkerInfo[] = [
   { kind: 'gem', label: 'Gem', color: '#ff5cf4', icon: 'gem', drag: 'none', tip: 'Gem spot (Gauntlet) / collectible gem (Quest)' },
   { kind: 'checkpoint', label: 'Checkpoint', color: '#38ffb0', icon: 'finish', drag: 'aim', tip: 'Quest checkpoint: respawn point + spin refill. Place them in level order; drag to turn the gate' },
   { kind: 'goal', label: 'Goal', color: '#ffd23a', icon: 'trophy', drag: 'radius', tip: 'Quest finish: reaching it clears the level (adds the course to Blade Quest)' },
-  { kind: 'hive', label: 'Drone Hive', color: '#ff2244', icon: 'skull', drag: 'radius', tip: 'Spawns drones that guard this zone and chase anyone inside — drag sets the zone' },
+  { kind: 'hive', label: 'Drone Hive', color: '#ff2244', icon: 'skull', drag: 'radius', tip: 'Spawns drones that guard this zone and chase anyone inside — drag sets the zone. On a pinball table: lighting its rollover group launches the swarm' },
+  // pinball pieces (any course can use them: a flipper on a skate course is a trap that fires when you roll onto it)
+  { kind: 'flipper', label: 'Flipper', color: '#ffffff', icon: 'arrowUp', drag: 'arm', pin: true, tip: 'Flipper — drag from the pivot to the tip. Pointing right = left button, pointing left = right button. On a regular course it fires by itself' },
+  { kind: 'plunger', label: 'Plunger', color: '#ffd23a', icon: 'arrowUp', drag: 'none', pin: true, tip: 'Plunger — where the ball waits; hold ↓ to pull, let go to fire it up the lane' },
+  { kind: 'target', label: 'Target', color: '#ffd23a', icon: 'target', drag: 'none', pin: true, tip: 'Stand-up target — light every target for MULTIBALL' },
+  { kind: 'drop', label: 'Drop Target', color: '#ff9a2a', icon: 'shield', drag: 'kick', pin: true, tip: 'Drop target — drag to face it. Plates with the same bank number form a bank (all down: bonus, and it opens arenas of that number)' },
+  { kind: 'saucer', label: 'Saucer / Lock', color: '#38ffb0', icon: 'swirl', drag: 'kick', pin: true, tip: 'Capture saucer — catches the ball, spins it up, kicks it out the way you drag. Make it an aim lock in its settings. Same number = linked wormholes' },
+  { kind: 'rollover', label: 'Rollover', color: '#ffd23a', icon: 'hex', drag: 'none', pin: true, tip: 'Lane rollover — a burst of spin; rollovers with the same group light up together for a bonus' },
+  { kind: 'kickback', label: 'Kickback', color: '#38ffb0', icon: 'arrowUp', drag: 'kick', pin: true, tip: 'Kickback — fires the ball back the way you drag (outlane saver), then recharges' },
+  { kind: 'post', label: 'Center Post', color: '#3cf2ff', icon: 'hex', drag: 'none', pin: true, tip: 'Center post — rises between the flippers while ball save runs' },
+  { kind: 'portal', label: 'Portal', color: '#b46bff', icon: 'swirl', drag: 'kick', pin: true, tip: 'Portal — in one, out of its pair (same number); drag sets the exit direction' },
+  { kind: 'arena', label: 'Arena Bowl', color: '#ff2a6d', icon: 'stadium', drag: 'radius', pin: true, tip: 'Battle bowl — a drop bank with the same number unlocks it; roll in for a 1v1 battle or king of the hill. Drag to size' },
 ];
 const MINFO = Object.fromEntries(MARKERS.map((m) => [m.kind, m])) as Record<MarkerKind, MarkerInfo>;
 
@@ -63,7 +76,7 @@ const PIECE_GROUPS: { label: string; kinds: PieceKind[] }[] = [
   { label: 'FEATURES', kinds: ['spine', 'dome', 'volcano', 'bumps', 'ramp', 'pit'] },
 ];
 
-type TemplateId = 'empty' | 'pool' | 'halfpipe' | 'bowls' | 'plaza' | 'ctf' | 'questrun' | 'questworld';
+type TemplateId = 'empty' | 'pool' | 'halfpipe' | 'bowls' | 'plaza' | 'ctf' | 'questrun' | 'questworld' | 'pinball';
 const TEMPLATES: { id: TemplateId; label: string; w: number; h: number }[] = [
   { id: 'pool', label: 'Walled pool', w: 5, h: 4 },
   { id: 'empty', label: 'Empty deck (open edges)', w: 5, h: 5 },
@@ -73,10 +86,11 @@ const TEMPLATES: { id: TemplateId; label: string; w: number; h: number }[] = [
   { id: 'ctf', label: 'CTF symmetric', w: 8, h: 4 },
   { id: 'questrun', label: 'Quest: linear run', w: 20, h: 2 },
   { id: 'questworld', label: 'Quest: open world', w: 12, h: 12 },
+  { id: 'pinball', label: 'Pinball table', w: 4, h: 7 },
 ];
 
 const TEST_MODES: { id: string; label: string }[] = [
-  { id: 'quest', label: 'Blade Quest' }, { id: 'rush', label: 'Crystal Rush' }, { id: 'ffa', label: 'Free-for-all' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Duel' },
+  { id: 'quest', label: 'Blade Quest' }, { id: 'rush', label: 'Crystal Rush' }, { id: 'ffa', label: 'Free-for-all' }, { id: 'ctf', label: 'Capture the Flag' }, { id: 'koth', label: 'King of the Hill' }, { id: 'gauntlet', label: 'Gauntlet' }, { id: 'duel', label: 'Duel' }, { id: 'pinball', label: 'Pinball' },
 ];
 
 type SnapMode = 'grid' | 'tile' | 'off';
@@ -519,15 +533,38 @@ class CourseEditor {
     } else if (this.tool === 'level' || this.tool === 'erase') {
       R.append(brushRow(), symRow());
     } else if (this.tool === 'place') {
-      const pal = h('div.cd-mpalette');
+      const pal = h('div.cd-mpalette'), pinPal = h('div.cd-mpalette');
       for (const m of MARKERS)
-        pal.append(h('button.cd-mpal' + (this.markerKind === m.kind ? '.cd-on' : ''), { title: m.tip, onclick: () => { this.markerKind = m.kind; this.renderRight(); } },
+        (m.pin ? pinPal : pal).append(h('button.cd-mpal' + (this.markerKind === m.kind ? '.cd-on' : ''), { title: m.tip, onclick: () => { this.markerKind = m.kind; this.renderRight(); } },
           h('span.cd-mico', { style: { color: m.color } }, icon(m.icon)), m.label));
-      R.append(pal, h('div.cd-muted', null, MINFO[this.markerKind].tip));
+      R.append(pal, h('div.cd-sub', null, 'PINBALL (works on any course)'), pinPal, h('div.cd-muted', null, MINFO[this.markerKind].tip));
       if (this.markerKind === 'spawn' || this.markerKind === 'flag')
         R.append(h('div.cd-row', null, h('label', null, 'Team'),
           ...(this.markerKind === 'flag' ? [0, 1] : [undefined, 0, 1]).map((tm) => h('button.cd-chip' + (this.team === tm ? '.cd-on' : ''), { onclick: () => { this.team = tm; this.renderRight(); } }, tm === undefined ? 'Any' : tm === 0 ? 'Red' : 'Blue'))));
       R.append(h('div.cd-row', null, h('button.cd-chip.cd-wide', { title: 'Snap (G)', onclick: () => this.cycleSnap() }, SNAP_LABEL[this.snap])), symRow());
+    } else if (this.tool === 'wall') {
+      R.append(
+        h('div.cd-row', null, h('label', null, 'Height'),
+          ...([[1.1, 'Low'], [1.3, 'Mid'], [3, 'Tall']] as const).map(([v, n]) => h('button.cd-chip' + (this.wallH === v ? '.cd-on' : ''), { onclick: () => { this.wallH = v; this.renderRight(); this.drawWallPreview(); } }, n))),
+        h('div.cd-row', null,
+          this.toggleBtn('Slingshot', this.wallKick, () => { this.wallKick = !this.wallKick; if (this.wallKick) this.wallOneWay = false; this.renderRight(); this.drawWallPreview(); }, 'The wall kicks the ball off (pinball slingshot)'),
+          this.toggleBtn('One-way gate', this.wallOneWay, () => { this.wallOneWay = !this.wallOneWay; if (this.wallOneWay) this.wallKick = false; this.renderRight(); this.drawWallPreview(); }, 'Balls pass through it one way only (toward the left of the drawing direction)')),
+        h('div.cd-row', null,
+          h('button.btn', { title: 'Finish this wall (Enter / click the last point again)', onclick: () => this.finishWall() }, `Finish wall (${this.wallPts.length} pts)`),
+          h('button.btn', { title: 'Remove the last point (right-click)', onclick: () => { this.wallPts.pop(); this.drawWallPreview(); this.renderRight(); } }, 'Undo point')),
+        h('div.cd-muted', null, `${(this.def.rails ?? []).length} wall(s) on this course · Erase (X) removes one`),
+        h('div.cd-sub', null, 'TABLE'),
+        h('div.cd-row', null, this.toggleBtn('Pinball table', !!this.def.pinball, () => this.setPinball(!this.def.pinball), 'Tilt the course into a pinball table: gravity pulls toward the bottom (+z), TEST plays it as Pinball')),
+      );
+      if (this.def.pinball) {
+        const out = h('span.cd-val', null, (this.def.tilt ?? 0.15).toFixed(2));
+        const inp = h<HTMLInputElement>('input.cd-range', {
+          type: 'range', min: '0.06', max: '0.3', step: '0.01', value: String(this.def.tilt ?? 0.15),
+          onpointerdown: () => this.snapshot(),
+          oninput: (e: Event) => { this.def.tilt = +(e.target as HTMLInputElement).value; out.textContent = this.def.tilt.toFixed(2); this.rebuildT = 0.25; this.scheduleSave(); },
+        });
+        R.append(h('div.cd-slider', null, h('label', null, 'Tilt'), inp, out), h('div.cd-muted', null, 'Tip: start from the "Pinball table" template for a ready cabinet, plunger lane and flippers.'));
+      }
     } else if (this.tool === 'select') {
       R.append(h('div.cd-row', null, h('button.cd-chip.cd-wide', { title: 'Snap (G)', onclick: () => this.cycleSnap() }, SNAP_LABEL[this.snap])),
         h('div.cd-muted', null, this.selected >= 0 ? 'Drag the marker to move it, the yellow handle to resize/aim. Q/E rotates, Del deletes.' : 'Click a marker to select it.'));
@@ -551,7 +588,9 @@ class CourseEditor {
   }
 
   setTool(t: Tool) {
+    if (t !== 'wall') this.wallPts = []; // (a half-drawn wall is dropped)
     this.tool = t;
+    this.drawWallPreview();
     if (t !== 'select') this.selected = -1;
     this.renderTools();
     this.renderRight();
@@ -619,7 +658,27 @@ class CourseEditor {
       case 'hive': slider('Zone', 'r', 3, 20, 0.5, 8); slider('Drones', 'len', 1, 5, 1, 2); break;
       case 'goal': slider('Radius', 'r', 1.5, 5, 0.1, 2.6); break;
       case 'checkpoint': slider('Width', 'r', 1.2, 4, 0.1, 2.2); slider('Turn', 'rot', 0, 0, 0, 0, true); break;
+      case 'flipper': slider('Length', 'len', 2, 5, 0.1, 3.5); slider('Rest angle', 'rot', 0, 0, 0, 0, true); break;
+      case 'saucer': slider('Kick speed', 'len', 8, 30, 0.5, 18); slider('Kick dir', 'rot', 0, 0, 0, 0, true); break;
+      case 'kickback': slider('Power', 'len', 15, 40, 1, 30); slider('Fire dir', 'rot', 0, 0, 0, 0, true); break;
+      case 'drop': slider('Width', 'r', 0.5, 1.2, 0.05, 0.75); slider('Facing', 'rot', 0, 0, 0, 0, true); break;
+      case 'plunger': slider('Power', 'len', 0.6, 1.4, 0.05, 1); break;
+      case 'arena': slider('Bowl radius', 'r', 3, 8, 0.1, 5); slider('Gate', 'rot', 0, 0, 0, 0, true); break;
+      case 'portal': case 'rollover': case 'target': case 'post': break;
     }
+    /** a row of choice chips on the card: picking one snapshots, applies and refreshes */
+    const chips = <V,>(label: string, vals: V[], names: string[], cur: V, set: (mm: Marker, v: V) => void) =>
+      box.append(h('div.cd-row', null, h('label', null, label), ...vals.map((v, i) => h('button.cd-chip' + (cur === v ? '.cd-on' : ''), {
+        onclick: () => { this.snapshot(); const mm = this.def.markers[this.selected]; if (mm) set(mm, v); this.rebuildMarkers(); this.rebuildRails(); this.scheduleSave(); this.renderCard(); },
+      }, names[i]))));
+    const groupKinds: MarkerKind[] = ['drop', 'rollover', 'saucer', 'portal', 'arena', 'hive'];
+    if (groupKinds.includes(m.kind)) {
+      const lbl = m.kind === 'drop' ? 'Bank' : m.kind === 'portal' || m.kind === 'saucer' ? 'Pair' : m.kind === 'arena' ? 'Bank' : 'Group';
+      const vals = m.kind === 'portal' || m.kind === 'drop' || m.kind === 'arena' ? [0, 1, 2, 3] : [undefined, 1, 2, 3, 4];
+      chips<number | undefined>(lbl, vals, vals.map((v) => (v === undefined ? 'None' : String(v))), m.team, (mm, v) => { mm.team = v; });
+    }
+    if (m.kind === 'saucer') chips<boolean>('Aim lock', [false, true], ['Off', 'On'], !!m.aim, (mm, v) => { if (v) { mm.aim = 0.7; mm.hold = 7; mm.len = Math.max(mm.len ?? 18, 22); } else { delete mm.aim; delete mm.hold; } });
+    if (m.kind === 'arena') chips<'duel' | 'koth' | 'random'>('Game', ['random', 'duel', 'koth'], ['Random', '1v1', 'King'], m.game ?? 'random', (mm, v) => { mm.game = v; });
     if (m.kind === 'spawn' || m.kind === 'flag') {
       const opts = m.kind === 'flag' ? [0, 1] : [undefined, 0, 1];
       box.append(h('div.cd-row', null, h('label', null, 'Team'),
@@ -677,11 +736,13 @@ class CourseEditor {
   createNew(t: TemplateId, w: number, hh: number) {
     w = Math.max(2, Math.min(MAX_GRID, Math.round(w) || 4));
     hh = Math.max(2, Math.min(MAX_GRID, Math.round(hh) || 4));
-    const { course, markers } = templateCourse(t, w, hh);
+    const { course, markers } = t === 'pinball' ? pinballStarter() : templateCourse(t, w, hh);
     const def: ArenaDef = {
-      id: newId(), name: `${TEMPLATES.find((x) => x.id === t)!.label.split(' (')[0]} ${this.custom.length + 1}`, desc: 'Custom skate course', theme: { ...(t === 'ctf' ? THEMES.toxic : t === 'plaza' ? THEMES.neon : THEMES.concrete) },
-      course, markers, custom: true,
+      id: newId(), name: `${TEMPLATES.find((x) => x.id === t)!.label.split(' (')[0]} ${this.custom.length + 1}`, desc: t === 'pinball' ? 'Custom pinball table' : 'Custom skate course', theme: { ...(t === 'ctf' ? THEMES.toxic : t === 'plaza' || t === 'pinball' ? THEMES.neon : THEMES.concrete) },
+      course: course!, markers, custom: true,
+      ...(t === 'pinball' ? (({ rails, tilt, pinball }) => ({ rails, tilt, pinball }))(pinballStarter()) : {}),
     };
+    if (t === 'pinball') this.testMode = 'pinball';
     this.custom.push(def);
     this.persist();
     this.select(def);
@@ -716,7 +777,7 @@ class CourseEditor {
   testRide() {
     if (!this.save(true)) return;
     testRide.from = 'courses'; testRide.id = this.def.id;
-    this.app.go('lobby', { mode: this.testMode, arenaId: this.def.id });
+    this.app.go('lobby', { mode: this.def.pinball ? 'pinball' : this.testMode === 'pinball' ? 'duel' : this.testMode, arenaId: this.def.id });
   }
 
   exportJson() {
@@ -750,7 +811,7 @@ class CourseEditor {
   }
 
   // ============================================================ undo
-  state() { return JSON.stringify({ course: this.def.course, markers: this.def.markers }); }
+  state() { return JSON.stringify({ course: this.def.course, markers: this.def.markers, rails: this.def.rails ?? [], ramps: this.def.ramps ?? [], tilt: this.def.tilt ?? 0, pinball: !!this.def.pinball }); }
 
   snapshot() {
     this.ensureEditable();
@@ -763,6 +824,8 @@ class CourseEditor {
     const d = JSON.parse(s);
     this.def.course = d.course;
     this.def.markers = d.markers;
+    this.def.rails = d.rails; this.def.ramps = d.ramps; this.def.tilt = d.tilt || undefined; this.def.pinball = d.pinball || undefined;
+    this.wallPts = [];
     this.selected = -1;
     this.rebuildTerrain();
     this.renderRight();
@@ -1046,6 +1109,16 @@ class CourseEditor {
     if (k === 'bumper' || k === 'pillar') m.r = 0.8;
     if (k === 'spinpad') m.r = 1.1;
     if (k === 'zone') m.r = 2.6;
+    if (k === 'flipper') { m.len = 3.5; m.rot = 0.48; m.r = -0.98; }
+    if (k === 'plunger') { m.r = 1.1; m.len = 1; }
+    if (k === 'target') { m.r = 0.8; }
+    if (k === 'drop') { m.r = 0.75; m.rot = Math.PI / 2; m.team = 0; }
+    if (k === 'saucer') { m.r = 1.0; m.rot = Math.PI / 2; m.len = 18; }
+    if (k === 'rollover') { m.r = 0.85; }
+    if (k === 'kickback') { m.r = 0.9; m.rot = -Math.PI / 2; m.len = 30; }
+    if (k === 'post') { m.r = 0.45; }
+    if (k === 'portal') { m.r = 1.0; m.team = 0; }
+    if (k === 'arena') { m.r = 5; m.rot = Math.PI / 2; m.team = 0; m.len = 1.8; m.game = 'random'; }
     if (d) this.applyDrag(m, d.x, d.z);
     return m;
   }
@@ -1056,10 +1129,13 @@ class CourseEditor {
     if (L < 0.4) return;
     switch (MINFO[m.kind].drag) {
       case 'aim': m.rot = Math.atan2(dx, dz); break; // sim pushes along (sin rot, cos rot)
-      case 'arm': m.rot = Math.atan2(dz, dx); m.len = Math.max(1.5, Math.min(9, L)); break; // arm points along (cos rot, sin rot)
+      case 'arm': m.rot = Math.atan2(dz, dx); m.len = Math.max(1.5, Math.min(9, L)); // arm points along (cos rot, sin rot)
+        if (m.kind === 'flipper') { m.len = Math.max(2, Math.min(5, L)); m.r = Math.cos(m.rot) >= 0 ? -0.98 : 0.98; } // (pointing right: a left flipper)
+        break;
       case 'orbit': m.rot = Math.atan2(dz, dx); m.r = Math.max(0.5, Math.min(14, L)); break;
+      case 'kick': m.rot = Math.atan2(dz, dx); break; // pinball pieces point along (cos rot, sin rot)
       case 'radius': {
-        const lim = m.kind === 'zone' ? [1.5, 7] : m.kind === 'spinpad' ? [0.6, 2.6] : [0.4, 2.2];
+        const lim = m.kind === 'zone' ? [1.5, 7] : m.kind === 'spinpad' ? [0.6, 2.6] : m.kind === 'arena' ? [3, 8] : [0.4, 2.2];
         m.r = Math.max(lim[0], Math.min(lim[1], L));
         break;
       }
@@ -1103,13 +1179,14 @@ class CourseEditor {
       case 'arm': { const r = m.rot ?? 0, L = m.len ?? 4; return { x: m.x + Math.cos(r) * L, z: m.z + Math.sin(r) * L }; }
       case 'orbit': { const r = m.rot ?? 0, R = m.r ?? 5; return { x: m.x + Math.cos(r) * R, z: m.z + Math.sin(r) * R }; }
       case 'radius': return { x: m.x + (m.r ?? 1), z: m.z };
+      case 'kick': { const r = m.rot ?? 0; return { x: m.x + Math.cos(r) * 2.2, z: m.z + Math.sin(r) * 2.2 }; }
     }
     return null;
   }
 
   rotateSelected(d: number) {
     const m = this.def.markers[this.selected];
-    if (!m || !('rot' in m || MINFO[m.kind].drag === 'aim' || MINFO[m.kind].drag === 'arm' || MINFO[m.kind].drag === 'orbit')) return;
+    if (!m || !('rot' in m || MINFO[m.kind].drag === 'aim' || MINFO[m.kind].drag === 'arm' || MINFO[m.kind].drag === 'orbit' || MINFO[m.kind].drag === 'kick')) return;
     this.snapshot();
     const mm = this.def.markers[this.selected];
     mm.rot = (mm.rot ?? 0) + (d * Math.PI) / 12;
@@ -1132,9 +1209,87 @@ class CourseEditor {
     if (this.arena) { this.scene.remove(this.arena); disposeTree(this.arena); }
     this.arena = buildArenaMesh(this.terrain, this.def.theme);
     this.scene.add(this.arena);
+    this.rebuildRails();
     this.rebuildMarkers();
     this.refreshOverlay(true);
     this.drawMini();
+  }
+
+  // ============================================================ walls (rails)
+  railGroup: THREE.Group | null = null;
+  wallPts: [number, number][] = [];
+  wallH = 1.3; wallKick = false; wallOneWay = false;
+  wallPreview: THREE.Group | null = null;
+
+  /** every wall the sim will see: drawn walls, ramp sides, arena rings */
+  allRails(): Rail[] {
+    return [...(this.def.rails ?? []), ...(this.def.ramps ?? []).flatMap(rampRails), ...this.def.markers.flatMap((m, mi) => (m.kind === 'arena' ? arenaRails(m, mi).filter((r) => r.gate === undefined) : []))];
+  }
+
+  rebuildRails() {
+    if (this.railGroup) { this.scene.remove(this.railGroup); disposeTree(this.railGroup); this.railGroup = null; }
+    const rails = this.allRails();
+    if (!rails.length) return;
+    this.railGroup = buildRailMeshes(rails, this.def.theme, (x, z) => this.groundY(x, z)).group;
+    this.scene.add(this.railGroup);
+  }
+
+  /** the drawn wall nearest (x, z), if within reach */
+  railAt(x: number, z: number) {
+    let best = -1, bd = 0.9;
+    (this.def.rails ?? []).forEach((r, ri) => {
+      const pl = railPolyline(r);
+      for (let i = 0; i + 1 < pl.length; i++) { const d = segDist({ ax: pl[i][0], az: pl[i][1], bx: pl[i + 1][0], bz: pl[i + 1][1] }, x, z).d - (r.t ?? 0.45) / 2; if (d < bd) { bd = d; best = ri; } }
+    });
+    return best;
+  }
+
+  /** the wall being drawn: its points so far, the curve through them and on to the cursor */
+  drawWallPreview() {
+    if (this.wallPreview) { this.scene.remove(this.wallPreview); disposeTree(this.wallPreview); this.wallPreview = null; }
+    if (this.tool !== 'wall') return;
+    const g = new THREE.Group();
+    const pts = [...this.wallPts];
+    if (this.hoverPt) pts.push([this.hoverPt.x, this.hoverPt.z]);
+    const col = this.wallKick ? '#ff5cf4' : this.wallOneWay ? '#ffd23a' : '#3cf2ff';
+    if (pts.length >= 2) {
+      const pl = railPolyline({ pts });
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pl.map(([x, z]) => new THREE.Vector3(x, this.groundY(x, z) + this.wallH, z))), new THREE.LineBasicMaterial({ color: col, toneMapped: false, depthTest: false, transparent: true }));
+      line.renderOrder = 22;
+      g.add(line);
+    }
+    for (const [x, z] of this.wallPts) {
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshBasicMaterial({ color: col, toneMapped: false, depthTest: false }));
+      dot.position.set(x, this.groundY(x, z) + this.wallH, z); dot.renderOrder = 23;
+      g.add(dot);
+    }
+    this.wallPreview = g;
+    this.scene.add(g);
+  }
+
+  finishWall() {
+    if (this.wallPts.length >= 2) {
+      this.snapshot();
+      const r: Rail = { pts: this.wallPts.map(([x, z]) => [Math.round(x * 100) / 100, Math.round(z * 100) / 100] as [number, number]), h: this.wallH };
+      if (this.wallKick) { r.kick = 10; r.t = 0.5; }
+      if (this.wallOneWay) { r.oneWay = 1; r.t = 0.3; r.h = Math.min(this.wallH, 1.1); }
+      (this.def.rails ??= []).push(r);
+      this.rebuildRails();
+      this.scheduleSave();
+    }
+    this.wallPts = [];
+    this.drawWallPreview();
+  }
+
+  setPinball(on: boolean) {
+    this.snapshot();
+    this.def.pinball = on || undefined;
+    this.def.tilt = on ? this.def.tilt || 0.15 : undefined;
+    if (on) this.testMode = 'pinball';
+    this.rebuildTerrain();
+    this.renderRight();
+    this.renderTop();
+    this.scheduleSave();
   }
 
   groundY(x: number, z: number) {
@@ -1265,6 +1420,57 @@ class CourseEditor {
         g.add(dome, flatRing(r - 0.15, r));
         break;
       }
+      case 'flipper': {
+        const L = m.len ?? 3.5;
+        const pivot = new THREE.Group();
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(L, 0.45, 0.6), solid());
+        bar.position.set(L / 2, 0.3, 0);
+        pivot.add(bar);
+        pivot.rotation.y = -(m.rot ?? 0);
+        g.add(pivot);
+        break;
+      }
+      case 'plunger': {
+        const rod = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 2), solid());
+        rod.position.set(0, 0.3, 1.4);
+        g.add(rod, flatRing((m.r ?? 1.1) * 0.6, m.r ?? 1.1));
+        break;
+      }
+      case 'target': case 'post': {
+        const r = m.kind === 'post' ? m.r ?? 0.45 : (m.r ?? 0.8) * 0.6;
+        const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1.1, 16), solid());
+        c.position.y = 0.55;
+        g.add(c);
+        break;
+      }
+      case 'drop': {
+        const w = (m.r ?? 0.75) * 2;
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.0, w), solid());
+        plate.position.y = 0.5; plate.rotation.y = -(m.rot ?? 0);
+        g.add(plate);
+        break;
+      }
+      case 'saucer': case 'kickback': case 'portal': case 'rollover': {
+        const r = m.r ?? 1;
+        g.add(flatRing(r * 0.55, r * (m.kind === 'rollover' ? 0.75 : 0.9)));
+        if (m.kind !== 'rollover' && (m.kind !== 'portal' || m.rot !== undefined)) {
+          const a = m.rot ?? 0;
+          const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.8, 3), glowMat());
+          arrow.rotation.order = 'YXZ'; arrow.rotation.y = -a + Math.PI / 2; arrow.rotation.x = Math.PI / 2;
+          arrow.position.set(Math.cos(a) * (r + 0.6), 0.15, Math.sin(a) * (r + 0.6));
+          g.add(arrow);
+        }
+        break;
+      }
+      case 'arena': {
+        const R = m.r ?? 5;
+        g.add(flatRing(R - 0.12, R + 0.12, 0.8), flatRing(R + 1.45, R + 1.6, 0.5));
+        const a = m.rot ?? Math.PI / 2;
+        const gate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.2, 2.8), glowMat());
+        gate.position.set(Math.cos(a) * (R + 1.6), 0.6, Math.sin(a) * (R + 1.6)); gate.rotation.y = -a;
+        g.add(gate);
+        break;
+      }
       case 'gem': {
         const gm = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42), glowMat());
         gm.position.y = 0.9; gm.userData.spin = true;
@@ -1303,10 +1509,10 @@ class CourseEditor {
     for (let b = 0; b <= N; b++)
       for (let a = 0; a <= N; a++) {
         const lx = (a / N - 0.5) * T * 0.999, lz = (b / N - 0.5) * T * 0.999;
-        const y = courseHeight(one, lx, lz);
+        const y0 = courseHeight(one, lx, lz), y = y0 > VOID ? y0 + tiltLift(this.def, cz + lz) : y0; // (a tilted table: the ghost sits on the slope)
         const k = b * (N + 1) + a;
         ok[k] = y > VOID ? 1 : 0;
-        const yy = y > VOID ? y : level * LEVEL_H;
+        const yy = y > VOID ? y : level * LEVEL_H + tiltLift(this.def, cz + lz);
         maxY = Math.max(maxY, yy);
         pos[k * 3] = cx + lx; pos[k * 3 + 1] = yy + 0.07; pos[k * 3 + 2] = cz + lz;
       }
@@ -1406,6 +1612,7 @@ class CourseEditor {
       level: 'Click raise · RMB lower · Shift-drag rectangle',
       erase: 'Click erase tile or marker · Shift-drag rectangle',
       place: 'Click place · drag to aim / size · RMB delete marker · G snap',
+      wall: 'Click points along the wall · click the last point / Enter to finish · RMB undo point · Esc cancel',
       select: 'Click select · drag move · yellow handle resize/aim · Q/E rotate · Del delete',
       pick: 'Click a tile or marker to copy it',
     };
@@ -1438,6 +1645,7 @@ class CourseEditor {
   refreshHover(e: { clientX: number; clientY: number }) {
     const p = this.pick(e);
     this.hoverPt = p;
+    if (this.tool === 'wall') this.drawWallPreview();
     const cell = p ? this.cellOf(p.x, p.z) : null;
     const changed = cell?.i !== this.hover?.i || cell?.j !== this.hover?.j;
     this.hover = cell;
@@ -1457,6 +1665,7 @@ class CourseEditor {
     switch (this.tool) {
       case 'paint': case 'erase': case 'level': {
         if (this.tool === 'erase' && this.hoverMarker >= 0) { this.deleteMarker(this.hoverMarker); return; }
+        if (this.tool === 'erase' && pt) { const ri = this.railAt(pt.x, pt.z); if (ri >= 0) { this.snapshot(); this.def.rails!.splice(ri, 1); this.rebuildRails(); this.scheduleSave(); return; } }
         if (!this.hover) return;
         this.snapshot();
         if (e.shiftKey) { this.drag = { kind: 'rect', startCell: { ...this.hover } }; this.refreshOverlay(true); return; }
@@ -1468,6 +1677,16 @@ class CourseEditor {
       case 'place': {
         if (!pt) return;
         this.drag = { kind: 'place', start: this.snapPt(pt.x, pt.z), moved: false };
+        break;
+      }
+      case 'wall': {
+        if (!pt) return;
+        const p = this.snapPt(pt.x, pt.z), last = this.wallPts[this.wallPts.length - 1];
+        // clicking the last point again (or a double-click) finishes the wall
+        if (last && Math.hypot(p.x - last[0], p.z - last[1]) < 0.45) { this.finishWall(); return; }
+        this.wallPts.push([p.x, p.z]);
+        this.drawWallPreview();
+        this.renderRight();
         break;
       }
       case 'select': {
@@ -1610,6 +1829,11 @@ class CourseEditor {
       case 'place': case 'select':
         if (this.hoverMarker >= 0) this.deleteMarker(this.hoverMarker);
         break;
+      case 'wall':
+        this.wallPts.pop();
+        this.drawWallPreview();
+        this.renderRight();
+        break;
     }
   }
 
@@ -1725,7 +1949,9 @@ class CourseEditor {
     if (ctrl && P('KeyZ')) { if (shift) this.doRedo(); else this.doUndo(); return; }
     if (ctrl && P('KeyY')) { this.doRedo(); return; }
     if (ctrl) return;
-    const toolKeys: Record<string, Tool> = { KeyB: 'paint', KeyL: 'level', KeyX: 'erase', KeyP: 'place', KeyV: 'select', KeyI: 'pick' };
+    const toolKeys: Record<string, Tool> = { KeyB: 'paint', KeyL: 'level', KeyX: 'erase', KeyP: 'place', KeyV: 'select', KeyI: 'pick', KeyC: 'wall' };
+    if (this.tool === 'wall' && P('Enter')) { this.finishWall(); return; }
+    if (this.tool === 'wall' && P('Escape') && this.wallPts.length) { this.wallPts = []; this.drawWallPreview(); this.renderRight(); return; }
     for (const [k, t] of Object.entries(toolKeys)) if (P(k)) this.setTool(t);
     if (P('Digit1') || P('Digit2') || P('Digit3')) { this.brush = P('Digit1') ? 1 : P('Digit2') ? 2 : 3; this.renderRight(); this.refreshOverlay(true); }
     const rotL = P('KeyQ'), rotR = P('KeyE') || P('KeyR');

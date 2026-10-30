@@ -579,5 +579,32 @@ function swarmProtocol(): ArenaDef {
 }
 
 
+/**
+ * A starter table for the Course Builder: the cabinet, plunger lane and exit gate, the lower playfield (flippers,
+ * slingshots, inlanes, outlanes with a kickback) and a few bumpers — the rest is yours to build.
+ */
+export function pinballStarter(): Pick<ArenaDef, 'course' | 'rails' | 'markers' | 'tilt' | 'pinball'> {
+  const outer: [number, number][] = [[-11.5, 21], [-11.5, 6], [-11.5, -10], [-10.3, -16], [-6.4, -19.4], [0, -20.3], [6.4, -19.4], [10.3, -16], [11.5, -10], [11.5, 6], [11.5, 21]];
+  const low = lowerPlayfield({ wallL: -11.5, wallR: 9.25, zF: 16.5, flip: 3.5, outlanes: true, kickback: 'L' });
+  return {
+    course: flat(4, 7), tilt: 0.15, pinball: true,
+    rails: [
+      { pts: outer, h: 3, t: 0.7 },
+      { pts: [[9.25, 20.8], [9.25, 4], [9.25, -9.5]], h: 1.6 },
+      { pts: [[9.25, 20.4], [11.5, 20.4]], h: 1.6 },
+      ...low.rails,
+    ],
+    markers: [
+      { kind: 'spawn', x: 10.42, z: 18.6 },
+      { kind: 'plunger', x: 10.42, z: 18.6, r: 1.1, len: 1 },
+      ...low.markers,
+      { kind: 'post', x: low.xc, z: 19.2, r: 0.45 },
+      { kind: 'bumper', x: low.xc - 3.2, z: -9, r: 1.0 },
+      { kind: 'bumper', x: low.xc + 3.2, z: -9, r: 1.0 },
+      { kind: 'bumper', x: low.xc, z: -13, r: 1.0 },
+    ],
+  };
+}
+
 export function pinballTables(): ArenaDef[] { return [starCadet(), swarmProtocol(), neonClassic(), synthCathedral()]; }
 export const PINBALL_IDS = ['pin-star-cadet', 'pin-swarm-protocol', 'pin-neon-classic', 'pin-synth-cathedral'];
