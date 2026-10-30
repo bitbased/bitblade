@@ -85,6 +85,9 @@ function textSprite(text: string, color: string, size = 48) {
   return sp;
 }
 
+/** the health bar's width under a top's name */
+const HP_W = 1.0;
+
 /** a held power-up's icon as a texture: a dark tile with the item's colour (drawn once per item, cached) */
 const itemTexCache = new Map<string, THREE.CanvasTexture>();
 function itemTexture(kind: keyof typeof ITEMS) {
@@ -544,6 +547,8 @@ interface TopView {
   label: THREE.Sprite;
   /** the power-up it's holding, floating above its name (cycling while the roulette rolls) */
   item: THREE.Sprite; itemK?: string;
+  /** a slim health bar under the name (what's left before it bursts): its backing and fill */
+  hpBack: THREE.Sprite; hpFill: THREE.Sprite;
   trail: Trail;
   shield: THREE.Mesh;
   ice: THREE.Mesh;
@@ -823,6 +828,7 @@ export class GameView {
 
     this.buildMarkers();
     this.buildLinkDecals();
+    for (const k of Object.keys(ITEMS) as (keyof typeof ITEMS)[]) itemTexture(k); // (icons drawn up front: no blank tile the first time one shows)
     this.buildLinkLamps();
     this.buildRails();
     if (import.meta.env.DEV) (window as any).__r = this; // for the headless visual checks
@@ -903,6 +909,15 @@ export class GameView {
     const item = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, transparent: true }));
     item.position.y = 2.2; item.scale.set(0.74, 0.74, 1); item.renderOrder = 11; item.visible = false;
     root.add(item);
+    // health bar under the name: anchored at its left end so the fill shrinks toward it
+    const bar = (color: string, opacity: number, order: number, pad: number) => {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ color, transparent: true, opacity, depthTest: false, toneMapped: false }));
+      sp.center.set(0, 0.5); sp.position.set(-HP_W / 2 - pad, 1.22, 0); sp.scale.set(HP_W + pad * 2, 0.1 + pad * 2, 1); sp.renderOrder = order;
+      root.add(sp);
+      return sp;
+    };
+    // (a lighter track framing the fill, so what's been lost shows too)
+    const hpBack = bar('#2a3040', 0.85, 10, 0.025), hpFill = bar('#' + color.getHexString(), 0.95, 11, 0);
     const shield = new THREE.Mesh(new THREE.IcosahedronGeometry(st.radius * 1.5, 2), new THREE.MeshBasicMaterial({ color: '#47b6ff', transparent: true, opacity: 0.25, wireframe: true, toneMapped: false }));
     shield.position.y = 0.5;
     root.add(shield);
@@ -926,7 +941,7 @@ export class GameView {
     const launchRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48, 2, 0, Math.PI * 2), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.9, toneMapped: false, side: THREE.DoubleSide }));
     launchRing.rotation.x = -Math.PI / 2;
     this.scene.add(root, ring, shadow, trail.mesh, arc, landing, launchRing);
-    this.tops.push({ root, tilt, model, ring, shadow, blur, label, item, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
+    this.tops.push({ root, tilt, model, ring, shadow, blur, label, item, hpBack, hpFill, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
   }
 
   buildMarkers() {
@@ -1972,6 +1987,18 @@ export class GameView {
     }
     (v.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.45 - above * 0.06);
     v.label.visible = t.alive && !this.attract;
+    {
+      // health bar: what's left before a burst (the burst meter, from hard hits) — the player's colour, red when
+      // close to bursting, flickering right before it goes
+      const show = t.alive && !this.attract;
+      v.hpBack.visible = v.hpFill.visible = show;
+      if (show) {
+        const k = Math.max(0, Math.min(1, 1 - t.burst)), m = v.hpFill.material as THREE.SpriteMaterial;
+        v.hpFill.scale.x = Math.max(0.001, HP_W * k);
+        m.color.set(k < 0.3 ? '#ff3b4a' : v.color);
+        m.opacity = k < 0.15 ? 0.55 + 0.4 * Math.sin(this.time * 18) : 0.95;
+      }
+    }
     {
       const kinds = Object.keys(ITEMS) as (keyof typeof ITEMS)[];
       const ik = t.roll > 0 ? kinds[Math.floor(this.time * 14) % kinds.length] : t.item;
