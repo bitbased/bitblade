@@ -2,7 +2,7 @@
 import { computeStats, type BladeStats } from '../core/blade';
 import { Terrain, VOID, type Marker } from './terrain';
 import { hazardPose, closestOnSeg } from './hazards';
-import { arenaRails, arenaRing, linkName, pinLinks, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
+import { arenaRails, arenaRing, linkName, pinLinks, inFlipperSweep, flyEnd, flipperHalf, flipperPose, flipperSide, flyLiftAlong, railSegments, rampRails, segDist, FLIP_DOWN_SPEED, FLIP_UP_SPEED, type RailSeg } from './pinball';
 import { aiControl, newAI, type AIState } from './ai';
 import { globalNearest, nearestSample } from './track';
 import {
@@ -1086,8 +1086,9 @@ export class Sim {
         const near = s.tops.some((t) => t.alive && segDist(P0, t.x, t.z).d < 1.8);
         const st = (this.flipBrain[mi] ??= { t: -1, miss: false, hold: 0, cool: 0 });
         st.hold = Math.max(0, st.hold - dt); st.cool = Math.max(0, st.cool - dt);
-        // (a ball that dashes at a flipper sets it off straight away — no reaction time, no whiff)
-        const dashed = st.cool <= 0 && s.tops.some((t) => t.alive && t.fx.dash > 0 && segDist(P0, t.x, t.z).d < 2.6);
+        // (a ball that dashes inside the flipper's sweep — the wedge it swings through — sets it off straight away: no
+        // reaction time, no whiff)
+        const dashed = st.cool <= 0 && s.tops.some((t) => t.alive && t.fx.dash > 0 && inFlipperSweep(m, t.x, t.z, this.radius(t) + 0.15));
         if (dashed && st.hold <= 0) { st.hold = 0.3; st.cool = 0.55; st.t = -1; }
         if (st.hold > 0) up = true;
         else {

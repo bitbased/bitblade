@@ -312,6 +312,14 @@ export function flipperPose(m: Marker, ang: number) {
   const len = m.len ?? 3.4;
   return { ax: m.x, az: m.z, bx: m.x + Math.cos(ang) * len, bz: m.z + Math.sin(ang) * len, len };
 }
+/** is (x, z) inside the wedge a flipper sweeps from rest to fully up (widened by `margin`, e.g. a ball's radius)? */
+export function inFlipperSweep(m: Marker, x: number, z: number, margin = 0.8) {
+  const dx = x - m.x, dz = z - m.z, d = Math.hypot(dx, dz), len = m.len ?? 3.4;
+  if (d > len + margin || d < 0.2) return false;
+  const rest = m.rot ?? 0, sweep = m.r ?? -1, tol = Math.min(0.6, margin / d);
+  const da = Math.atan2(Math.sin(Math.atan2(dz, dx) - rest), Math.cos(Math.atan2(dz, dx) - rest)); // (angle from the rest line)
+  return sweep >= 0 ? da >= -tol && da <= sweep + tol : da <= tol && da >= sweep - tol;
+}
 /** half-thickness of a flipper at fraction u along it (fat at the pivot, slim at the tip) */
 export const flipperHalf = (u: number) => 0.42 - 0.22 * u;
 /** which flipper button works this flipper: left ones (pointing right, r < 0) vs right ones */
