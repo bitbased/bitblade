@@ -1571,6 +1571,7 @@ export class Sim {
     const it = t.item!;
     t.item = null;
     t.itemCd = 0.3;
+    if (it !== 'surge') t.spin = Math.min(1, t.spin + 0.06); // (using any power-up gives a little spin back)
     this.ev({ k: 'use', id: t.id, item: it });
     switch (it) {
       case 'turbo': t.fx.turbo = 3.5; break;

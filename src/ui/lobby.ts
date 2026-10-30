@@ -115,6 +115,8 @@ export class LobbyScreen implements Screen {
   joinCard!: HTMLElement;
   joinBtn!: HTMLButtonElement;
   joinMsg!: HTMLElement;
+  /** a full lobby's + PLAYER (in the rules row) */
+  joinMini?: HTMLButtonElement;
   /** join mode: listening for a new player's device (time it started, ms) */
   joining = 0;
   private lastTap: { type: 'touch' | 'mouse'; t: number } | null = null;
@@ -290,6 +292,7 @@ export class LobbyScreen implements Screen {
       this.slotsEl,
       h('div.lobby-bottom', null,
         h('div.rules', null,
+          this.joinMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.toggleJoin(), title: 'Add a local player in a CPU’s place: then press a key or a gamepad button' }, '+ PLAYER'),
           count, items, nudge, share, rubber, target, time),
         this.onlineEl),
     );
@@ -559,8 +562,11 @@ export class LobbyScreen implements Screen {
     while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
     while (this.cards.length > L.slots.length) this.cards.pop()!.el.remove();
     L.slots.forEach((s, i) => this.updateCard(this.cards[i], s, i));
-    // (+ PLAYER stays while there's room — or a CPU / ghost whose place a player can take)
-    this.joinCard.style.display = L.slots.length < this.mode.maxPlayers || L.slots.some((s) => s.ctrl.type === 'cpu') ? '' : 'none';
+    // (+ PLAYER: a card while there's room; once full, a slim button in the rules row — a player can still take a
+    // CPU's place — so a full lobby doesn't grow a whole extra row)
+    const room = L.slots.length < this.mode.maxPlayers;
+    this.joinCard.style.display = room ? '' : 'none';
+    if (this.joinMini) this.joinMini.style.display = !room && L.slots.some((s) => s.ctrl.type === 'cpu') ? '' : 'none';
   }
 
   /** pads that joined as P2+ steer their own slot; P1's device (or keyboard) drives the menu */
@@ -626,6 +632,7 @@ export class LobbyScreen implements Screen {
   joinUi() {
     this.joinCard.classList.toggle('listening', !!this.joining);
     this.joinBtn.textContent = this.joining ? 'CANCEL' : '+ PLAYER';
+    if (this.joinMini) this.joinMini.textContent = this.joining ? 'CANCEL · PRESS A KEY / PAD BUTTON' : '+ PLAYER';
     this.joinMsg.textContent = this.joining ? (Input.isTouchDevice() ? 'PRESS A KEY OR A GAMEPAD BUTTON — OR TAP HERE — TO JOIN' : 'PRESS A KEY OR A GAMEPAD BUTTON — OR CLICK HERE FOR MOUSE — TO JOIN') : '';
   }
 
