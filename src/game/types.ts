@@ -54,6 +54,8 @@ export interface MatchConfig {
   rubber?: number;
   /** pinball: steering nudges the table (default on); off = flippers only */
   nudge?: boolean;
+  /** king of the hill: every top in the zone banks time, not only one holding it alone (faster, scrappier games) */
+  kothShare?: boolean;
   /** online rooms: the room's chosen song (whole song, so guests without it hear it too) */
   song?: import('./music').Song;
 }

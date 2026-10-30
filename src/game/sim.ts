@@ -1384,8 +1384,8 @@ export class Sim {
       // king of the hill: whoever has the ring to themselves banks time; 8s wins
       const inB = Math.hypot(b.x - s.zone.x, b.z - s.zone.z) < s.zone.r, inF = Math.hypot(f.x - s.zone.x, f.z - s.zone.z) < s.zone.r;
       s.zone.owner = inB && !inF ? b.team : inF && !inB ? f.team : inB && inF ? -2 : -1;
-      if (inB && !inF) d.hold[0] += dt;
-      if (inF && !inB) d.hold[1] += dt;
+      if (inB && (!inF || this.cfg.kothShare)) d.hold[0] += dt;
+      if (inF && (!inB || this.cfg.kothShare)) d.hold[1] += dt;
       if (d.hold[0] >= 8) res = 1; else if (d.hold[1] >= 8) res = -1;
     }
     if (res) { /* decided on the ring */ }
@@ -1705,9 +1705,10 @@ export class Sim {
       z.t += dt;
       const inside = new Set(s.tops.filter((t) => t.alive && Math.hypot(t.x - z.x, t.z - z.z) < z.r).map((t) => t.team));
       z.owner = inside.size === 1 ? [...inside][0] : inside.size > 1 ? -2 : -1;
-      if (z.owner >= 0) {
-        s.teamScores[z.owner] += dt;
-        for (const t of s.tops) if (t.team === z.owner && t.alive) t.special = Math.min(1, t.special + dt * 0.05);
+      // (shared time: everyone in the zone banks it, contested or not)
+      for (const team of z.owner >= 0 || this.cfg.kothShare ? inside : []) {
+        s.teamScores[team] += dt;
+        for (const t of s.tops) if (t.team === team && t.alive) t.special = Math.min(1, t.special + dt * 0.05);
       }
       if (z.t > 25) this.moveZone();
     } else if (mode === 'pinball') {

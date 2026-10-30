@@ -334,10 +334,10 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
       return;
     }
     default: {
-      // stamina types sometimes hold the center and let attackers come
+      // stamina types sometimes hold the center and let attackers come (while they are still coming: close up, fight)
       const st = sim.st[t.id];
-      // (not in a pinball bowl: it is too small for a waiting game)
-      if (!t.duel && st.stamina > st.attack + 0.15 && t.spin > 0.4 && Math.random() < 0.6) { const home = arenaHome(sim, t); wanderAround(home.x, home.z, 1.5); return; }
+      const close = enemies.some((e) => Math.hypot(e.x - t.x, e.z - t.z) < 6);
+      if (!close && st.stamina > st.attack + 0.15 && t.spin > 0.4 && Math.random() < 0.6) { const home = arenaHome(sim, t); wanderAround(home.x, home.z, 1.5); return; }
       if (!t.item && (sim.cfg.items || t.duel)) { // (a pinball arena bowl has its own power-up)
         const box = nearest(s.boxes.filter((b) => b.t <= 0));
         if (box && Math.hypot(box.x - t.x, box.z - t.z) < 5) { ai.tx = box.x; ai.tz = box.z; return; }
