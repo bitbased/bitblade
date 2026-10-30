@@ -459,15 +459,19 @@ export class Sim {
       const vl = Math.hypot(t.vx, t.vz);
       if (vl > 0.5 && il > 0.1 && (ix * t.vx + iz * t.vz) / (vl * Math.min(1, il)) < -0.2) acc *= 1.4;
       ax += ix * acc; az += iz * acc;
-      t.spin -= Math.min(1, il) * 0.004 * dt;
+      if (t.fx.turbo <= 0) t.spin -= Math.min(1, il) * 0.004 * dt; // (turbo burns fuel, not spin)
     }
     // vortex pull from others
     for (const o of this.s.tops) {
       if (o === t || !o.alive || o.team === t.team) continue;
-      const pull = o.fx.vortex > 0 || (o.fx.special > 0 && o.specialKind === 'vortex');
+      const item = o.fx.vortex > 0, pull = item || (o.fx.special > 0 && o.specialKind === 'vortex');
       if (!pull) continue;
-      const dx = o.x - t.x, dz = o.z - t.z, d = Math.hypot(dx, dz);
-      if (d < 7 && d > 0.1) { ax += (dx / d) * 11 * (1 - d / 7); az += (dz / d) * 11 * (1 - d / 7); }
+      const dx = o.x - t.x, dz = o.z - t.z, d = Math.hypot(dx, dz), R = item ? 8 : 7;
+      // (the power-up's pull holds strong most of the way out: steer away early or get dragged in)
+      const f = item ? 26 * (1 - (d / R) ** 2) : 11 * (1 - d / R);
+      if (d < R && d > 0.1) { ax += (dx / d) * f; az += (dz / d) * f; }
+      // (the Vortex power-up: caught close, your spin is torn away — and the vortex's owner takes it)
+      if (item && d < 3 && t.fx.shield <= 0) { const k = Math.min(t.spin, 0.07 * dt); t.spin -= k; o.spin = Math.min(1.1, o.spin + k); }
     }
     // rush special: home onto nearest enemy
     if (t.fx.special > 0 && t.specialKind === 'rush') {
@@ -623,7 +627,7 @@ export class Sim {
     const sA = A.dir * A.spin * S_SURF, sB = -B.dir * B.spin * S_SURF;
     const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
     const slip = vt + sA - sB;
-    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // overcharge (>100%) is defence, not extra punch
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
     const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
     const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
     const approach = Math.max(0, -vn);
@@ -1574,9 +1578,18 @@ export class Sim {
     if (it !== 'surge') t.spin = Math.min(1, t.spin + 0.06); // (using any power-up gives a little spin back)
     this.ev({ k: 'use', id: t.id, item: it });
     switch (it) {
-      case 'turbo': t.fx.turbo = 3.5; break;
+      case 'turbo': {
+        // a burst forward right away (toward where you're steering, else the way you're going), then 3.5s of speed
+        const c = this.controls[t.id] ?? NO_CONTROL;
+        let dx = c.mx, dz = c.mz;
+        if (Math.hypot(dx, dz) < 0.2) { dx = t.vx; dz = t.vz; }
+        const dl = Math.hypot(dx, dz);
+        if (dl > 0.01) { t.vx += (dx / dl) * 8; t.vz += (dz / dl) * 8; }
+        t.fx.turbo = 3.5;
+        break;
+      }
       case 'shield': t.fx.shield = 5; break;
-      case 'shock': this.shockwave(t, 5, 13, 0.05); break;
+      case 'shock': this.shockwave(t, 6.5, 25, 0.12, 0.14); break; // (a real blast: shoves hard, costs spin and burst)
       // Spin Surge: rip back up to at least full spin, overcharged up to 135%, and 6s of slow decay + halved clash damage
       case 'surge': t.spin = Math.min(1.35, Math.max(1, t.spin + 0.55)); t.fx.surge = 6; break;
       case 'vortex': t.fx.vortex = 4; break;
@@ -1619,7 +1632,7 @@ export class Sim {
     }
   }
 
-  shockwave(src: TopState, R: number, power: number, dmg: number) {
+  shockwave(src: TopState, R: number, power: number, dmg: number, burst = 0) {
     this.ev({ k: 'shock', x: src.x, y: src.y + 0.2, z: src.z, r: R, c: src.color });
     for (const o of this.s.tops) {
       if (o === src || !o.alive) continue;
@@ -1629,6 +1642,7 @@ export class Sim {
       const k = o.fx.shield > 0 ? 0.3 : 1;
       o.vx += (dx / d) * power * f * k; o.vz += (dz / d) * power * f * k; o.vy += 5 * f * k;
       o.spin -= dmg * f * k;
+      if (burst) o.burst += burst * f * k;
       o.lastHit = src.id; o.lastHitT = this.s.t;
       if (o.flag >= 0) this.dropFlag(o);
       if (this.cfg.mode === 'rush') this.spillCrystals(o, Math.min(o.crystals, 2));
