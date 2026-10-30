@@ -32,6 +32,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/health") return new Response("ok");
+    // invite links: /join/<CODE> → /?join=<CODE> (the build loads ./assets relative to the page, so the page itself
+    // has to be served from the root — at /join/<CODE> its scripts resolved to /join/assets/… and the page was blank)
+    const join = url.pathname.match(/^\/join\/([A-Za-z0-9]{4,10})\/?$/);
+    if (join) return Response.redirect(`${url.origin}/?join=${join[1].toUpperCase()}`, 302);
     if (url.pathname === "/api/rooms") {
       if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
       const r = await dir(env).fetch(new Request("https://dir/list"));
