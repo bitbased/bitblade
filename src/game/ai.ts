@@ -20,6 +20,10 @@ export interface AIState {
   runup?: { side: number; t: number }; runCd?: number; charge?: number;
   /** 3+ tops: a spell spent hunting the rival with the most burst health left (so nobody coasts untouched) */
   hunt?: { id: number; until: number }; nextHunt?: number;
+  /** low on spin: heading for a spin source (a spin pad, or a slot in a pinball party) until it's topped up */
+  recharge?: boolean;
+  /** pinball party: a short errand to light something on the table (like a crystal in Crystal Rush) */
+  errand?: { x: number; z: number; mi: number; until: number }; nextErrand?: number;
   /** pinball: how long each side has been held up (a CPU lets go to re-flip instead of cradling forever) */
   holdL?: number; holdR?: number; restL?: number; restR?: number;
 }
@@ -306,6 +310,42 @@ function chooseGoal(sim: Sim, t: TopState, ai: AIState) {
     ai.wander += 1;
     ai.tx = cx + Math.cos(ai.wander) * r; ai.tz = cz + Math.sin(ai.wander) * r;
   };
+
+  // low on spin: go and top up at the nearest spin source — a spin pad, or (pinball party) an open slot — and stay
+  // until it's back up, unless a rival is right on top of us. (Not in races / quests, which steer their own way.)
+  const mode = sim.cfg.mode;
+  if (!t.drone && mode !== 'race' && mode !== 'quest' && !t.held) {
+    const srcs = sim.markers.filter((m) => m.kind === 'spinpad' || (sim.party && m.kind === 'saucer' && sim.linkOn(m)));
+    if (srcs.length) {
+      if (t.spin < 0.4) ai.recharge = true;
+      else if (t.spin > 0.85) ai.recharge = false;
+      const close = enemies.some((e) => Math.hypot(e.x - t.x, e.z - t.z) < 2.2);
+      if (ai.recharge && !close) {
+        const src = nearest(srcs)!;
+        ai.tx = src.x; ai.tz = src.z;
+        return;
+      }
+    }
+  }
+
+  // pinball party: play the table too — go light the nearest unlit rollover / target / standing drop target (they
+  // light shots, open bowls and win power-ups), like crystals in Crystal Rush — between fights: only with no rival
+  // near, and a break between errands (the fight comes first)
+  const pin = s.pin;
+  if (sim.party && pin && !t.drone && t.held === undefined) {
+    const lit = (mi: number) => pin.lit[mi];
+    if (ai.errand && (s.t > ai.errand.until || lit(ai.errand.mi) || Math.hypot(ai.errand.x - t.x, ai.errand.z - t.z) < 0.8)) { ai.errand = undefined; ai.nextErrand = s.t + 5 + Math.random() * 4; }
+    const nearFoe = enemies.some((e) => Math.hypot(e.x - t.x, e.z - t.z) < 7);
+    if (!ai.errand && !nearFoe && s.t >= (ai.nextErrand ?? 0)) {
+      const goals = sim.markers.map((m, mi) => ({ m, mi })).filter(({ m, mi }) => !lit(mi) && (m.kind === 'rollover' || m.kind === 'target' || m.kind === 'drop') && !m.fly)
+        .map(({ m, mi }) => (m.kind === 'drop' ? { x: m.x + Math.cos(m.rot ?? 0) * 1.4, z: m.z + Math.sin(m.rot ?? 0) * 1.4, mi } : { x: m.x, z: m.z, mi })); // (a drop target from its face)
+      // (targets and drop targets open things up: they count as nearer than a rollover)
+      let best: (typeof goals)[number] | null = null, bd = 14;
+      for (const g of goals) { const d = Math.hypot(g.x - t.x, g.z - t.z) * (sim.markers[g.mi].kind === 'rollover' ? 1.6 : 1); if (d < bd) { bd = d; best = g; } }
+      if (best) ai.errand = { ...best, until: s.t + 4 };
+    }
+    if (ai.errand && !nearFoe) { ai.tx = ai.errand.x; ai.tz = ai.errand.z; return; }
+  }
 
   switch (t.duel ? (s.pin?.duel?.game === 'koth' ? 'koth' : 'duel') : sim.cfg.mode) {
     case 'ctf': {
