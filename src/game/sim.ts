@@ -367,6 +367,7 @@ export class Sim {
     for (const k in t.fx) { const kk = k as keyof typeof t.fx; if (t.fx[kk] > 0) t.fx[kk] = Math.max(0, t.fx[kk] - dt); }
     // held at full spin a moment, burst health slowly comes back (faster when overspun)
     t.fullT = t.alive && t.spin >= 0.98 ? (t.fullT ?? 0) + dt : 0;
+    if (t.flipT) t.flipT = Math.max(0, t.flipT - dt);
     if (t.fullT > 1.5 && t.burst > 0) t.burst = Math.max(0, t.burst - (t.spin > 1.05 ? 0.03 : 0.015) * dt);
     t.dashCd = Math.max(0, t.dashCd - dt);
     t.jumpCd = Math.max(0, t.jumpCd - dt);
@@ -634,10 +635,11 @@ export class Sim {
     const slip = vt + sA - sB;
     // a dash's extra punch builds with its run-up: almost nothing point blank, the full bonus after ~4m
     // (a Power Fist still lands up close: full power after 2m, and over half even point blank)
-    const run = (t: TopState) => (t.fx.dash > 0 || t.fx.fist > 0) && t.dashX !== undefined ? Math.max(t.fx.fist > 0 ? 0.55 : 0.1, Math.min(1, Math.hypot(t.x - t.dashX, t.z - (t.dashZ ?? t.z)) / (t.fx.fist > 0 ? 2 : 4))) : 1;
+    const flipped = (t: TopState) => (t.flipT ?? 0) > 0; // (fired by a flipper: dash-like punch)
+    const run = (t: TopState) => (t.fx.dash > 0 || t.fx.fist > 0 || flipped(t)) && t.dashX !== undefined ? Math.max(t.fx.fist > 0 ? 0.55 : 0.1, Math.min(1, Math.hypot(t.x - t.dashX, t.z - (t.dashZ ?? t.z)) / (t.fx.fist > 0 ? 2 : 4))) : 1;
     const rA = run(A), rB = run(B);
-    const dashHit = (t: TopState, r: number) => (t.fx.dash > 0 || t.fx.fist > 0 ? 0.6 + 0.4 * r : 1); // (the extra impact a dash deals)
-    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1 + 0.6 * run(t) : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
+    const dashHit = (t: TopState, r: number) => (t.fx.dash > 0 || t.fx.fist > 0 ? 0.6 + 0.4 * r : 1); // (a flipper shot only gains: no point-blank cut) // (the extra impact a dash deals)
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 || flipped(t) ? 1 + 0.6 * run(t) : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
     const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
     const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
     const approach = Math.max(0, -vn);
@@ -1114,7 +1116,11 @@ export class Sim {
         // the flipper's own speed where it touches you: a swing fires the ball
         const fvx = -w * (cz - P.az), fvz = w * (cx - P.ax);
         const rvn = (t.vx - fvx) * nx + (t.vz - fvz) * nz;
-        if (rvn < 0) { t.vx -= 1.35 * rvn * nx; t.vz -= 1.35 * rvn * nz; }
+        if (rvn < 0) {
+          t.vx -= 1.35 * rvn * nx; t.vz -= 1.35 * rvn * nz;
+          // (a swing that fires the ball: for a moment it hits like a dash, its run measured from here)
+          if (Math.abs(w) > 1 && Math.hypot(t.vx, t.vz) > 8) { t.flipT = 0.6; t.dashX = t.x; t.dashZ = t.z; }
+        }
         t.capN = 0;
       }
     });
