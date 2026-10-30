@@ -1,6 +1,6 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { HUM_STYLES, type HumStyle } from '../game/audio';
+import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
@@ -272,14 +272,64 @@ export class Results extends Base {
 
 export class SettingsScreen extends Base {
   initialFocus = 1;
+  /** the spin sound preview (current style and volume): spins up while held, winds down fairly quickly when let go;
+   *  a tap / Enter / pad press gives a short burst. Shared by the HOLD TO SPIN button and the spin volume slider. */
+  spinner() {
+    const sfx = this.app.sfx;
+    let level = 0, held = false, burst = 0, raf = 0, last = 0;
+    const btn = h<HTMLButtonElement>('button.btn.small.nav.spin-test', { title: 'Hold to hear the spin sound: it spins up while held, and winds down when you let go' }, 'HOLD TO SPIN');
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      if (!btn.isConnected) { sfx.setHum(0); raf = 0; return; }
+      burst = Math.max(0, burst - dt);
+      if (held || burst > 0) level += (1 - level) * Math.min(1, dt * 2.4); // spin up (~1s to full)
+      else level = Math.max(0, level - dt * 1.8); // wind down (~0.5s)
+      sfx.setHum(level);
+      btn.style.setProperty('--spin', String(level));
+      btn.textContent = held || burst > 0 ? 'SPINNING…' : 'HOLD TO SPIN';
+      if (level > 0 || held || burst > 0) raf = requestAnimationFrame(tick); else { raf = 0; sfx.setHum(0); }
+    };
+    const go = () => { sfx.ensure(); void sfx.ctx?.resume(); if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } };
+    const api = {
+      btn,
+      start: () => { held = true; go(); },
+      stop: () => { held = false; },
+      burst: () => { burst = Math.max(burst, 0.9); go(); },
+      /** press-and-hold on any element spins it */
+      holdOn(el: HTMLElement) {
+        el.addEventListener('pointerdown', (e) => { el.setPointerCapture?.((e as PointerEvent).pointerId); api.start(); });
+        for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(ev, api.stop);
+      },
+    };
+    api.holdOn(btn);
+    btn.addEventListener('pointerdown', (e) => e.preventDefault());
+    // (Enter / Space / a pad button arrive as a click with no pointer hold: a short burst instead)
+    btn.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0) api.burst(); });
+    return api;
+  }
+
+  /** TEST SOUND: a different sound effect every press (the SFX volume slider plays them too) */
+  private sfxN = 0;
+  testSound() {
+    const list: SfxName[] = ['clash', 'pickup', 'jump', 'bigclash', 'gem', 'dash', 'land', 'item', 'launch', 'crystal', 'shock', 'special', 'burst', 'hazard', 'go', 'finish', 'win'];
+    this.app.sfx.play(list[this.sfxN++ % list.length]);
+  }
+
   build() {
     const sfx = this.app.sfx;
-    const slider = (label: string, val: number, min: number, max: number, step: number, on: (v: number) => void) => {
+    const slider = (label: string, val: number, min: number, max: number, step: number, on: (v: number) => void, extra?: HTMLElement, hook?: (inp: HTMLInputElement) => void) => {
       const inp = h<HTMLInputElement>('input.nav', { type: 'range', min, max, step, value: val, 'data-navx': '1' });
       inp.addEventListener('input', () => on(parseFloat(inp.value)));
       inp.addEventListener('navx', (e) => { inp.value = String(parseFloat(inp.value) + (e as CustomEvent).detail * step); on(parseFloat(inp.value)); });
-      return h('div.field', null, h('label', null, label), inp);
+      hook?.(inp);
+      return h('div.field', null, h('label', null, label), extra ? h('div.spin-test-row', null, inp, extra) : inp);
     };
+    // the sound sliders preview what they set: SFX plays a test sound (on press, every so often while dragging, and
+    // each pad / arrow step); spin sound spins while held (a burst per pad / arrow step)
+    const spin = this.spinner();
+    let sfxT = 0;
+    const sfxPreview = () => { const now = performance.now(); if (now - sfxT > 280) { sfxT = now; this.testSound(); } };
+    const testBtn = h<HTMLButtonElement>('button.btn.small.nav.spin-test', { title: 'Play a sound effect (a different one each press)', onclick: () => this.testSound() }, 'TEST SOUND');
     const toggle = (label: string, get: () => boolean, set: (v: boolean) => void) => {
       const el = h('div.toggle.panel.nav', { onclick: () => { set(!get()); el.classList.toggle('on', get()); } }, h('span.dot'), label);
       el.classList.toggle('on', get());
@@ -296,10 +346,10 @@ export class SettingsScreen extends Base {
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.app.back() }, '◀ Back'), h('div.screen-title', null, 'SETTINGS')),
       h('div.panel.settings-panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
-        slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }),
+        slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }, testBtn, (inp) => { inp.addEventListener('pointerdown', () => { sfxT = 0; sfxPreview(); }); inp.addEventListener('input', sfxPreview); inp.addEventListener('navx', () => { sfxT = 0; sfxPreview(); }); }),
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
-        slider('SPIN SOUND VOLUME', sfx.humVolume, 0, 1.5, 0.05, (v) => { sfx.humVolume = v; sfx.save(); }),
-        (() => { const se = h<HTMLSelectElement>('select.nav', { onchange: () => { sfx.humStyle = se.value as HumStyle; sfx.save(); } }, ...HUM_STYLES.map((s) => h('option', { value: s.id, selected: sfx.humStyle === s.id }, s.label))); return h('div.field', null, h('label', null, 'SPIN SOUND'), se); })(),
+        slider('SPIN SOUND VOLUME', sfx.humVolume, 0, 1.5, 0.05, (v) => { sfx.humVolume = v; sfx.save(); }, undefined, (inp) => { spin.holdOn(inp); inp.addEventListener('navx', spin.burst); }),
+        (() => { const se = h<HTMLSelectElement>('select.nav', { onchange: () => { sfx.humStyle = se.value as HumStyle; sfx.save(); } }, ...HUM_STYLES.map((s) => h('option', { value: s.id, selected: sfx.humStyle === s.id }, s.label))); return h('div.field', null, h('label', null, 'SPIN SOUND'), h('div.spin-test-row', null, se, spin.btn)); })(),
         musicPick('MENU MUSIC', 'menu', [['surprise', '🎲 Surprise — a brand-new song each session'], ['random', '🔀 Random — a new song every couple of loops'], ['off', 'Off']]),
         musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),

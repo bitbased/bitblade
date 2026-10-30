@@ -60,6 +60,11 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 @keyframes blink { 50% { opacity: 0.25; } }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } }
 
+/* settings: hold-to-spin preview next to the spin sound picker (fills as it spins up) */
+.spin-test-row { display: flex; gap: 8px; align-items: stretch; }
+.spin-test-row > :not(.spin-test) { flex: 1 1 auto; min-width: 0; } /* (the slider / picker takes the room, the test button sits beside it) */
+.spin-test { --spin: 0; flex: none; min-width: 132px; touch-action: none; user-select: none; background: linear-gradient(90deg, rgba(60, 242, 255, 0.45) calc(var(--spin) * 100%), transparent calc(var(--spin) * 100%)), var(--panel); }
+
 /* ---------- main menu ---------- */
 .menu-screen { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 7vw; background: linear-gradient(90deg, rgba(3, 4, 12, 0.88) 0%, rgba(3, 4, 12, 0.4) 45%, transparent 70%); }
 .menu-col { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
