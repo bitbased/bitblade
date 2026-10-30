@@ -16,6 +16,7 @@ import { hazardPose } from './hazards';
 import { G } from './sim';
 import type { GameEvent, GameState, MatchConfig, TopState } from './types';
 import { ITEMS } from './types';
+import { iconSvg } from '../ui/icons';
 import { settings, perf } from '../core/settings';
 
 // ---------------------------------------------------------------- shared renderer
@@ -82,6 +83,25 @@ function textSprite(text: string, color: string, size = 48) {
   sp.scale.set((w / cv.height) * 0.45, 0.45, 1);
   sp.renderOrder = 10;
   return sp;
+}
+
+/** a held power-up's icon as a texture: a dark tile with the item's colour (drawn once per item, cached) */
+const itemTexCache = new Map<string, THREE.CanvasTexture>();
+function itemTexture(kind: keyof typeof ITEMS) {
+  let tex = itemTexCache.get(kind);
+  if (tex) return tex;
+  const it = ITEMS[kind], cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const c = cv.getContext('2d')!;
+  c.fillStyle = 'rgba(5, 7, 13, 0.88)'; c.strokeStyle = it.color; c.lineWidth = 10;
+  c.beginPath(); c.roundRect(8, 8, 112, 112, 22); c.fill(); c.stroke();
+  tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const img = new Image();
+  img.onload = () => { c.drawImage(img, 22, 22, 84, 84); tex!.needsUpdate = true; };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(iconSvg(it.icon).replace('<svg ', `<svg xmlns="http://www.w3.org/2000/svg" width="84" height="84" color="${it.color}" `));
+  itemTexCache.set(kind, tex);
+  return tex;
 }
 
 /** chevrons pointing toward canvas top (= local +y of a PlaneGeometry) */
@@ -522,6 +542,8 @@ interface TopView {
   shadow: THREE.Mesh;
   blur: THREE.Mesh;
   label: THREE.Sprite;
+  /** the power-up it's holding, floating above its name (cycling while the roulette rolls) */
+  item: THREE.Sprite; itemK?: string;
   trail: Trail;
   shield: THREE.Mesh;
   ice: THREE.Mesh;
@@ -878,6 +900,9 @@ export class GameView {
     const label = textSprite(this.cfg.players[this.tops.length]?.name ?? blade.name, '#' + color.getHexString());
     label.position.y = 1.5;
     root.add(label);
+    const item = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, transparent: true }));
+    item.position.y = 2.2; item.scale.set(0.74, 0.74, 1); item.renderOrder = 11; item.visible = false;
+    root.add(item);
     const shield = new THREE.Mesh(new THREE.IcosahedronGeometry(st.radius * 1.5, 2), new THREE.MeshBasicMaterial({ color: '#47b6ff', transparent: true, opacity: 0.25, wireframe: true, toneMapped: false }));
     shield.position.y = 0.5;
     root.add(shield);
@@ -901,7 +926,7 @@ export class GameView {
     const launchRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48, 2, 0, Math.PI * 2), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.9, toneMapped: false, side: THREE.DoubleSide }));
     launchRing.rotation.x = -Math.PI / 2;
     this.scene.add(root, ring, shadow, trail.mesh, arc, landing, launchRing);
-    this.tops.push({ root, tilt, model, ring, shadow, blur, label, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
+    this.tops.push({ root, tilt, model, ring, shadow, blur, label, item, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
   }
 
   buildMarkers() {
@@ -1508,6 +1533,7 @@ export class GameView {
           break;
         }
         case 'burst': this.burstTop(e.id, s); this.ring(e.x, e.y + 0.2, e.z, '#ffffff', 5, 0.6); this.shake = 1; break;
+        case 'fist': this.ring(e.x, e.y - 0.4, e.z, '#ff3b6b', 3.2, 0.35); this.particles.burst(e.x, e.y, e.z, 45, 10, new THREE.Color('#ff3b6b'), 0.16, 0.45, 0.2); this.shake = Math.min(1, this.shake + 0.55); break;
         case 'shock': this.ring(e.x, e.y, e.z, e.c, e.r, 0.5); this.particles.burst(e.x, e.y, e.z, 40, 9, new THREE.Color(e.c), 0.16, 0.5, 0.1); this.shake = Math.min(1, this.shake + 0.4); break;
         case 'pickup': {
           const c = e.what === 'crystal' ? '#7ffcff' : e.what === 'gem' ? '#ff5cf4' : e.what === 'boost' ? '#ffe23a' : '#ffffff';
@@ -1946,12 +1972,19 @@ export class GameView {
     }
     (v.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.45 - above * 0.06);
     v.label.visible = t.alive && !this.attract;
+    {
+      const kinds = Object.keys(ITEMS) as (keyof typeof ITEMS)[];
+      const ik = t.roll > 0 ? kinds[Math.floor(this.time * 14) % kinds.length] : t.item;
+      v.item.visible = !!ik && t.alive && !this.attract && !t.drone;
+      if (ik && v.itemK !== ik) { v.itemK = ik; (v.item.material as THREE.SpriteMaterial).map = itemTexture(ik); (v.item.material as THREE.SpriteMaterial).needsUpdate = true; }
+      v.item.position.y = 2.2 + (t.roll > 0 ? 0 : Math.sin(this.time * 4 + t.id) * 0.06); // (a gentle bob once it's yours)
+    }
     v.shield.visible = t.fx.shield > 0 && t.alive;
     v.shield.rotation.y += dt * 2;
     v.ice.visible = t.fx.frozen > 0;
-    v.aura.visible = t.fx.special > 0 || t.fx.vortex > 0 || t.fx.turbo > 0 || t.fx.surge > 0 || !!t.od;
+    v.aura.visible = t.fx.special > 0 || t.fx.vortex > 0 || t.fx.turbo > 0 || t.fx.surge > 0 || t.fx.fist > 0 || !!t.od;
     v.aura.rotation.y += dt * (t.fx.surge > 0 ? 14 : 5);
-    (v.aura.material as THREE.MeshBasicMaterial).color.set(t.fx.surge > 0 && t.fx.special <= 0 ? '#38ffb0' : t.fx.turbo > 0 && t.fx.special <= 0 ? '#ff7b1c' : t.fx.vortex > 0 ? '#b46bff' : v.color);
+    (v.aura.material as THREE.MeshBasicMaterial).color.set(t.fx.fist > 0 && t.fx.special <= 0 ? '#ff3b6b' : t.fx.surge > 0 && t.fx.special <= 0 ? '#38ffb0' : t.fx.turbo > 0 && t.fx.special <= 0 ? '#ff7b1c' : t.fx.vortex > 0 ? '#b46bff' : v.color);
     v.core.visible = t.flag >= 0;
     if (t.flag >= 0) (v.core.material as THREE.MeshBasicMaterial).color.set(t.flag === 0 ? '#ff3b4a' : '#3b8bff');
     // trail

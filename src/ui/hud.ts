@@ -164,7 +164,7 @@ export class Hud {
       const it = t.item ? ITEMS[t.item] : null;
       c.item.classList.toggle('on', !!it);
       c.item.classList.toggle('roll', t.roll > 0);
-      const ik = t.roll > 0 ? Object.values(ITEMS)[Math.floor(s.t * 14) % 8] : it;
+      const ik = t.roll > 0 ? Object.values(ITEMS)[Math.floor(s.t * 14) % Object.keys(ITEMS).length] : it;
       if (ik && c.item.dataset.k !== ik.icon) { c.item.dataset.k = ik.icon; c.item.innerHTML = iconSvg(ik.icon); c.item.style.color = ik.color; }
       const bits: string[] = [];
       if (this.cfg.mode === 'rush') bits.push(`${iconSvg('gem')} ${t.crystals}`);

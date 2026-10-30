@@ -2,7 +2,7 @@ import type { BladeDesign } from '../core/blade';
 import type { ArenaDef } from './terrain';
 
 export type ModeId = 'duel' | 'tag' | 'ffa' | 'ctf' | 'rush' | 'koth' | 'gauntlet' | 'race' | 'quest' | 'pinball';
-export type ItemKind = 'turbo' | 'shield' | 'shock' | 'surge' | 'vortex' | 'titan' | 'comet' | 'mine';
+export type ItemKind = 'turbo' | 'shield' | 'shock' | 'surge' | 'vortex' | 'titan' | 'comet' | 'mine' | 'fist';
 export type FinishType = 'spin' | 'over' | 'burst' | 'xtreme';
 
 export interface ModeInfo { id: ModeId; name: string; tag: string; desc: string; minPlayers: number; maxPlayers: number; teams: number; rounds: boolean; target: number; time: number; arenas: string[] }
@@ -29,6 +29,7 @@ export const ITEMS: Record<ItemKind, { name: string; icon: string; color: string
   titan: { name: 'Titan', icon: 'arrowUp', color: '#ff4466' },
   comet: { name: 'Comet', icon: 'comet', color: '#ff9e3d' },
   mine: { name: 'Ice Mine', icon: 'snowflake', color: '#9fe8ff' },
+  fist: { name: 'Power Fist', icon: 'fist', color: '#ff3b6b' },
 };
 
 export type ControllerSpec =
@@ -63,7 +64,8 @@ export interface MatchConfig {
 export interface Control { mx: number; mz: number; dash: boolean; jump: boolean; item: boolean; special: boolean; /** dash button held down (overdrive) */ hold?: boolean; /** pinball: left / right flipper buttons held */ flipL?: boolean; flipR?: boolean }
 export const NO_CONTROL: Control = { mx: 0, mz: 0, dash: false, jump: false, item: false, special: false };
 
-export interface TopFx { turbo: number; shield: number; titan: number; vortex: number; frozen: number; special: number; dash: number; /** Spin Surge overcharge time left */ surge: number }
+export interface TopFx { turbo: number; shield: number; titan: number; vortex: number; frozen: number; special: number; dash: number; /** Spin Surge overcharge time left */ surge: number;
+  /** Power Fist: the charge's time left — the first top hit in it takes double knockback (and spends it) */ fist: number }
 
 export interface TopState {
   id: number; team: number; name: string; color: string; cpu: boolean;
@@ -115,6 +117,7 @@ export type GameEvent =
   | { k: 'shock'; x: number; y: number; z: number; r: number; c: string }
   | { k: 'pickup'; id: number; what: string; x: number; y: number; z: number }
   | { k: 'use'; id: number; item: ItemKind }
+  | { k: 'fist'; id: number; x: number; y: number; z: number }
   | { k: 'special'; id: number }
   | { k: 'dash'; id: number }
   | { k: 'jump'; id: number }

@@ -13,7 +13,7 @@ export const G = 20;
 export const S_SURF = 7;
 const POINTS: Record<FinishType, number> = { spin: 1, over: 2, burst: 2, xtreme: 3 };
 export const FINISH_LABEL: Record<FinishType, string> = { spin: 'SPIN FINISH', over: 'OVER FINISH', burst: 'BURST FINISH', xtreme: 'XTREME FINISH' };
-const ITEM_POOL: ItemKind[] = ['turbo', 'shield', 'shock', 'surge', 'vortex', 'titan', 'comet', 'mine'];
+const ITEM_POOL: ItemKind[] = ['turbo', 'shield', 'shock', 'surge', 'vortex', 'titan', 'comet', 'mine', 'fist'];
 /** 83.456 -> '1:23.45' */
 export function fmtTime(sec: number) {
   const m = Math.floor(sec / 60), r = sec - m * 60;
@@ -146,7 +146,7 @@ export class Sim {
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, spin: 1, dir: blade.spinDir, angle: 0, tx: 0, tz: 0,
       grounded: false, air: 0, alive: true, out: '', outT: 0, burst: 0, special: 0, specialKind: best[0],
       dashCd: 0, jumpCd: 0, itemCd: 0, item: null, roll: 0,
-      fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 },
+      fx: { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0, fist: 0 },
       flag: -1, crystals: 0, score: 0, kos: 0, dmg: 0, lives: this.cfg.mode === 'gauntlet' || this.cfg.mode === 'pinball' ? 3 : this.cfg.mode === 'quest' ? 5 : 99, qcp: -1,
       respawnT: 0, lastHit: -1, lastHitT: -99, launch: 0.6, launchLocked: false, drone, scale: 1,
       lap: 0, prog: 0, cp: 0, place: 0, finishT: -1, off: 0,
@@ -197,7 +197,7 @@ export class Sim {
     s.tops.forEach((t, i) => {
       if (t.drone) return;
       t.alive = true; t.out = ''; t.outT = 0; t.spin = 1; t.burst = 0; t.launchLocked = false; t.launch = 0.6;
-      t.fx = { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0 };
+      t.fx = { turbo: 0, shield: 0, titan: 0, vortex: 0, frozen: 0, special: 0, dash: 0, surge: 0, fist: 0 };
       t.flag = -1; t.item = null; t.roll = 0; t.scale = 1;
       const sp = this.spawnFor(t, i);
       this.placeTop(t, sp.x, sp.z, 1.6);
@@ -591,9 +591,11 @@ export class Sim {
     // who was running at whom (taken before the bounce): splits the impact damage below
     const runA = Math.max(0, A.vx * nx + A.vz * nz), runB = Math.max(0, -(B.vx * nx + B.vz * nz));
     const wA = runA + runB > 0.01 ? runA / (runA + runB) : 0.5;
-    const kA = A.fx.shield > 0 ? 0.4 : 1, kB = B.fx.shield > 0 ? 0.4 : 1;
+    // (a Power Fist charging in knocks its target back twice as hard — the first hit spends it)
+    const kA = (A.fx.shield > 0 ? 0.4 : 1) * (B.fx.fist > 0 ? 2 : 1), kB = (B.fx.shield > 0 ? 0.4 : 1) * (A.fx.fist > 0 ? 2 : 1);
     A.vx -= ((nx * jn + tx * jt) / mA) * kA; A.vz -= ((nz * jn + tz * jt) / mA) * kA;
     B.vx += ((nx * jn + tx * jt) / mB) * kB; B.vz += ((nz * jn + tz * jt) / mB) * kB;
+    for (const [P, Q] of [[A, B], [B, A]] as const) if (P.fx.fist > 0) { P.fx.fist = 0; this.ev({ k: 'fist', id: P.id, x: Q.x, y: Q.y + 0.5, z: Q.z }); }
     // vertical: upper attack lifts, higher top smashes down
     const tiltA = this.cfg.players[A.id]?.blade.wingTilt ?? 0, tiltB = this.cfg.players[B.id]?.blade.wingTilt ?? 0;
     B.vy += (jn / mB) * 0.22 * Math.max(0, tiltA) + (dy < -0.2 ? -2 : 0);
@@ -1511,6 +1513,17 @@ export class Sim {
         if (e) { dx = e.x - t.x; dz = e.z - t.z; }
         const d = Math.hypot(dx, dz) || 1;
         this.s.projs.push({ id: this.s.nextId++, kind: 'comet', x: t.x, y: t.y + 0.8, z: t.z, vx: (dx / d) * 12, vy: 3, vz: (dz / d) * 12, owner: t.id, t: 0 });
+        break;
+      }
+      // Power Fist: a boost like a dash, toward where you're steering — and the first top it hits flies twice as far
+      case 'fist': {
+        const c = this.controls[t.id] ?? NO_CONTROL;
+        let dx = c.mx, dz = c.mz;
+        if (Math.hypot(dx, dz) < 0.2) { const e = this.nearestEnemy(t); if (e) { dx = e.x - t.x; dz = e.z - t.z; } else { dx = t.vx; dz = t.vz; } }
+        const dl = Math.hypot(dx, dz) || 1, v = 12 * this.rpmK(t);
+        t.vx += (dx / dl) * v; t.vz += (dz / dl) * v;
+        t.fx.fist = 1.2; t.fx.dash = Math.max(t.fx.dash, 0.6);
+        this.ev({ k: 'dash', id: t.id });
         break;
       }
       case 'mine':
