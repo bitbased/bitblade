@@ -85,6 +85,8 @@ export interface TopState {
   graceT?: number;
   /** overdrive: dash held past the burst — faster (and climbs harder) at the cost of spin, steers wider */
   od?: boolean; holdT?: number;
+  /** where the current dash (or Power Fist charge) started: a dash's extra punch grows with the run-up */
+  dashX?: number; dashZ?: number;
   /** pinball: aim of the lock this ball sits in · battling in an arena bowl (normal top physics there) */
   aimA?: number; duel?: boolean;
   launch: number; launchLocked: boolean;

@@ -405,7 +405,7 @@ export class Sim {
         t.vx += (dx / dl) * dashV; t.vz += (dz / dl) * dashV;
         t.spin -= this.cfg.mode === 'race' ? 0.01 : 0.025;
         t.dashCd = 1.1;
-        t.fx.dash = 0.35;
+        t.fx.dash = 0.35; t.dashX = t.x; t.dashZ = t.z;
         this.ev({ k: 'dash', id: t.id });
       }
       if (c.jump && t.jumpCd <= 0 && t.grounded) {
@@ -627,7 +627,11 @@ export class Sim {
     const sA = A.dir * A.spin * S_SURF, sB = -B.dir * B.spin * S_SURF;
     const vt = (A.vx - B.vx) * tx + (A.vz - B.vz) * tz;
     const slip = vt + sA - sB;
-    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1.6 : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
+    // a dash's extra punch builds with its run-up: almost nothing point blank, the full bonus after ~4m
+    const run = (t: TopState) => (t.fx.dash > 0 || t.fx.fist > 0) && t.dashX !== undefined ? Math.max(0.1, Math.min(1, Math.hypot(t.x - t.dashX, t.z - (t.dashZ ?? t.z)) / 4)) : 1;
+    const rA = run(A), rB = run(B);
+    const dashHit = (t: TopState, r: number) => (t.fx.dash > 0 || t.fx.fist > 0 ? 0.6 + 0.4 * r : 1); // (the extra impact a dash deals)
+    const atk = (t: TopState, s: BladeStats) => s.attack * (t.fx.dash > 0 ? 1 + 0.6 * run(t) : 1) * (t.od ? 1 + Math.min(1, ((t.holdT ?? 0) - 0.35) / 1.5) * 0.5 : 1) * (t.fx.special > 0 && t.specialKind === 'rush' ? 2 : 1) * (t.fx.titan > 0 ? 1.3 : 1) * (t.fx.turbo > 0 ? 1.35 : 1) * (0.5 + Math.min(1, t.spin) * 0.6); // (turbo: a fireball hits harder) overcharge (>100%) is defence, not extra punch
     const def = (t: TopState, s: BladeStats) => (s.defense + 0.3) * (t.fx.shield > 0 ? 4 : 1) * (t.fx.special > 0 && t.specialKind === 'fortress' ? 3 : 1);
     const aA = atk(A, sa), aB = atk(B, sb), dA = def(A, sa), dB = def(B, sb);
     const approach = Math.max(0, -vn);
@@ -656,8 +660,8 @@ export class Sim {
     // direct impact damage (a surging top shrugs off half)
     // (the closing speed is split by who was running at whom: a long run-up into a top that's sitting still lands
     // up to twice what the runner takes back)
-    A.spin -= (approach * 0.003 * (0.7 + 0.6 * (1 - wA)) + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
-    B.spin -= (approach * 0.003 * (0.7 + 0.6 * wA) + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
+    A.spin -= (approach * 0.003 * (0.7 + 0.6 * (1 - wA)) * dashHit(B, rB) + 0.004) * (aB / dA) * (A.fx.surge > 0 ? 0.5 : 1);
+    B.spin -= (approach * 0.003 * (0.7 + 0.6 * wA) * dashHit(A, rA) + 0.004) * (aA / dB) * (B.fx.surge > 0 ? 0.5 : 1);
     // pinball: your own balls bounce off each other, no battle damage
     const friendly = this.cfg.mode === 'pinball' && A.team === B.team;
     if (friendly) { A.spin = before[0]; B.spin = before[1]; }
@@ -677,8 +681,8 @@ export class Sim {
     const I = jn + Math.abs(jt);
     const bth = 8;
     if (I > bth) {
-      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin) * protB;
-      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin) * protA;
+      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin) * protB * dashHit(A, rA);
+      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin) * protA * dashHit(B, rB);
     }
     // flag carriers drop on hard hits
     if (I > 6) { if (A.flag >= 0) this.dropFlag(A); if (B.flag >= 0) this.dropFlag(B); }
@@ -1609,7 +1613,7 @@ export class Sim {
         if (Math.hypot(dx, dz) < 0.2) { const e = this.nearestEnemy(t); if (e) { dx = e.x - t.x; dz = e.z - t.z; } else { dx = t.vx; dz = t.vz; } }
         const dl = Math.hypot(dx, dz) || 1, v = 12 * this.rpmK(t);
         t.vx += (dx / dl) * v; t.vz += (dz / dl) * v;
-        t.fx.fist = 1.2; t.fx.dash = Math.max(t.fx.dash, 0.6);
+        t.fx.fist = 1.2; t.fx.dash = Math.max(t.fx.dash, 0.6); t.dashX = t.x; t.dashZ = t.z;
         this.ev({ k: 'dash', id: t.id });
         break;
       }
