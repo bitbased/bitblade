@@ -1,5 +1,5 @@
 // Procedural WebAudio sound effects + chip-tune songs (see music.ts). No asset files needed.
-import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, surpriseSong, PRESET_SONGS, type Song } from './music';
+import { SongPlayer, musicPrefs, songById, defaultSongFor, randomSong, surpriseSong, loadCustomSongs, PRESET_SONGS, type Song } from './music';
 
 export type SfxName = 'tick' | 'select' | 'back' | 'clash' | 'bigclash' | 'land' | 'launch' | 'count' | 'go' | 'finish' | 'burst' | 'pickup' | 'item' | 'shock' | 'dash' | 'jump' | 'special' | 'crystal' | 'gem' | 'hazard' | 'win' | 'grind';
 
@@ -173,9 +173,20 @@ export class Sfx {
     this.hum.f.frequency.value = st.cutoff;
   }
 
-  /** 📻 in a match: a fresh surprise song, and new ones keep coming (each ≥45s, switching at the end of a loop) */
+  /** 📻 the next radio song: about half fresh surprises, the rest presets and songs from your library (never the
+   *  same one twice in a row; with no library songs, presets take their share) */
+  radioPick(): Song {
+    const not = this.wanted?.id, pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+    const lib = loadCustomSongs().filter((s) => s.id !== not), pre = PRESET_SONGS.filter((s) => s.id !== not);
+    const r = Math.random();
+    if (r < 0.25 && lib.length) return pick(lib);
+    if (r < 0.5 && pre.length) return pick(pre);
+    return surpriseSong();
+  }
+
+  /** 📻 in a match: radio songs keep coming (each ≥45s, switching at the end of a loop) */
   startRadio() {
-    const n = surpriseSong();
+    const n = this.radioPick();
     this.surprise = n;
     this.playSong(n);
     this.armRadio();
@@ -184,7 +195,7 @@ export class Sfx {
     if (!this.player) return;
     this.player.onLoop = () => {
       if (!this.ctx || this.ctx.currentTime - this.songStart < 45) return;
-      const n = surpriseSong();
+      const n = this.radioPick();
       this.surprise = n; this.wanted = n; this.songStart = this.ctx.currentTime;
       this.player!.play(n);
       this.onSongChange?.(n);
@@ -223,10 +234,10 @@ export class Sfx {
       this.player.onLoop = () => { if (++this.cycleLoops >= 2) { this.cycleLoops = 0; const n = randomSong(this.wanted?.id); this.wanted = n; this.player!.play(n); this.onSongChange?.(n); } };
     }
     if (pref === 'surprise' && where === 'menu' && musicPrefs.radio && this.player) {
-      // 📻 radio: once a song has had 45s, the next time it comes round to its start, a brand-new one takes over
+      // 📻 radio: once a song has had 45s, the next time it comes round to its start, the next one takes over
       this.player.onLoop = () => {
         if (!this.ctx || this.ctx.currentTime - this.songStart < 45) return;
-        const n = surpriseSong();
+        const n = this.radioPick();
         this.surprise = n; this.wanted = n; this.songStart = this.ctx.currentTime;
         this.player!.play(n);
         this.onSongChange?.(n);

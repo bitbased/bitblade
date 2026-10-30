@@ -1,7 +1,7 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { HUM_STYLES, type HumStyle } from '../game/audio';
-import { allSongs, loadCustomSongs, musicPrefs, saveCustomSongs, saveMusicPrefs, songById, surpriseSong } from '../game/music';
+import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById, surpriseSong } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
@@ -92,7 +92,8 @@ export class MusicCorner {
     const sfx = this.app.sfx;
     const on = musicPrefs.menu === 'surprise';
     const song = on ? sfx.surprise : songById(musicPrefs.menu);
-    const saved = !!song && loadCustomSongs().some((s) => s.id === song.id);
+    // (the radio also plays presets and your own songs: those are already in the library)
+    const saved = !!song && (loadCustomSongs().some((s) => s.id === song.id) || PRESET_SONGS.some((s) => s.id === song.id));
     const redo = () => this.refresh();
     const roll = () => {
       sfx.music(true); // (the title screen starts silent)
@@ -108,16 +109,16 @@ export class MusicCorner {
     },
       !sfx.musicLive && musicPrefs.menu !== 'off'
         ? h('button.mm-play.nav', { title: 'Browsers wait for a click before playing sound — tap to start the music', onclick: () => { this.app.sfx.ensure(); void this.app.sfx.ctx?.resume().then(() => this.refresh()); this.app.sfx.music(true); this.app.sfx.useMusic('menu'); this.refresh(); } },
-            h('b', null, icon('play')), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? 'Surprise radio' : song ? `♪ ${song.name}` : '')))
+            h('b', null, icon('play')), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? 'Radio' : song ? `♪ ${song.name}` : '')))
         : null,
-      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on ? 'SURPRISE SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
+      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'SURPRISE SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
       h('button.mm-ic.nav', { title: 'Surprise me: a brand-new song (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library', 'data-ic': 'check' }, icon('check'))
         : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); }, 'data-ic': 'save' }, icon('save'))) : null,
       h('button.mm-ic.mm-radio.nav' + (on && musicPrefs.radio ? '.on' : ''), {
         'aria-pressed': on && musicPrefs.radio ? 'true' : 'false',
-        title: on && musicPrefs.radio ? 'Radio on: a new surprise song every 45s or so — click to stay on this one' : 'Radio: keep playing new surprise songs (each one at least 45s)',
+        title: on && musicPrefs.radio ? 'Radio on: a new song every 45s or so (surprises, presets and your own songs) — click to stay on this one' : 'Radio: keep the songs coming — new surprises, presets and your own songs (each one at least 45s)',
         onclick: () => { musicPrefs.radio = !(on && musicPrefs.radio); saveMusicPrefs(); if (!on) roll(); else { sfx.useMusic('menu'); redo(); } },
         'data-ic': 'radio',
       }, icon('radio')),
