@@ -559,7 +559,8 @@ export class LobbyScreen implements Screen {
     while (this.cards.length < L.slots.length) { const c = this.makeCard(); this.cards.push(c); this.slotsEl.insertBefore(c.el, this.joinCard); }
     while (this.cards.length > L.slots.length) this.cards.pop()!.el.remove();
     L.slots.forEach((s, i) => this.updateCard(this.cards[i], s, i));
-    this.joinCard.style.display = L.slots.length < this.mode.maxPlayers ? '' : 'none';
+    // (+ PLAYER stays while there's room — or a CPU / ghost whose place a player can take)
+    this.joinCard.style.display = L.slots.length < this.mode.maxPlayers || L.slots.some((s) => s.ctrl.type === 'cpu') ? '' : 'none';
   }
 
   /** pads that joined as P2+ steer their own slot; P1's device (or keyboard) drives the menu */
