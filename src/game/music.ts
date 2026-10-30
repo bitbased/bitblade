@@ -123,7 +123,7 @@ export const PRESET_SONGS: Song[] = [
   // sequenced or held), and blips only use notes from the melody, so the whole thing hangs together.
   // synthwave cruise: arp-and-bass intro → the hook → a higher answer over 16th hats → a half-time breakdown
   S('Neon Drive', 'neon-drive', { bpm: 118, root: 45, scale: 'minor' },
-    { lead: { wave: 'saw', oct: 2, vol: 0.4, decay: 0.22, cutoff: 0.6, echo: 0.1, vib: 0 }, arp: { vol: 0.17, echo: 0.35 }, bass: { wave: 'square', oct: 0, vol: 0.45, decay: 0.3 }, pad: { vol: 0.2, decay: 1.6 }, perc: { vol: 0.14 } },
+    { lead: { wave: 'saw', oct: 2, vol: 0.4, decay: 0.22, cutoff: 0.6, echo: 0.1, vib: 0 }, arp: { wave: 'sine', vol: 0.2, echo: 0.35, chord: false }, bass: { wave: 'square', oct: 0, vol: 0.45, decay: 0.3 }, pad: { vol: 0.2, decay: 1.6 }, perc: { vol: 0.14 } },
     [
       { arp: '0.2.4.2.0.2.4.2.', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', hat: '..x...x...x...x.' },
       { lead: '0.4.7.9.7.4.6.4.', bass: '0.0.0.0.0.0.0.0.', pad: '0---------------', kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.', perc: '..............7.' },
@@ -587,8 +587,8 @@ export function genVoice(l: Lane): Partial<Lane> {
   const r = Math.random, pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
   const rng = (a: number, b: number) => +(a + r() * (b - a)).toFixed(2);
   switch (l.kind) {
-    case 'lead': return { wave: pick(['square', 'pulse25', 'pulse12', 'saw', 'triangle', 'sine']), oct: pick([1, 1, 2]), decay: rng(0.15, 0.6), cutoff: rng(0.45, 0.95), echo: rng(0, 0.5), vib: rng(0, 0.45), chord: r() < 0.15 };
-    case 'arp': return { wave: pick(['pulse12', 'pulse25', 'square', 'triangle']), oct: pick([1, 2, 2]), decay: rng(0.08, 0.25), cutoff: rng(0.5, 1), echo: rng(0.1, 0.5), vib: 0, chord: r() < 0.75 };
+    case 'lead': return { wave: pick(['square', 'pulse25', 'pulse12', 'saw', 'triangle', 'sine']), oct: pick([1, 1, 2]), decay: rng(0.15, 0.6), cutoff: rng(0.45, 0.95), echo: rng(0, 0.5), vib: rng(0, 0.45), chord: r() < 0.05 }; // (chip arpeggio only now and then)
+    case 'arp': return { wave: pick(['pulse12', 'pulse25', 'square', 'triangle']), oct: pick([1, 2, 2]), decay: rng(0.08, 0.25), cutoff: rng(0.5, 1), echo: rng(0.1, 0.5), vib: 0, chord: r() < 0.2 };
     case 'bass': return { wave: pick(['triangle', 'square', 'pulse25', 'saw']), oct: pick([-1, 0, 0]), decay: rng(0.12, 0.45), cutoff: rng(0.3, 0.65), echo: 0, vib: 0, chord: false };
     case 'pad': return { wave: pick(['sine', 'triangle', 'square', 'saw']), oct: pick([0, 1, 1]), decay: rng(0.6, 1.8), cutoff: rng(0.35, 0.7), echo: rng(0.15, 0.55), vib: rng(0, 0.3), chord: true };
     case 'perc': return { wave: pick(['pulse25', 'pulse12', 'square', 'triangle', 'noise']), oct: pick([1, 2, 3]), decay: rng(0.04, 0.15), cutoff: rng(0.5, 1), echo: rng(0, 0.5), vib: 0, chord: false };
@@ -655,6 +655,7 @@ export function surpriseSong(shape?: 'loop' | 'long'): Song {
   s.crunch = Math.random() < 0.3 ? Math.random() * 0.4 : 0;
   const chip: Lane['wave'][] = ['square', 'pulse25', 'pulse12', 'triangle', 'saw'];
   s.lanes.forEach((l) => { if (!DRUMS.has(l.kind) && l.kind !== 'pad') l.wave = chip[Math.floor(Math.random() * chip.length)]; });
+  s.lanes[1].chord = Math.random() < 0.2; // (the arp: plain notes mostly — chip arpeggio only now and then)
   s.lanes[3].mute = Math.random() < 0.4;
   s.lanes[7].mute = Math.random() < 0.5;
   const progs = [[0, 4, 5, 3], [0, 3, 4, 4], [0, 5, 3, 4], [0, 0, 3, 4], [0, 3, 0, 4], [0, 5, 2, 6], [3, 4, 0, 5]];
