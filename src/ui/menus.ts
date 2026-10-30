@@ -276,23 +276,24 @@ export class SettingsScreen extends Base {
    *  a tap / Enter / pad press gives a short burst. Shared by the HOLD TO SPIN button and the spin volume slider. */
   spinner() {
     const sfx = this.app.sfx;
-    let level = 0, held = false, burst = 0, raf = 0, last = 0;
+    let level = 0, held = false, burst = 0, raf = 0, last = 0, started = 0;
     const btn = h<HTMLButtonElement>('button.btn.small.nav.spin-test', { title: 'Hold to hear the spin sound: it spins up while held, and winds down when you let go' }, 'HOLD TO SPIN');
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
-      if (!btn.isConnected) { sfx.setHum(0); raf = 0; return; }
+      if (!btn.isConnected || (!held && burst <= 0 && level <= 0 && sfx.ctx?.state !== 'running' && now - started > 3000)) { sfx.setHum(0); raf = 0; return; }
       burst = Math.max(0, burst - dt);
       if (held || burst > 0) level += (1 - level) * Math.min(1, dt * 2.4); // spin up (~1s to full)
       else level = Math.max(0, level - dt * 1.8); // wind down (~0.5s)
       sfx.setHum(level);
       btn.style.setProperty('--spin', String(level));
       btn.textContent = held || burst > 0 ? 'SPINNING…' : 'HOLD TO SPIN';
-      if (level > 0 || held || burst > 0) raf = requestAnimationFrame(tick); else { raf = 0; sfx.setHum(0); }
+      if (level > 0 || held || burst > 0 || sfx.ctx?.state !== 'running') raf = requestAnimationFrame(tick); else { raf = 0; sfx.setHum(0); }
     };
-    const go = () => { sfx.ensure(); void sfx.ctx?.resume(); if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } };
+    // (wake the audio first — a sleeping context would swallow the first press — and keep ticking until it's up)
+    const go = () => { sfx.ensure(); if (sfx.ctx && sfx.ctx.state !== 'running') void sfx.ctx.resume().catch(() => {}); started = performance.now(); if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } };
     const api = {
       btn,
-      start: () => { held = true; go(); },
+      start: () => { held = true; burst = Math.max(burst, 0.6); go(); }, // (even a quick tap is heard)
       stop: () => { held = false; },
       burst: () => { burst = Math.max(burst, 0.9); go(); },
       /** press-and-hold on any element spins it */

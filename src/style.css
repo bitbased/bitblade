@@ -709,3 +709,6 @@ body.hints-on .music-chip { bottom: 56px; }
   .online-grid > .panel { width: auto !important; min-width: 0; overflow-y: auto; }
   .room-list { max-height: none; }
 }
+
+/* the spin sound preview: holding it must not turn into a scroll on touch screens (that cancelled the hold) */
+.spin-test { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
