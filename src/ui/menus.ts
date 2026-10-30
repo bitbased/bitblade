@@ -355,6 +355,12 @@ export class SettingsScreen extends Base {
         musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),
         toggle('TRAJECTORY PREDICTION', () => settings.trajectories, (v) => { settings.trajectories = v; settings.save(); }),
+        (() => {
+          // (team games: which blades get a ring in their team's colour — your own always does)
+          const se = h<HTMLSelectElement>('select.nav', { onchange: () => { settings.teamRings = se.value as typeof settings.teamRings; settings.save(); } },
+            ...([['enemy', 'The other team'], ['team', 'My team'], ['both', 'Both teams']] as const).map(([v, t]) => h('option', { value: v, selected: settings.teamRings === v }, t)));
+          return h('div.field', { title: 'Team games: which blades show a ring in their team colour. Your own blade always shows yours.' }, h('label', null, 'TEAM RINGS'), se);
+        })(),
         toggle('AUTO RESOLUTION (keeps FPS up)', () => settings.adaptive, (v) => { settings.adaptive = v; settings.save(); }),
         slider('RESOLUTION SCALE', settings.pixelRatio, 0.5, 2, 0.25, (v) => { settings.pixelRatio = v; settings.save(); const r = getRenderer(this.app.canvas).renderer; r.setPixelRatio(v); r.setSize(innerWidth, innerHeight); }),
         h('div.field', null, h('label', null, 'CLOUD RELAY URL (Cloudflare Worker)'), relay),

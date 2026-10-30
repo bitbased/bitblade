@@ -5,6 +5,8 @@ export const settings = {
   pixelRatio: Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, 1.5),
   adaptive: true, // auto-lower resolution when the frame rate drops
   playerName: 'Blader',
+  /** team games: which blades get a ring in their team's colour (yours always has one) */
+  teamRings: 'enemy' as 'enemy' | 'team' | 'both',
   load() {
     try {
       const saved = JSON.parse(localStorage.getItem('bitblade.settings') || '{}');
@@ -13,8 +15,8 @@ export const settings = {
     } catch { /* ignore */ }
   },
   save() {
-    const { bloom, trajectories, pixelRatio, playerName, adaptive } = this;
-    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, v: 2 })); } catch { /* ignore */ }
+    const { bloom, trajectories, pixelRatio, playerName, adaptive, teamRings } = this;
+    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, teamRings, v: 2 })); } catch { /* ignore */ }
   },
 };
 settings.load();

@@ -542,6 +542,8 @@ interface TopView {
   tilt: THREE.Group;
   model: BladeModel;
   ring: THREE.Mesh;
+  /** team games: a ring in the team's colour (outside your own colour ring on your blade) */
+  teamRing: THREE.Mesh;
   shadow: THREE.Mesh;
   blur: THREE.Mesh;
   label: THREE.Sprite;
@@ -940,8 +942,11 @@ export class GameView {
     landing.rotation.x = -Math.PI / 2;
     const launchRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48, 2, 0, Math.PI * 2), new THREE.MeshBasicMaterial({ color: '#ffd23a', transparent: true, opacity: 0.9, toneMapped: false, side: THREE.DoubleSide }));
     launchRing.rotation.x = -Math.PI / 2;
-    this.scene.add(root, ring, shadow, trail.mesh, arc, landing, launchRing);
-    this.tops.push({ root, tilt, model, ring, shadow, blur, label, item, hpBack, hpFill, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
+    const teamRing = new THREE.Mesh(new THREE.RingGeometry(st.radius * 1.24, st.radius * 1.4, 40), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+    teamRing.rotation.x = -Math.PI / 2;
+    teamRing.visible = false;
+    this.scene.add(root, ring, teamRing, shadow, trail.mesh, arc, landing, launchRing);
+    this.tops.push({ root, tilt, model, ring, teamRing, shadow, blur, label, item, hpBack, hpFill, trail, shield, ice, aura, core, arc, arcPos, landing, launchRing, scale, color, burstDone: false, fallT: 0 });
   }
 
   buildMarkers() {
@@ -1981,10 +1986,22 @@ export class GameView {
     // (the colour ring — and the landing / launch rings below — mark your own tops only: local players and their multiball balls)
     const mine = this.focus.includes(t.id) || (!!t.extra && this.focus.some((i) => s.tops[i]?.team === t.team));
     v.ring.visible = t.alive && gh > VOID && mine;
+    // team games: a team-coloured ring — always on your own blade (outside your colour ring), and on the other team,
+    // your team, or both, as you choose in Settings (everyone, when nobody here is playing)
+    const teams = this.cfg.mode === 'tag' || this.cfg.mode === 'ctf';
+    let teamRing = false;
+    if (teams && t.alive && gh > VOID && !t.drone) {
+      const myTeams = this.focus.map((i) => s.tops[i]?.team);
+      const friend = myTeams.includes(t.team), pick = settings.teamRings;
+      teamRing = mine || !this.focus.length || pick === 'both' || (pick === 'enemy' ? !friend : friend);
+      if (teamRing) (v.teamRing.material as THREE.MeshBasicMaterial).color.set(t.team === 0 ? '#ff3b4a' : '#3b8bff');
+    }
+    v.teamRing.visible = teamRing;
     v.shadow.visible = gh > VOID;
     // ring + shadow follow the surface under the blade (bowls, ramps, pipes) instead of cutting through it
     if (gh > VOID) {
       this.drape(v.ring, t.x, t.z, t.scale * (1 + above * 0.15), 0.05);
+      if (teamRing) this.drape(v.teamRing, t.x, t.z, t.scale * (1 + above * 0.15), 0.055);
       this.drape(v.shadow, t.x, t.z, 1, 0.035);
     }
     (v.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.45 - above * 0.06);
