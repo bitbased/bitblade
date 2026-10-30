@@ -1,7 +1,7 @@
 // Title, main menu, mode select, results and settings screens.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { HUM_STYLES, type HumStyle } from '../game/audio';
-import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById, surpriseSong } from '../game/music';
+import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
 import { MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl } from '../net/transport';
@@ -70,8 +70,9 @@ export class TitleScreen extends Base {
 
 
 /**
- * The music corner (main menu + title screen): what's playing, 🎲 a brand-new surprise song every press (not
- * saved), 📻 radio (new surprise songs keep coming), and while a surprise plays: 💾 keep it, ✕ usual music.
+ * The music corner (main menu + title screen): what's playing, 🎲 shuffle (a brand-new surprise song, a preset or
+ * one of your own each press), 📻 radio (songs keep coming, the same mix), and while a new surprise plays: 💾 keep
+ * it, ✕ usual music.
  */
 export class MusicCorner {
   el: HTMLElement;
@@ -99,7 +100,7 @@ export class MusicCorner {
       sfx.music(true); // (the title screen starts silent)
       if (!on) musicPrefs.menuPrev = musicPrefs.menu;
       musicPrefs.menu = 'surprise'; saveMusicPrefs();
-      sfx.surprise = surpriseSong(); sfx.useMusic('menu'); redo();
+      sfx.surprise = sfx.radioPick(); sfx.useMusic('menu'); redo(); // (like the radio: a fresh surprise, a preset or one of yours)
     };
     const el = h('div.music-chip' + this.extra, {
       // the title screen starts on any click: these clicks are for the music, not for 'press start'
@@ -112,7 +113,7 @@ export class MusicCorner {
             h('b', null, icon('play')), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? 'Radio' : song ? `♪ ${song.name}` : '')))
         : null,
       sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'SURPRISE SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
-      h('button.mm-ic.nav', { title: 'Surprise me: a brand-new song (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
+      h('button.mm-ic.nav', { title: 'Shuffle: a brand-new surprise song, a preset or one of your own songs (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library', 'data-ic': 'check' }, icon('check'))
         : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); }, 'data-ic': 'save' }, icon('save'))) : null,
