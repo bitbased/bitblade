@@ -64,11 +64,12 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 .menu-screen { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 7vw; background: linear-gradient(90deg, rgba(3, 4, 12, 0.88) 0%, rgba(3, 4, 12, 0.4) 45%, transparent 70%); }
 .menu-col { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 .menu-logo { font-family: var(--font-h); font-weight: 900; font-size: 58px; background: linear-gradient(180deg, #fff, var(--accent) 60%, var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 26px; filter: drop-shadow(0 0 16px rgba(60, 242, 255, 0.5)); }
-.menu-item { font-family: var(--font-h); font-weight: 900; font-size: clamp(26px, 3.6vw, 46px); letter-spacing: 0.08em; color: rgba(232, 240, 255, 0.55); background: none; border: none; cursor: pointer; padding: 4px 0; text-align: left; transition: all 0.15s; position: relative; }
-.menu-item small { display: block; font-family: var(--font-b); font-size: 15px; letter-spacing: 0.15em; color: var(--muted); font-weight: 600; max-height: 0; overflow: hidden; transition: max-height 0.2s; }
-.menu-item:hover, .menu-item.focus { color: #fff; transform: translateX(18px); text-shadow: 0 0 24px var(--accent), 0 0 4px #fff; outline: none; }
-.menu-item.focus small, .menu-item:hover small { max-height: 30px; }
-.menu-item.focus::before, .menu-item:hover::before { content: '▶'; position: absolute; left: -38px; color: var(--gold); font-size: 0.6em; top: 0.45em; animation: blink 0.8s infinite; }
+/* (the mouse moves the focus, so only .focus is styled: nothing changes size, so nothing shifts under the cursor) */
+.menu-item { font-family: var(--font-h); font-weight: 900; font-size: clamp(26px, 3.6vw, 46px); letter-spacing: 0.08em; color: rgba(232, 240, 255, 0.55); background: none; border: none; cursor: pointer; padding: 4px 0; text-align: left; transition: color 0.15s, transform 0.18s ease-out, text-shadow 0.15s; position: relative; }
+.menu-item small { display: block; position: absolute; left: calc(100% + 26px); top: 50%; transform: translate(-6px, -50%); width: max-content; font-family: var(--font-b); font-size: 15px; letter-spacing: 0.15em; color: var(--muted); font-weight: 600; opacity: 0; pointer-events: none; transition: opacity 0.15s, transform 0.18s ease-out; padding: 7px 12px; border-left: 2px solid var(--accent); background: rgba(3, 4, 12, 0.72); }
+.menu-item.focus { color: #fff; transform: translateX(18px); text-shadow: 0 0 24px var(--accent), 0 0 4px #fff; outline: none; }
+.menu-item.focus small { opacity: 1; transform: translate(0, -50%); }
+.menu-item.focus::before { content: '▶'; position: absolute; left: -38px; color: var(--gold); font-size: 0.6em; top: 0.45em; animation: blink 0.8s infinite; }
 .menu-foot { position: absolute; bottom: 20px; left: 7vw; color: var(--muted); font-size: 14px; }
 
 /* ---------- screen chrome ---------- */
@@ -497,14 +498,15 @@ body.dev-touch .launch-hint { bottom: auto; top: calc(50% + 30px); }
 .toggle.nav.focus .dot { box-shadow: 0 0 10px var(--accent); }
 
 /* main menu: crisp, readable subtitles that wrap cleanly */
-.menu-item small { text-shadow: none; font-family: var(--font-b); font-size: 15px; font-weight: 600; letter-spacing: 0.03em; line-height: 1.35; color: #c5cfe6; max-width: min(520px, 78vw); white-space: normal; transform: translateZ(0); }
-.menu-item.focus small, .menu-item:hover small { max-height: 48px; }
+.menu-item small { text-shadow: none; font-family: var(--font-b); font-size: 15px; font-weight: 600; letter-spacing: 0.03em; line-height: 1.35; color: #c5cfe6; max-width: min(380px, 34vw); white-space: normal; }
 .menu-foot .hint-keys { display: none; }
 @media (max-width: 640px) {
-  .menu-screen { padding-left: 9vw; padding-right: 6vw; }
+  .menu-screen { padding-left: 9vw; padding-right: 6vw; overflow-x: hidden; }
   .menu-item { font-size: clamp(22px, 7vw, 34px); }
-  .menu-item small { font-size: 13px; max-width: 82vw; }
-  .menu-item.focus, .menu-item:hover { transform: translateX(8px); }
+  /* (no room beside it: the description keeps its space below the item and only fades in) */
+  .menu-item small { font-size: 13px; max-width: 82vw; position: static; transform: none; width: auto; padding: 2px 0 0; border: none; background: none; }
+  .menu-item.focus small { transform: none; }
+  .menu-item.focus { transform: translateX(8px); }
 }
 body.hints-on .menu-foot { bottom: 56px; }
 @media (max-width: 700px) {
@@ -588,8 +590,7 @@ body.hints-on .music-chip { bottom: 56px; }
   .menu-logo { font-size: clamp(24px, 10vh, 58px); margin-bottom: clamp(4px, 2vh, 26px); }
   .menu-item { font-size: clamp(15px, 6.2vh, 40px); padding: 1px 0; }
   .menu-item small { font-size: 12px; }
-  .menu-item.focus small, .menu-item:hover small { max-height: 18px; }
-  .menu-item.focus::before, .menu-item:hover::before { left: -26px; }
+  .menu-item.focus::before { left: -26px; }
   .menu-foot { bottom: 6px; font-size: 11px; }
   .screen { padding-top: 10px; padding-bottom: 10px; gap: 10px; }
   .screen-title { font-size: 24px; }
