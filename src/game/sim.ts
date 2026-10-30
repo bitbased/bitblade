@@ -657,6 +657,12 @@ export class Sim {
     // pinball: your own balls bounce off each other, no battle damage
     const friendly = this.cfg.mode === 'pinball' && A.team === B.team;
     if (friendly) { A.spin = before[0]; B.spin = before[1]; }
+    // a top dashing in (a dash, a Power Fist charge or an overdrive run) at one that isn't dashing takes less of the
+    // hit than it deals: the attacker picked the moment. Both dashing: even.
+    const charging = (t: TopState) => t.fx.dash > 0 || t.fx.fist > 0 || !!t.od;
+    const protA = charging(A) && !charging(B) && wA >= 0.5 ? 0.75 : 1, protB = charging(B) && !charging(A) && wA <= 0.5 ? 0.75 : 1;
+    if (protA < 1 && A.spin < before[0]) A.spin = before[0] - (before[0] - A.spin) * 0.7;
+    if (protB < 1 && B.spin < before[1]) B.spin = before[1] - (before[1] - B.spin) * 0.7;
     const lossA = Math.max(0, before[0] - A.spin), lossB = Math.max(0, before[1] - B.spin);
     A.dmg += lossB; B.dmg += lossA;
     A.special = Math.min(1, A.special + lossB * 2.2 + 0.015);
@@ -667,8 +673,8 @@ export class Sim {
     const I = jn + Math.abs(jt);
     const bth = 8;
     if (I > bth) {
-      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin);
-      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin);
+      if (B.fx.shield <= 0 && !friendly) B.burst += ((I - bth) * aA * 0.0075) / (sb.burstRes + 0.2) * (1.5 - B.spin) * protB;
+      if (A.fx.shield <= 0 && !friendly) A.burst += ((I - bth) * aB * 0.0075) / (sa.burstRes + 0.2) * (1.5 - A.spin) * protA;
     }
     // flag carriers drop on hard hits
     if (I > 6) { if (A.flag >= 0) this.dropFlag(A); if (B.flag >= 0) this.dropFlag(B); }
