@@ -670,3 +670,18 @@ body.hints-on .music-chip { bottom: 56px; }
 @media (min-height: 561px) { .lobby .slots:has(> .slot:nth-child(5)) .slot canvas { width: 64px; height: 64px; } }
 .lobby .slots:has(> .slot:nth-child(5)) .slot .slot-stats { display: none !important; }
 .lobby .slots:has(> .slot:nth-child(5)) .slot { padding-top: 8px; padding-bottom: 8px; gap: 4px; }
+
+/* ================= wide screens use their width (landscape): everything on one screen ================= */
+@media (orientation: landscape) and (min-width: 700px) {
+  /* modes: 5 across, all 10 in two rows */
+  .mode-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
+  .mode-card { min-height: 0; padding: 16px; }
+  .mode-card h3 { font-size: 18px; }
+  .mode-card p { font-size: 13px; }
+  /* settings: two columns across the width */
+  .settings-panel { max-width: none !important; display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; row-gap: 12px !important; align-content: start; }
+  /* online: public rooms · join · host side by side, each scrolling inside its own panel */
+  .online-grid { display: grid; grid-template-columns: 1.15fr 1fr 1fr; align-items: stretch; flex: 1; min-height: 0; overflow: hidden; padding-bottom: 0; }
+  .online-grid > .panel { width: auto !important; min-width: 0; overflow-y: auto; }
+  .room-list { max-height: none; }
+}

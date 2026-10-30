@@ -293,7 +293,7 @@ export class SettingsScreen extends Base {
     const p = getPlatform();
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.app.back() }, '◀ Back'), h('div.screen-title', null, 'SETTINGS')),
-      h('div.panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
+      h('div.panel.settings-panel', { style: { padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '620px' } },
         slider('SFX VOLUME', sfx.volume, 0, 1, 0.05, (v) => { sfx.volume = v; sfx.save(); }),
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
         slider('SPIN SOUND VOLUME', sfx.humVolume, 0, 1.5, 0.05, (v) => { sfx.humVolume = v; sfx.save(); }),
