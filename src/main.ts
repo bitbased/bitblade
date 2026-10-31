@@ -15,6 +15,8 @@ import { trackStudioScreen } from './ui/trackStudio';
 import { musicStudioScreen } from './ui/musicStudio';
 import { updateBackdrop, resizeBackdrop, setBackdropVisible } from './ui/backdrop';
 import { queue } from './net/queue';
+import { party } from './net/party';
+import { clientRoom, hostRoom } from './net/room';
 import { onQueueMatch } from './ui/quickMatch';
 
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -108,11 +110,27 @@ addEventListener('resize', () => {
 
 // QUICK MATCH: what a match found by the queue does, from whatever screen you're on
 queue.onMatch = (m) => onQueueMatch(app, m);
+// your party: a member follows the leader into rooms (and back out of them), from whatever screen
+party.onGoto = (room) => {
+  if (room) {
+    if (clientRoom.t?.code === room) return;
+    if (hostRoom.t) hostRoom.close();
+    app.go('online', { match: room });
+  } else {
+    if (!clientRoom.t) return;
+    clientRoom.leave();
+    app.toast(`${party.leaderName} left the room — back with your party`);
+    app.go('online');
+  }
+};
+party.onEnded = (why) => app.toast(why);
 
 // deep link: /join/CODE or ?join=CODE  → straight to the online join flow
 const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);
+const partyLink = location.search.match(/[?&]party=([A-Za-z0-9]{4,10})/); // (a party invite: /?party=CODE)
 if (import.meta.env.DEV) (window as any).__app = app; // headless checks
 if (m) app.go('online', { join: location.protocol.startsWith('http') && location.pathname.includes('/join/') ? location.href : decodeURIComponent(m[1]) });
+else if (partyLink) app.go('online', { party: partyLink[1].toUpperCase() });
 else app.go('title');
 
 let last = performance.now();

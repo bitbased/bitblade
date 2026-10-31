@@ -20,6 +20,7 @@ import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
 import type { RoomOpts } from './online';
 import { acceptSong, armRadio, onRoomSong, RADIO_HOST, roomMusicRow, roomRadio, roomSongHost } from './roomMusic';
 import { queue } from '../net/queue';
+import { party } from '../net/party';
 import { MATCH_COUNTDOWN, pendingMatch, travel } from './quickMatch';
 import type { Song } from '../game/music';
 
@@ -27,7 +28,9 @@ import type { Song } from '../game/music';
  *  locked in as a CPU (+ CPU, or its difficulty is changed) */
 interface Slot { name: string; ctrl: ControllerSpec; bladeId: string; team: number; blade?: BladeDesign; auto?: boolean; teamLock?: boolean; teamPicks?: number;
   /** a guest's view of the room: the host's label for the slot, and whether it's this guest's own */
-  label?: string; mine?: boolean }
+  label?: string; mine?: boolean;
+  /** the party a player came with (online guests: their party code) — parties stay on one team */
+  party?: string }
 
 interface Card {
   el: HTMLElement; pnum: HTMLElement; team: HTMLElement; cv: HTMLCanvasElement; name: HTMLInputElement; bname: HTMLElement;
@@ -36,7 +39,7 @@ interface Card {
 interface Sel { el: HTMLElement; set(title: string, sub: string): void }
 interface LobbyUI {
   back: HTMLButtonElement; desc: HTMLElement; mode: Sel; size: Sel; arena: Sel;
-  items: HTMLElement; nudge: HTMLElement; share: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement; count: HTMLElement; countVal: HTMLElement;
+  items: HTMLElement; nudge: HTMLElement; share: HTMLElement; split: HTMLElement; rubber: HTMLElement; rubberVal: HTMLElement; target: HTMLElement; targetLbl: HTMLElement; targetVal: HTMLElement; timeVal: HTMLElement; count: HTMLElement; countVal: HTMLElement;
 }
 
 const L = {
@@ -49,6 +52,10 @@ const L = {
   nudge: true,
   /** king of the hill: everyone in the zone banks time */
   kothShare: true,
+  /** team games: parties stay together on a team, or MIXED — everyone shuffled across the teams */
+  teamSplit: 'parties' as 'parties' | 'mixed',
+  /** MIXED: the shuffle (a new one each time it's switched on) */
+  mixSeed: 1,
   target: 4,
   time: 90,
   /** how many places the lobby has: players + CPUs, with ghost CPUs filling the rest (0 = the mode's minimum) */
@@ -233,7 +240,7 @@ export class LobbyScreen implements Screen {
     hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
     hostRoom.inMatch = false;
     this.syncMembers();
-    if (a.online && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
+    if ((a.online || (party.leads && party.size > 1)) && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud'); // (a party leader's lobby opens online: the party comes along)
     if (a.autostart) setTimeout(() => { if (this.el.isConnected) { this.el.style.visibility = ''; this.start(); } }, 0);
   }
 
@@ -278,6 +285,7 @@ export class LobbyScreen implements Screen {
     if (lb.nudge !== undefined) L.nudge = !!lb.nudge;
     if (lb.kothShare !== undefined) L.kothShare = !!lb.kothShare;
     if (lb.rubber !== undefined) L.rubber = lb.rubber;
+    if (lb.teamSplit) L.teamSplit = lb.teamSplit;
     L.slots = (lb.slots as { name: string; ctrl: string; blade?: BladeDesign; team: number; lock?: boolean; auto?: boolean }[]).map((s) => {
       const peer = s.ctrl.startsWith('online:') ? Number(s.ctrl.slice(7)) : -1;
       const ctrl: ControllerSpec = s.ctrl.startsWith('CPU') ? { type: 'cpu', level: 2 } : { type: 'remote', peer };
@@ -345,12 +353,23 @@ export class LobbyScreen implements Screen {
     if (!this.isTeamMode()) { L.slots.forEach((s, i) => (s.team = i)); return; }
     const all = [0, 0], people = [0, 0];
     const isPerson = (s: Slot) => s.ctrl.type !== 'cpu';
+    const cap = Math.ceil(L.slots.length / 2); // (a team holds at most half the places)
     for (const s of L.slots) if (s.teamLock) { s.team = s.team === 1 ? 1 : 0; all[s.team]++; if (isPerson(s)) people[s.team]++; }
-    const place = (s: Slot, byPeople: boolean) => {
-      const t = byPeople && people[0] !== people[1] ? (people[0] < people[1] ? 0 : 1) : all[0] !== all[1] ? (all[0] < all[1] ? 0 : 1) : people[0] <= people[1] ? 0 : 1;
-      s.team = t; all[t]++; if (isPerson(s)) people[t]++;
-    };
-    for (const s of L.slots) if (!s.teamLock && isPerson(s)) place(s, true);
+    const pick = (byPeople: boolean) => byPeople && people[0] !== people[1] ? (people[0] < people[1] ? 0 : 1) : all[0] !== all[1] ? (all[0] < all[1] ? 0 : 1) : people[0] <= people[1] ? 0 : 1;
+    const put = (s: Slot, t: number) => { if (all[t] >= cap) t = 1 - t; s.team = t; all[t]++; if (isPerson(s)) people[t]++; };
+    const place = (s: Slot, byPeople: boolean) => put(s, pick(byPeople));
+    // the players: PARTIES — each party (everyone on this device counts as the host's party) goes onto one team as a
+    // group, biggest first, spilling over only if it's bigger than a team; MIXED — one by one in a shuffled order
+    const persons = L.slots.filter((s) => !s.teamLock && isPerson(s));
+    if (L.teamSplit === 'mixed') {
+      const key = (s: Slot) => { let x = L.mixSeed; for (const c of s.name + (s.ctrl.type === 'remote' ? s.ctrl.peer : '')) x = (x * 31 + c.charCodeAt(0)) % 1000003; return x; };
+      for (const s of [...persons].sort((a, b) => key(a) - key(b))) place(s, true);
+    } else {
+      const unitOf = (s: Slot) => s.ctrl.type === 'remote' ? (s.party ?? `peer:${s.ctrl.peer}`) : (party.code || 'local');
+      const units = new Map<string, Slot[]>();
+      for (const s of persons) { const k = unitOf(s); units.set(k, [...(units.get(k) ?? []), s]); }
+      for (const u of [...units.values()].sort((a, b) => b.length - a.length)) { const t = pick(true); for (const s of u) put(s, t); }
+    }
     for (const s of L.slots) if (!s.teamLock && !isPerson(s) && !s.auto) place(s, false);
     for (const s of L.slots) if (!s.teamLock && s.auto) place(s, false);
   }
@@ -406,11 +425,12 @@ export class LobbyScreen implements Screen {
     const items = h('div.toggle.panel.nav', { onclick: () => this.toggleItems() }, h('span.dot'), 'ITEMS');
     const nudge = h('div.toggle.panel.nav', { title: 'Pinball: steering nudges the table — overdo it and it TILTs. Off: flippers only, like a classic table', onclick: () => this.toggleRule('nudge') }, h('span.dot'), 'NUDGE');
     const share = h('div.toggle.panel.nav', { title: 'King of the Hill: everyone in the zone banks time, even when it is contested. Off: only a top holding it alone scores', onclick: () => this.toggleRule('share') }, h('span.dot'), 'SHARED TIME');
+    const split = h('div.toggle.panel.nav', { title: 'Teams: PARTIES keeps each party together on one team; MIXED shuffles everyone across the teams', onclick: () => this.toggleSplit() }, 'TEAMS: PARTIES');
     const rubber = h('div.toggle.panel.nav', { 'data-navx': '1', title: 'CPU catch-up: CPUs behind you get faster, CPUs far ahead ease off (like Mario Kart)', onclick: () => this.stepRubber(1) }, 'CPU CATCH-UP ', rubberVal);
     rubber.addEventListener('navx', (e) => this.stepRubber((e as CustomEvent).detail));
     const back = h<HTMLButtonElement>('button.btn.small.nav.back-btn', { onclick: () => this.leave(), 'data-k': 'ESC', 'data-p': 'B', 'data-ps': '○' }, '◀ Back');
     const desc = h('div.screen-sub');
-    this.ui = { back, desc, mode, size, arena, items, nudge, share, rubber, rubberVal, target, targetLbl, targetVal, timeVal, count, countVal };
+    this.ui = { back, desc, mode, size, arena, items, nudge, share, split, rubber, rubberVal, target, targetLbl, targetVal, timeVal, count, countVal };
     this.el?.classList.toggle('guest', this.guest);
 
     this.slotsEl = h('div.slots');
@@ -435,7 +455,7 @@ export class LobbyScreen implements Screen {
       this.midEl = h('div.lobby-mid', null, this.slotsEl),
       this.bottomEl = h('div.lobby-bottom', null,
         h('div.rules', null,
-          count, items, nudge, share, rubber, target, time,
+          count, items, nudge, share, split, rubber, target, time,
           // (at the end of the row: showing / hiding it never shifts the settings under your pointer)
           this.joinMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.toggleJoin(), title: 'Add a local player: then press a key or a gamepad button' }, '+ PLAYER'),
           this.cpuMini = h<HTMLButtonElement>('button.btn.small.nav', { onclick: () => this.addCpu(), title: 'Add a computer player' }, '+ CPU')),
@@ -467,6 +487,8 @@ export class LobbyScreen implements Screen {
     u.rubber.style.display = m.id === 'race' ? '' : 'none';
     u.nudge.classList.toggle('on', L.nudge);
     u.share.style.display = m.id === 'koth' ? '' : 'none';
+    u.split.style.display = this.isTeamMode() ? '' : 'none';
+    u.split.textContent = L.teamSplit === 'mixed' ? 'TEAMS: MIXED' : 'TEAMS: PARTIES';
     u.share.classList.toggle('on', L.kothShare);
     u.rubberVal.textContent = ['OFF', 'NORMAL', 'STRONG'][L.rubber];
     u.target.style.display = m.target > 0 ? '' : 'none';
@@ -485,7 +507,7 @@ export class LobbyScreen implements Screen {
     name.addEventListener('change', () => {
       const i = idx(), s = L.slots[i];
       if (!s) return;
-      if (this.guest) { if (!s.mine) return; settings.playerName = name.value.trim() || settings.playerName; settings.save(); clientRoom.send({ t: 'hello', name: settings.playerName }); return; }
+      if (this.guest) { if (!s.mine) return; settings.playerName = name.value.trim() || settings.playerName; settings.save(); clientRoom.send({ t: 'hello', name: settings.playerName, party: party.code || undefined }); return; }
       s.name = name.value || `Player ${i + 1}`;
       if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); }
       this.dirty = true;
@@ -593,6 +615,14 @@ export class LobbyScreen implements Screen {
     this.fillCpus(); this.renderSlots(); this.dirty = true;
   }
   stepRubber(d: number) { if (this.guestCtl('rubber', { d })) return; L.rubber = (L.rubber + d + 3) % 3; this.refresh(); }
+  /** team games: parties together ↔ everyone mixed (a fresh shuffle each time) */
+  toggleSplit() {
+    if (this.guestCtl('split')) return;
+    L.teamSplit = L.teamSplit === 'mixed' ? 'parties' : 'mixed';
+    if (L.teamSplit === 'mixed') L.mixSeed = 1 + Math.floor(Math.random() * 1e6);
+    this.app.toast(L.teamSplit === 'mixed' ? 'Teams: MIXED — everyone shuffled' : 'Teams: PARTIES — each party on one team');
+    this.renderSlots(); this.refresh(); this.dirty = true;
+  }
   toggleRule(k: 'nudge' | 'share') { if (this.guestCtl(k)) return; if (k === 'nudge') L.nudge = !L.nudge; else L.kothShare = !L.kothShare; this.refresh(); }
 
   stepMode(d: number) {
@@ -653,6 +683,7 @@ export class LobbyScreen implements Screen {
       case 'rubber': this.stepRubber(d); break;
       case 'nudge': case 'share': this.toggleRule(m.a); break;
       case 'rand': this.randomize(!!m.mode); break;
+      case 'split': this.toggleSplit(); break;
       case 'mode': this.stepMode(d); break;
       case 'arena': this.stepArena(d); break;
       case 'size': this.stepSize(d); break;
@@ -681,7 +712,7 @@ export class LobbyScreen implements Screen {
     for (const m of mem.values()) {
       const sl = L.slots.find((x) => x.ctrl.type === 'remote' && x.ctrl.peer === m.peer);
       if (sl) {
-        if (sl.name !== m.name || (m.blade && sl.blade?.id !== m.blade.id)) { sl.name = m.name; if (m.blade) sl.blade = m.blade; changed = true; }
+        if (sl.name !== m.name || (m.blade && sl.blade?.id !== m.blade.id) || sl.party !== m.party) { sl.name = m.name; if (m.blade) sl.blade = m.blade; sl.party = m.party; changed = true; }
         continue;
       }
       const ghost = L.slots.findIndex((x) => x.auto);
@@ -691,7 +722,7 @@ export class LobbyScreen implements Screen {
         if (cpu < 0) continue; // room full for this mode: they watch from the room until a slot frees up
         L.slots.splice(cpu, 1);
       }
-      L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: 0 });
+      L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: 0, party: m.party });
       this.app.sfx.play('select');
       this.app.toast(`${m.name} joined the room`);
       changed = true;
@@ -1011,6 +1042,7 @@ export class LobbyScreen implements Screen {
     return {
       t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
       startIn: pendingMatch.cur && !hostRoom.inMatch ? this.lastLeft : undefined,
+      teamSplit: L.teamSplit,
       items: L.items, target: L.target, time: L.time, nudge: L.nudge, kothShare: L.kothShare, rubber: L.rubber, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
       slots: L.slots.map((s, i) => ({ name: s.name, ctrl: s.ctrl.type === 'remote' ? `online:${s.ctrl.peer}` : specLabel(s.ctrl), blade: this.bladeOf(s), team: s.team, color: this.slotColor(s, i), lock: !!s.teamLock, auto: !!s.auto })),
     };
@@ -1058,7 +1090,9 @@ export class LobbyScreen implements Screen {
 
   leave() {
     if (this.guest) {
-      if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return;
+      const member = party.inParty && !party.leads;
+      if (!confirmTwice(this.app, 'leave-room', member ? `Press again to leave the room — and ${party.leaderName}'s party` : 'Press again to leave the room')) return;
+      if (member) party.leave();
       clientRoom.leave();
       this.app.toast('Left the room — Rejoin from Online to come back');
       this.app.go('online');

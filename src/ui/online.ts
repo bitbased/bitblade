@@ -1,6 +1,6 @@
-// Online hub: browse public rooms / quick match, host (goes to lobby) — fresh, public, or one of your saved
-// persistent rooms — or join by code / invite link. Joined players wait in the room and follow the room
-// leader into every match; with Open Control they can drive the room too.
+// Online: party first. Your party (a party of one is just you; friends join with its code or link) goes everywhere
+// together — the leader picks QUICK MATCH, hosts a room (fresh, public, or a saved one) or joins one by code / link /
+// the public list, and the members follow. Then: rooms, and the lobby (the same screen for host and guests).
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { allBlades, findBlade, type BladeDesign } from '../core/blade';
 import { fetchPublicRooms, joinAny, publicJoinInput, type PublicRoom } from '../net/transport';
@@ -14,7 +14,8 @@ import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import type { MatchArg } from './match';
 import { acceptSong, onRoomSong, roomMusicRow } from './roomMusic';
-import { quickMatchPanel } from './quickMatch';
+import { quickMatchBox } from './quickMatch';
+import { party } from '../net/party';
 import { queue } from '../net/queue';
 
 /** what the lobby needs to open a room the way the hub set it up */
@@ -50,14 +51,15 @@ export class OnlineScreen implements Screen {
   mount(app: App, arg?: unknown) {
     this.app = app;
     setBackdropVisible(true, app.canvas);
-    const a = (arg ?? {}) as { join?: string; resume?: boolean; rejoin?: string; match?: string };
+    const a = (arg ?? {}) as { join?: string; resume?: boolean; rejoin?: string; match?: string; party?: string };
     try { this.myBlade = findBlade(localStorage.getItem('bitblade.lastBlade') || ''); } catch { /* ignore */ }
     this.el = this.buildHub(a.join ?? '');
     app.root.append(this.el);
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1);
-    queue.listeners.add(this.renderQmBtn);
-    this.renderQmBtn();
+    party.listeners.add(this.renderParty);
+    this.renderParty();
+    if (a.party) this.joinParty(a.party);
     // in a room: it's shown in the lobby (the same screen the host uses)
     if (a.resume && clientRoom.t) { queueMicrotask(() => this.app.go('lobby', { guest: true })); return; }
     else if (a.match) this.joinMatch(a.match);
@@ -69,8 +71,8 @@ export class OnlineScreen implements Screen {
   buildHub(prefill: string) {
     const prefs = loadPrefs();
     const name = h<HTMLInputElement>('input', { type: 'text', value: settings.playerName, maxLength: 16 });
-    name.addEventListener('change', () => { settings.playerName = name.value; settings.save(); });
-    const code = h<HTMLInputElement>('input', { type: 'text', placeholder: 'ABCDE  or  https://bitblade.bitbased.net/join/ABCDE', value: prefill });
+    name.addEventListener('change', () => { settings.playerName = name.value; settings.save(); party.rename(name.value); });
+    const code = h<HTMLInputElement>('input', { type: 'text', placeholder: 'Room code or invite link', value: prefill, style: { flex: '1', minWidth: '0' } });
     code.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.join(code.value); });
     this.roomEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
 
@@ -104,31 +106,37 @@ export class OnlineScreen implements Screen {
     filter.addEventListener('change', () => { this.modeFilter = filter.value as 'all' | ModeId; this.renderList(); });
 
     const col = (w: string, ...kids: (Node | null)[]) => h('div.panel', { style: { padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', width: w, flex: '1 1 auto' } }, ...kids);
-    return h('div.screen', null,
-      h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.leave() }, '◀ Back'), h('div.screen-title', null, 'ONLINE'), h('div.screen-sub', null, 'Public rooms · quick match · your saved rooms'),
-        h('div.spacer'), h('button.btn.primary.nav.qm-open', { onclick: () => this.quickMatch() }, '⚡ QUICK MATCH')),
+    const hub = h('div.screen.online', null,
+      h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.leave() }, '◀ Back'), h('div.screen-title', null, 'ONLINE'), h('div.screen-sub', null, 'Your party · quick match · rooms')),
       h('div.online-grid', null,
         col('min(520px, 100%)',
           h('div.row-head', null, h('h3', null, 'PUBLIC ROOMS'), h('div.spacer'), filter, h('button.btn.small.nav', { onclick: () => this.refreshList(true) }, '↻')),
-          this.listEl),
-        col('min(420px, 100%)',
-          h('h3', null, 'JOIN A ROOM'),
-          h('div.field', null, h('label', null, 'YOUR NAME'), name),
-          h('div.field', null, h('label', null, 'ROOM CODE OR INVITE LINK'), code),
-          h('button.btn.primary.nav', { onclick: () => this.join(code.value) }, 'JOIN ▶'),
-          clientRoom.lastJoin ? h('button.btn.small.nav', { onclick: () => this.join(clientRoom.lastJoin!), title: clientRoom.lastJoin }, `↻ Rejoin last room (${clientRoom.lastJoin.split('/').pop()!.toUpperCase()})`) : null,
-          this.roomEl),
-        col('min(420px, 100%)',
-          h('h3', null, 'HOST A ROOM'),
-          h('div.field', null, h('label', null, 'ROOM NAME'), roomName),
-          h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, pub, openCtl, keep),
-          customRow,
-          h('div.hint', null, 'Pick a mode to open the room. You lead: switch modes and arenas between matches and everyone follows.'),
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
-            ...PICK_MODES.map((m) => h('button.btn.small.nav', { onclick: () => create(m.id) }, icon(MODE_ICON[m.id]), ` ${m.name}`))),
+          this.listEl,
           h('h3', { style: { marginTop: '8px' } }, 'MY ROOMS'),
-          this.myEl)),
+          this.myEl),
+      ),
     );
+    // PLAY (the party leader — or you, solo): quick match, host a room, join a room. Members follow instead.
+    this.qm = quickMatchBox(this.app);
+    this.playEl = h('div.play-inner', null,
+      h('h3', null, icon('bolt'), ' QUICK MATCH'),
+      this.qm.el,
+      h('h3', { style: { marginTop: '6px' } }, 'HOST A ROOM'),
+      h('div.field', null, h('label', null, 'ROOM NAME'), roomName),
+      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, pub, openCtl, keep),
+      customRow,
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
+        ...PICK_MODES.map((m) => h('button.btn.small.nav', { onclick: () => create(m.id) }, icon(MODE_ICON[m.id]), ` ${m.name}`))),
+      h('h3', { style: { marginTop: '6px' } }, 'JOIN A ROOM'),
+      h('div.row', { style: { display: 'flex', gap: '8px' } }, code, h('button.btn.small.primary.nav', { onclick: () => this.join(code.value) }, 'JOIN ▶')),
+      clientRoom.lastJoin ? h('button.btn.small.nav', { onclick: () => this.join(clientRoom.lastJoin!), title: clientRoom.lastJoin }, `↻ Rejoin last room (${clientRoom.lastJoin.split('/').pop()!.toUpperCase()})`) : null);
+    this.followEl = h('div.party-follow');
+    this.partyEl = h('div.party-box');
+    const grid = hub.querySelector('.online-grid')!;
+    grid.prepend(
+      col('min(380px, 100%)', h('h3', null, icon('users'), ' YOUR PARTY'), this.partyEl, h('div.field', null, h('label', null, 'YOUR NAME'), name)),
+      col('min(460px, 100%)', h('h3.play-title', null, 'PLAY'), this.followEl, this.playEl, this.roomEl));
+    return hub;
   }
 
   toggle(label: string, title: string, on: boolean, changed: () => void) {
@@ -175,19 +183,70 @@ export class OnlineScreen implements Screen {
     }
   }
 
-  /** join the busiest public room that has a free slot (lobby first); otherwise offer to host one */
-  /** QUICK MATCH: the queue window (pick modes, search; a match takes you straight into the room) */
-  quickMatch() {
-    if (this.el.querySelector('.qm-overlay')) return;
-    const p = quickMatchPanel(this.app, () => { this.nav = new MenuNav(this.app, this.el, () => this.leave()); this.renderQmBtn(); });
-    this.el.append(p);
-    this.nav = new MenuNav(this.app, p, () => p.querySelector<HTMLButtonElement>('.qm-head .btn')?.click());
-  }
-  /** the head's QUICK MATCH button shows a search that's still going */
-  renderQmBtn = () => {
-    const b = this.el?.querySelector<HTMLElement>('.qm-open');
-    if (b) b.textContent = queue.active ? `⚡ SEARCHING ${queue.waited()}` : '⚡ QUICK MATCH';
+  // -------------------------------------------------------------- your party
+  qm: { el: HTMLElement; dispose: () => void } | null = null;
+  partyEl!: HTMLElement;
+  playEl!: HTMLElement;
+  followEl!: HTMLElement;
+  partyBusy = false;
+
+  /** YOUR PARTY: who's in it, its code / link, invite / join / leave — and, for members, who they're following */
+  renderParty = () => {
+    const el = this.partyEl;
+    if (!el) return;
+    const typing = el.querySelector<HTMLInputElement>('input');
+    if (typing && document.activeElement === typing) return; // (don't wipe a code being typed)
+    el.innerHTML = '';
+    const member = party.inParty && !party.leads;
+    if (this.playEl) this.playEl.style.display = member ? 'none' : '';
+    if (this.followEl) {
+      this.followEl.innerHTML = '';
+      this.followEl.style.display = member ? '' : 'none';
+      if (member) this.followEl.append(
+        h('div.party-following', null, icon('users'), ` Following ${party.leaderName}`),
+        h('div.hint', null, party.room ? `In room ${party.room} — joining…` : `${party.leaderName} picks the game: quick match, a room, or a code. You'll go wherever they go.`));
+    }
+    if (party.reconnecting) { el.append(h('div.hint', { style: { color: 'var(--gold)' } }, 'Your party leader dropped — reconnecting the party…')); return; }
+    if (!party.inParty) {
+      const pc = h<HTMLInputElement>('input', { type: 'text', placeholder: 'Party code', maxLength: 10, style: { flex: '1', minWidth: '0' } });
+      pc.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') this.joinParty(pc.value); });
+      el.append(
+        h('div.party-member.me', null, h('span.pm-dot'), h('b', null, settings.playerName || 'You'), h('span.pm-tag', null, 'YOU')),
+        h('div.hint', null, 'Playing with friends? Make a party and send them the code — they come with you into every room and match.'),
+        h('button.btn.primary.nav', { onclick: () => this.createParty() }, icon('users'), ' MAKE A PARTY'),
+        h('div.row', { style: { display: 'flex', gap: '8px' } }, pc, h('button.btn.small.nav', { onclick: () => this.joinParty(pc.value) }, 'JOIN PARTY')));
+      return;
+    }
+    el.append(...party.members.map((m, i) => h('div.party-member' + (m.id === party.myId ? '.me' : ''), null,
+      h('span.pm-dot'), h('b', null, m.name),
+      i === 0 ? h('span.pm-tag.lead', null, '♛ LEADER') : null,
+      m.id === party.myId ? h('span.pm-tag', null, 'YOU') : null,
+      party.leads && m.id !== party.myId ? h('button.pm-kick.nav', { title: `Remove ${m.name} from the party`, onclick: () => { if (confirmTwice(this.app, 'kick-' + m.id, `Press again to remove ${m.name}`)) party.kick(m.id); } }, icon('close')) : null)));
+    const link = party.link();
+    el.append(
+      h('div.code-row', null, h('div.code', null, party.code),
+        h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast('Party invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
+      h('div.hint', null, party.leads ? (party.size > 1 ? 'You lead: where you go, your party goes.' : 'Send the code or link — friends who join come along with you.') : `${party.leaderName} leads the party.`),
+      h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-party', party.leads && party.size > 1 ? 'Press again to leave — the next member takes over the party' : 'Press again to leave the party')) return; party.leave(); this.app.toast('You left the party'); } }, 'LEAVE PARTY'));
   };
+
+  async createParty() {
+    if (this.partyBusy) return;
+    this.partyBusy = true;
+    try { await party.create(settings.playerName || 'Player'); this.app.toast(`Party ${party.code} — send friends the code or link`); }
+    catch (e) { this.app.toast(`Couldn't make a party: ${(e as Error).message || e}`); }
+    this.partyBusy = false;
+  }
+
+  async joinParty(code: string) {
+    code = code.trim().toUpperCase();
+    if (!code) { this.app.toast('Enter a party code'); return; }
+    if (this.partyBusy) return;
+    this.partyBusy = true;
+    try { await party.join(code, settings.playerName || 'Player'); this.app.toast(`Joined ${party.leaderName}'s party`); }
+    catch (e) { this.app.toast(`Couldn't join party ${code}: ${(e as Error).message || e}`); }
+    this.partyBusy = false;
+  }
 
   // -------------------------------------------------------------- my rooms
   renderMyRooms() {
@@ -290,6 +349,7 @@ export class OnlineScreen implements Screen {
 
   async join(input: string, quiet = false): Promise<boolean> {
     if (!input.trim()) { this.app.toast('Enter a room code or link'); return false; }
+    if (!quiet && party.inParty && !party.leads && input.trim().toUpperCase() !== party.room) { this.app.toast(`${party.leaderName} picks the rooms — leave the party to go on your own`); return false; }
     if (!quiet) { this.retry = null; this.roomEl.innerHTML = ''; this.roomEl.append(h('div.hint', null, 'Connecting…')); }
     try {
       const t = await joinAny(input, settings.playerName || 'Guest');
@@ -297,7 +357,7 @@ export class OnlineScreen implements Screen {
       clientRoom.attach(t);
       clientRoom.remember(input.trim());
       this.listen();
-      clientRoom.send({ t: 'hello', name: settings.playerName || 'Guest', blade: this.myBlade });
+      clientRoom.send({ t: 'hello', name: settings.playerName || 'Guest', blade: this.myBlade, party: party.code || undefined });
       this.app.sfx.play('select');
       this.app.go('lobby', { guest: true });
       return true;
@@ -385,7 +445,8 @@ export class OnlineScreen implements Screen {
   }
 
   unmount() {
-    queue.listeners.delete(this.renderQmBtn);
+    party.listeners.delete(this.renderParty);
+    this.qm?.dispose();
     clientRoom.handler = null;
     clientRoom.closeHandler = null;
     this.el.remove();

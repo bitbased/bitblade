@@ -1,11 +1,13 @@
-// QUICK MATCH: pick the modes you'll play (any, or some) and queue; the matchmaker puts you in a room with other
-// players. What a match does: host it (your lobby opens the room and starts once everyone's in), join it (you land in
-// the host's lobby), or — queued as a room that's joining someone else's — bring your whole room along.
+// QUICK MATCH: pick the modes you'll play (any, or some) and queue — your party as one group — and the matchmaker puts
+// you in a room with other players. What a match does: host it (your lobby opens the room and starts once everyone's
+// in), join it (you land in the host's lobby) — your party follows you either way — or, queued as a room that's
+// joining someone else's, bring the room's guests along.
 import { h, type App } from './app';
 import { MODES, PICK_MODES } from '../game/types';
 import { queue, queueModes, saveQueueModes, type QueueMatch } from '../net/queue';
 import { clientRoom, hostRoom } from '../net/room';
 import { settings } from '../core/settings';
+import { party } from '../net/party';
 import { icon } from './icons';
 import { MODE_ICON } from './menus';
 
@@ -36,12 +38,14 @@ export function onQueueMatch(app: App, m: QueueMatch) {
   app.go('online', { match: m.code });
 }
 
-/** the QUICK MATCH window (Online screen): modes to play, FIND MATCH / CANCEL, and how the queue looks */
-export function quickMatchPanel(app: App, onClose: () => void) {
+/**
+ * QUICK MATCH, on the Online screen: the modes you'd play, FIND MATCH / CANCEL, and how the queue looks. Your whole
+ * party queues as one group (a party of one is just you); a match takes the party into the room together.
+ * `dispose` stops it listening when the screen goes.
+ */
+export function quickMatchBox(app: App) {
   let picked = new Set(queueModes());
   const body = h('div.qm-body');
-  const el = h('div.qm-overlay', { onclick: (e: Event) => { if (e.target === el) close(); } }, h('div.qm-panel.panel', null, body));
-  const close = () => { queue.listeners.delete(render); el.remove(); onClose(); };
   function render() {
     body.innerHTML = '';
     const active = queue.active, st = queue.status;
@@ -58,9 +62,8 @@ export function quickMatchPanel(app: App, onClose: () => void) {
       }, ic ? icon(ic) : null, ' ', label);
     };
     const count = (id: string) => st?.modes[id] ?? 0;
+    const n = party.size;
     body.append(...[
-      h('div.qm-head', null, h('h2', null, 'QUICK MATCH'), h('button.btn.small.nav', { onclick: () => close() }, active ? 'Hide' : 'Close')),
-      h('div.hint', null, active ? 'Searching for players who want the same game…' : 'Pick what you\'d play — the more you pick, the sooner you\'re matched.'),
       h('div.qm-chips', null, chip('any', 'ANY MODE'), ...PICK_MODES.map((m) => chip(m.id, m.name.toUpperCase(), MODE_ICON[m.id]))),
       active
         ? h('div.qm-status', null,
@@ -70,10 +73,11 @@ export function quickMatchPanel(app: App, onClose: () => void) {
         : queue.error ? h('div.hint', { style: { color: 'var(--red)' } }, queue.error) : null,
       active
         ? h('button.btn.nav', { onclick: () => { queue.cancel(); } }, 'CANCEL')
-        : h('button.btn.primary.nav', { onclick: () => queue.start({ modes: [...picked], size: 1, name: settings.playerName || 'Player' }) }, icon('bolt'), ' FIND MATCH'),
+        : h('button.btn.primary.nav.qm-find', { onclick: () => queue.start({ modes: [...picked], size: n, name: settings.playerName || 'Player' }) }, icon('bolt'), n > 1 ? ` FIND A MATCH FOR ${n}` : ' FIND MATCH'),
     ].filter(Boolean) as Node[]);
   }
   queue.listeners.add(render);
+  party.listeners.add(render);
   render();
-  return el;
+  return { el: body, dispose: () => { queue.listeners.delete(render); party.listeners.delete(render); } };
 }

@@ -776,3 +776,21 @@ body.hints-on .music-chip { bottom: 56px; }
 .qm-status span { font-size: 13px; color: var(--text); }
 .qm-status .qm-modes { color: var(--muted); font-size: 12px; }
 .qm-searching { border-color: var(--gold) !important; color: var(--gold) !important; }
+
+/* Online: your party */
+.party-box { display: flex; flex-direction: column; gap: 8px; }
+.party-member { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.3); }
+.party-member b { font-family: var(--font-h); letter-spacing: 0.05em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.party-member .pm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); flex: none; }
+.party-member.me { border-color: var(--accent); }
+.party-member .pm-tag { font-family: var(--font-h); font-size: 10px; letter-spacing: 0.12em; color: var(--muted); }
+.party-member .pm-tag.lead { color: var(--gold); }
+.party-member .pm-kick { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px; }
+.party-member .pm-kick:hover { color: var(--red); }
+.party-box .code-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.party-box .code { font-family: var(--font-h); font-size: 24px; letter-spacing: 0.22em; color: var(--gold); text-shadow: 0 0 14px rgba(255, 210, 58, 0.6); flex: none; }
+.party-box .url { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--accent); cursor: pointer; }
+.party-follow { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--gold); background: rgba(255, 210, 58, 0.06); }
+.party-following { font-family: var(--font-h); letter-spacing: 0.1em; color: var(--gold); font-size: 15px; }
+.play-inner { display: flex; flex-direction: column; gap: 10px; }
+.play-inner h3, .online .panel h3 { display: flex; align-items: center; gap: 6px; }

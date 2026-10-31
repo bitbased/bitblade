@@ -3,8 +3,10 @@
 // listeners are registered exactly once per room.
 import type { BladeDesign } from '../core/blade';
 import type { ClientTransport, HostTransport, RoomListing } from './transport';
+import { party } from './party';
 
-export interface Member { peer: number; name: string; blade: BladeDesign | null }
+/** party: the guest's party code (party members stay on one team) */
+export interface Member { peer: number; name: string; blade: BladeDesign | null; party?: string }
 
 /** how the room presents itself: display name, listed publicly or not, and whether it's a saved (persistent) room */
 export interface RoomInfo { name: string; public: boolean; persistent: boolean }
@@ -55,11 +57,13 @@ class HostRoom {
       this.notify();
     });
     t.onLeave((peer) => { this.members.delete(peer); this.onMemberLeft?.(peer); this.notify(); });
+    party.leaderAt(t.code); // (my party comes into my room)
     t.onMessage((peer, m) => {
       const mem = this.members.get(peer);
       if (!mem || !m) return;
       if (m.t === 'hello' || m.t === 'blade') {
         if (m.name) mem.name = String(m.name).slice(0, 16);
+        if (typeof m.party === 'string') mem.party = m.party.slice(0, 10) || undefined;
         if (m.blade) mem.blade = m.blade as BladeDesign;
         this.notify();
       } else if (m.t === 'ctl') this.onCtl?.(peer, m);
@@ -71,7 +75,7 @@ class HostRoom {
 
   close() {
     if (this.beat) { clearInterval(this.beat); this.beat = null; }
-    if (this.t) { try { this.t.close(); } catch { /* ignore */ } }
+    if (this.t) { try { this.t.close(); } catch { /* ignore */ } party.leaderAt(null); }
     this.t = null;
     this.members.clear();
     this._inMatch = false;
@@ -101,6 +105,7 @@ class ClientRoom {
     this.leave();
     this.t = t;
     this.lobby = null;
+    party.leaderAt(t.code); // (my party follows me in)
     t.onMessage((m) => {
       if (m?.t === 'lobby') { this.lobby = m; this.busy = false; }
       if (m?.t === 'busy') this.busy = true;
@@ -109,6 +114,7 @@ class ClientRoom {
     t.onClose((r) => {
       if (this.t !== t) return;
       this.t = null;
+      party.leaderAt(null);
       this.closeHandler?.(r);
     });
   }
@@ -119,6 +125,7 @@ class ClientRoom {
     const t = this.t;
     this.t = null;
     this.lobby = null;
+    if (t) party.leaderAt(null);
     try { t?.close(); } catch { /* ignore */ }
   }
 }
