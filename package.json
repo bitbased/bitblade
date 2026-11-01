@@ -13,12 +13,12 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "relay": "bun run server/relay-bun.ts",
-    "worker:dev": "cd worker && wrangler dev --port 8790 --ip 127.0.0.1",
+    "worker:dev": "cd worker && bun x wrangler dev --port 8790 --ip 127.0.0.1",
     "electron": "electron .",
     "electron:dev": "bun run scripts/dev-electron.ts",
     "dist:win": "vite build && electron-builder --win nsis",
     "dist:mac": "vite build && electron-builder --mac dmg",
-    "worker:dev": "vite build && cd worker && bun x wrangler dev",
+    "worker:preview": "vite build && cd worker && bun x wrangler dev",
     "worker:deploy": "vite build && cd worker && bun x wrangler deploy"
   },
   "build": {
