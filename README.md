@@ -118,19 +118,24 @@ enough to start; Durable Objects carry the online traffic.
 
 ```sh
 bun install
-cd worker
-bun x wrangler login
-bun x wrangler secret put ADMIN_TOKEN    # the /admin password: make up a long one (20+ characters)
-cd ..
-bun run worker:deploy                    # builds the game and deploys it
+bun x wrangler login       # once, in your browser
+bun run worker:deploy      # asks a few questions the first time, builds the game and deploys it
 ```
 
-That's all you need. It goes live at **https://bitblade.&lt;your-account&gt;.workers.dev** with online play working: no
-domain, KV or other setup. The web game always uses the server it was loaded from, so nothing in the code points at
-someone else's.
+The first time, with no `worker/deploy.env`, `worker:deploy` asks you to choose:
+1. **Deploy to the free address.** It goes live at **https://bitblade.&lt;your-account&gt;.workers.dev** with online
+   play working: no domain, KV or other setup.
+2. **Set up `worker/deploy.env` now.** It asks for a custom domain and whether to keep the admin settings in KV, and
+   creates the KV namespace for you if you want one.
+3. **Cancel.**
 
-**Your own domain, and optional KV:** put them in `worker/deploy.env`. The file is git-ignored, so your settings
-stay out of the repo:
+After deploying, if the worker has no admin password yet (the `ADMIN_TOKEN` secret), it offers to set one. `/admin`
+stays locked until there is one; make it long, 20+ characters. You can also set it any time with
+`cd worker && bun x wrangler secret put ADMIN_TOKEN`.
+
+The web game always uses the server it was loaded from, so nothing in the code points at someone else's.
+
+**`worker/deploy.env`** is git-ignored, so your settings stay out of the repo. You can also write it by hand:
 
 ```sh
 DOMAIN=bitblade.example.com        # its zone must be on the same Cloudflare account
@@ -138,7 +143,14 @@ ADMIN_KV_ID=0123456789abcdef...    # optional, from: bun x wrangler kv namespace
 ```
 
 `bun run worker:deploy` (`scripts/deploy.ts`) then writes `worker/wrangler.deploy.toml` (`wrangler.toml` plus those
-values, also git-ignored) and deploys it. Pass wrangler options through, e.g. `bun run worker:deploy --dry-run`.
+values, also git-ignored) and deploys it.
+
+- **Passing options:** wrangler options pass through, e.g. `bun run worker:deploy --dry-run`. `--no-build` skips
+  building the game.
+- **No `deploy.env` and no terminal (CI):** the deploy stops rather than guess. Pass `--workers-dev` to deploy to
+  the free address anyway.
+- **Copy the file to every machine you deploy from.** On a machine without it, the script asks first instead of
+  quietly deploying your site without its domain.
 
 - **Without KV:** admin settings, bans and the whitelist live in the `Admin` Durable Object. They survive redeploys;
   they're lost only if the worker is deleted or renamed.
