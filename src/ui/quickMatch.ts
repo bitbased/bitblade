@@ -5,6 +5,7 @@ import type { App } from './app';
 import { MODES } from '../game/types';
 import type { QueueMatch } from '../net/queue';
 import { settings } from '../core/settings';
+import { clean } from '../core/textFilter';
 import { hostMatch, partyTravel } from './lobby';
 
 /**
@@ -20,7 +21,7 @@ export const travel: { room: ((code: string) => void) | null } = { room: null };
 
 export function onQueueMatch(app: App, m: QueueMatch) {
   const mode = MODES.find((x) => x.id === m.mode);
-  const others = m.names.filter((n) => n !== settings.playerName);
+  const others = m.names.filter((n) => n !== settings.playerName).map(clean);
   app.toast(`Match found — ${mode?.name ?? m.mode}${others.length ? ` with ${others.join(', ')}` : ''}`);
   app.sfx.play('go');
   if (m.role === 'host') { hostMatch(app, m); return; }

@@ -6,6 +6,7 @@ import { PICK_MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
 import { cloudRelayUrl, onlineStatus } from '../net/transport';
 import { party } from '../net/party';
+import { clean } from '../core/textFilter';
 import { FINISH_LABEL, fmtTime } from '../game/sim';
 import type { MatchSummary } from './match';
 import { TEAM_COLORS } from './hud';
@@ -214,7 +215,7 @@ export class Results extends Base {
     // columns depend on the mode: timed modes show finish times, collect modes show what you collected
     const t0 = state.t0 ?? 0;
     const time = (t: (typeof state.tops)[number]) => (t.finishT >= 0 ? fmtTime(t.finishT - t0) : null);
-    const name = (t: (typeof state.tops)[number]) => h('b', { style: { color: t.color } }, t.name);
+    const name = (t: (typeof state.tops)[number]) => h('b', { style: { color: t.color } }, clean(t.name));
     const status = (t: (typeof state.tops)[number]) => (t.alive ? `${Math.round(t.spin * 100)}% spin` : t.out ? FINISH_LABEL[t.out] : '—');
     let head: string[];
     let list = state.tops.filter((t) => !t.drone);
@@ -246,7 +247,7 @@ export class Results extends Base {
     });
     return h('div.screen.results', null,
       banner2,
-      h('div.screen-sub', null, state.lastFinish),
+      h('div.screen-sub', null, clean(state.lastFinish)),
       h('table.res-table', null, h('tr', null, ...head.map((x) => h('th', null, x))), ...rows),
       online === 'client'
         ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the lobby shortly — the leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', `Press again: ${leaveLabel()}`)) return; leaveRoom(this.app); } }, leaveLabel()))
@@ -372,6 +373,7 @@ export class SettingsScreen extends Base {
             ...([['off', 'Off'], ['all', 'Everyone'], ['mine', 'My team'], ['theirs', 'Their team']] as const).map(([v, t]) => h('option', { value: v, selected: settings.rings === v }, t)));
           return h('div.field', { title: 'Rings under the other blades. Everyone: team colours in team games, each blade’s own colour otherwise. My team / Their team: just that side (in a free-for-all, everyone else is their team). Your own blade always has its ring.' }, h('label', null, 'RINGS ON OTHER BLADES'), se);
         })(),
+        toggle("HIDE OFFENSIVE WORDS (other players' names)", () => settings.filterWords, (v) => { settings.filterWords = v; settings.save(); }),
         toggle('AUTO RESOLUTION (keeps FPS up)', () => settings.adaptive, (v) => { settings.adaptive = v; settings.save(); }),
         slider('RESOLUTION SCALE', settings.pixelRatio, 0.5, 2, 0.25, (v) => { settings.pixelRatio = v; settings.save(); const r = getRenderer(this.app.canvas).renderer; r.setPixelRatio(v); r.setSize(innerWidth, innerHeight); }),
         h('div.field', null, h('label', null, 'CLOUD RELAY URL (Cloudflare Worker)'), relay),

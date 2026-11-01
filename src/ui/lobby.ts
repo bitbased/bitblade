@@ -22,6 +22,7 @@ import { acceptSong, armRadio, onRoomSong, RADIO_HOST, roomMusicRow, roomRadio, 
 import { queue } from '../net/queue';
 import { party, setHomePartyCode, type RoomOpts } from '../net/party';
 import { joinParty, leaveLabel, leaveRoom, savePartyPrefs } from './partyFlow';
+import { clean } from '../core/textFilter';
 import { MATCH_ARRIVE, MATCH_COUNTDOWN, pendingMatch, travel } from './quickMatch';
 import type { QueueMatch } from '../net/queue';
 import type { Song } from '../game/music';
@@ -626,12 +627,13 @@ export class LobbyScreen implements Screen {
     c.team.style.display = this.isTeamMode() ? '' : 'none';
     c.team.innerHTML = (s.team === 0 ? 'RED' : 'BLUE') + (s.teamLock ? '' : '<span class="tauto"> · AUTO</span>');
     c.team.classList.toggle('auto', !s.teamLock);
-    if (document.activeElement !== c.name && c.name.value !== s.name) c.name.value = s.name;
+    const shown = remote ? clean(s.name) : s.name; // (someone else's name: as this player wants to see it)
+    if (document.activeElement !== c.name && c.name.value !== shown) c.name.value = shown;
     c.name.disabled = remote;
     c.left.style.visibility = c.right.style.visibility = remote ? 'hidden' : '';
     if (c.d !== d) {
       c.d = d;
-      c.bname.textContent = d.name;
+      c.bname.textContent = remote ? clean(d.name) : d.name;
       const st = computeStats(d);
       STAT_KEYS.forEach((k, j) => { c.bars[j].i.style.width = `${st.points[k] * 10}%`; c.bars[j].row.title = `${STAT_INFO[k].label} ${st.points[k]}/10 — ${STAT_INFO[k].desc}`; });
       drawBladeIcon(c.cv, d, this.angle);
@@ -796,7 +798,7 @@ export class LobbyScreen implements Screen {
     const mem = hostRoom.members;
     for (let i = L.slots.length - 1; i >= 0; i--) {
       const sl = L.slots[i];
-      if (sl.ctrl.type === 'remote' && !mem.has(sl.ctrl.peer)) { this.app.toast(`${sl.name} left`); L.slots.splice(i, 1); changed = true; }
+      if (sl.ctrl.type === 'remote' && !mem.has(sl.ctrl.peer)) { this.app.toast(`${clean(sl.name)} left`); L.slots.splice(i, 1); changed = true; }
     }
     for (const m of mem.values()) {
       const sl = L.slots.find((x) => x.ctrl.type === 'remote' && x.ctrl.peer === m.peer);
@@ -813,7 +815,7 @@ export class LobbyScreen implements Screen {
       }
       L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: 0, party: m.party });
       this.app.sfx.play('select');
-      this.app.toast(hostRoom.matchOpen ? `${m.name} is here for the match` : `${m.name} joined your party`);
+      this.app.toast(hostRoom.matchOpen ? `${clean(m.name)} is here for the match` : `${clean(m.name)} joined your party`);
       changed = true;
     }
     if (changed) { this.fillCpus(); this.assignTeams(); this.renderSlots(); }
@@ -1098,8 +1100,8 @@ export class LobbyScreen implements Screen {
     const others = [...new Set(members.filter((m) => m.party !== pc).map((m) => m.party ?? ''))];
     el.append(...[
       h('div.hint', null, `QUICK MATCH ROOM · ${this.mode.name.toUpperCase()} · ${members.length + 1} PLAYERS`),
-      h('div.pm-row', null, h('span.pm-lbl', null, 'YOUR PARTY'), chip(`${L.slots[0]?.name ?? 'You'} (you)`, '.me'), ...members.filter((m) => m.party === pc).map((m) => chip(m.name))),
-      ...others.map((o) => h('div.pm-row', null, h('span.pm-lbl', null, 'PARTY'), ...members.filter((m) => (m.party ?? '') === o).map((m) => chip(m.name)))),
+      h('div.pm-row', null, h('span.pm-lbl', null, 'YOUR PARTY'), chip(`${L.slots[0]?.name ?? 'You'} (you)`, '.me'), ...members.filter((m) => m.party === pc).map((m) => chip(clean(m.name)))),
+      ...others.map((o) => h('div.pm-row', null, h('span.pm-lbl', null, 'PARTY'), ...members.filter((m) => (m.party ?? '') === o).map((m) => chip(clean(m.name))))),
       this.findBtn(),
       h('div.hint', null, 'Everyone can change the match and press START. ◀ BACK TO YOUR PARTY ends this room — every party goes home.'),
       roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host'), radio ? RADIO_HOST : null), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
@@ -1153,7 +1155,7 @@ export class LobbyScreen implements Screen {
       const me = !m, open = m && this.openMember === m.peer;
       const visitor = m && m.party !== t.code;
       const c = h('div.pm-chip' + (me ? '.me' : '') + (visitor ? '.visitor' : '') + (open ? '.open' : ''), { onclick: () => { if (!m) return; this.openMember = open ? null : m.peer; this.renderOnline(); }, title: m ? `${m.name}${visitor ? ' — visiting with a quick match' : ''} — tap for options` : 'You lead the party' },
-        me ? icon('crown') : null, me ? `${L.slots[0]?.name ?? 'You'} (you)` : m!.name);
+        me ? icon('crown') : null, me ? `${L.slots[0]?.name ?? 'You'} (you)` : clean(m!.name));
       if (!open || !m) return c;
       return h('div.pm-acts', null, c,
         h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'kick-' + m.peer, `Press again to remove ${m.name}`)) return; this.openMember = null; hostRoom.kick(m.peer); } }, 'REMOVE'),
@@ -1395,18 +1397,18 @@ export class LobbyScreen implements Screen {
     const song = lb?.song ? acceptSong(lb.song) : null;
     const watching = lb && !L.slots.some((s) => s.mine);
     const away = party.away(t.code);
-    const leader = String(lb?.leader ?? 'the leader');
+    const leader = clean(String(lb?.leader ?? 'the leader'));
     const members = (lb?.members ?? []) as { peer: number; name: string; mine: boolean; grp?: number }[];
     const chip = (name: string, cls: string, ic?: string, title = '') => h('div.pm-chip' + cls, { title }, ic ? icon(ic) : null, name);
-    const mem = (m: (typeof members)[number]) => chip(m.peer === t.id ? `${m.name} (you)` : m.name, m.peer === t.id ? '.me' : '', m.peer === lb.heir ? 'star' : undefined, m.peer === lb.heir ? 'Leads the party if the leader leaves' : '');
+    const mem = (m: (typeof members)[number]) => chip(m.peer === t.id ? `${m.name} (you)` : clean(m.name), m.peer === t.id ? '.me' : '', m.peer === lb.heir ? 'star' : undefined, m.peer === lb.heir ? 'Leads the party if the leader leaves' : '');
     const myGrp = members.find((m) => m.peer === t.id)?.grp ?? 0;
     const grps = [...new Set(members.map((m) => m.grp ?? 0))].filter((g) => g > 0);
     el.append(...([
       h('div.hint', null, lb?.matchRoom
         ? `QUICK MATCH ROOM · ${this.mode.name.toUpperCase()} · ${leader.toUpperCase()} OPENED IT`
         : away
-        ? `VISITING ${lb?.roomName ? String(lb.roomName).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} WITH YOUR PARTY`
-        : `${lb?.roomName ? String(lb.roomName).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} · ${lb ? (this.canCtl ? 'SHARED CONTROL' : `${leader.toUpperCase()} LEADS`) : 'CONNECTING…'}`),
+        ? `VISITING ${lb?.roomName ? clean(String(lb.roomName)).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} WITH YOUR PARTY`
+        : `${lb?.roomName ? clean(String(lb.roomName)).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} · ${lb ? (this.canCtl ? 'SHARED CONTROL' : `${leader.toUpperCase()} LEADS`) : 'CONNECTING…'}`),
       lb?.matchRoom ? null : h('div.code-row', null, h('div.code', null, t.code),
         h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast(lb?.locked ? 'Invite link copied — they\'ll need the password too' : 'Invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
       lb ? h('div.pm-row', null, lb.matchRoom ? h('span.pm-lbl', null, myGrp === 0 ? 'YOUR PARTY' : 'PARTY') : null, chip(leader, '', 'crown', lb.matchRoom ? 'Opened the match room' : 'Party leader'), ...members.filter((m) => !m.grp).map(mem)) : null,

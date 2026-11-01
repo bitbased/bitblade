@@ -2,6 +2,9 @@
 import { h } from './app';
 import { ITEMS, MODES, type GameState, type MatchConfig } from '../game/types';
 import { CONTROL_HELP } from '../input/input';
+import { clean } from '../core/textFilter';
+/** for the few bits of HUD built as HTML: player text must never become markup */
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 import { iconSvg } from './icons';
 
 export const TEAM_COLORS = ['#ff3b4a', '#3b8bff', '#38ff7a', '#ffd23a', '#c77dff', '#ff8c00', '#00f5d4', '#ff5cf4', '#ffffff', '#ff2244'];
@@ -53,7 +56,7 @@ export class Hud {
       const rpm = h('span.rpm');
       const tip = h('div.pc-tip');
       const el = h('div.pcard', { style: { '--c': c } as unknown as Record<string, string> },
-        h('div.nm', null, `P${i + 1} ${p.name}`, rpm),
+        h('div.nm', null, `P${i + 1} ${clean(p.name)}`, rpm),
         h('div.bar', null, spin), h('div.bar.burst.thin', null, burst), spBar, meta, item, tip);
       el.style.setProperty('--c', c);
       this.cards.append(el);
@@ -102,7 +105,7 @@ export class Hud {
   }
 
   announce(text: string, sub?: string, color?: string) {
-    this.annQueue.push({ text, sub, color });
+    this.annQueue.push({ text: clean(text), sub: clean(sub) ?? undefined, color });
     if (this.annQueue.length > 3) this.annQueue.splice(0, this.annQueue.length - 3);
   }
 
@@ -148,7 +151,7 @@ export class Hud {
     if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? (this.cfg.mode === 'pinball' ? 'HOLD ↓ TO PULL THE PLUNGER — LET GO TO FIRE' : 'PRESS DASH WHEN THE RING IS GREEN!') : '';
     if (this.standings) {
       const order = s.tops.map((t, i) => ({ t, i })).sort((a, b) => (a.t.place || 99) - (b.t.place || 99));
-      const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${this.cfg.players[i].name}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
+      const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${esc(clean(this.cfg.players[i].name))}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
       if (this.standings.dataset.h !== html) { this.standings.dataset.h = html; this.standings.innerHTML = html; }
     }
     s.tops.forEach((t, i) => {

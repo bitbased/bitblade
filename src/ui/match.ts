@@ -10,6 +10,7 @@ import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from 
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
 import { leaveLabel, leaveRoom } from './partyFlow';
+import { clean } from '../core/textFilter';
 import { clientRoom, hostRoom } from '../net/room';
 import { acceptSong, onRoomSong, RADIO_HOST, roomSongHost } from './roomMusic';
 import { editorName, testRide } from './testRide';
@@ -104,7 +105,7 @@ export class MatchScreen implements Screen {
         hostRoom.onQuitMatch = (peer) => {
           const idx = peerSlot.get(peer);
           const top = idx !== undefined ? this.sim!.s.tops[idx] : undefined;
-          if (top?.alive) { top.spin = 0; this.app.toast(`${top.name} left the match (still in the room)`); }
+          if (top?.alive) { top.spin = 0; this.app.toast(`${clean(top.name)} left the match (still in the room)`); }
         };
         // room song picks (and radios) keep working mid-match
         hostRoom.onCtl = (peer, m) => {

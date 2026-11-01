@@ -8,6 +8,8 @@ export const settings = {
   /** rings under the other blades (yours always has its own): none, everyone (team colours in team games, each
    *  blade's own colour otherwise), only your team, or only the other side */
   rings: 'theirs' as 'off' | 'all' | 'mine' | 'theirs',
+  /** other players' names / blade names / party names: offensive words shown as **** */
+  filterWords: true,
   load() {
     try {
       const saved = JSON.parse(localStorage.getItem('bitblade.settings') || '{}');
@@ -19,8 +21,8 @@ export const settings = {
     } catch { /* ignore */ }
   },
   save() {
-    const { bloom, trajectories, pixelRatio, playerName, adaptive, rings } = this;
-    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, rings, v: 2 })); } catch { /* ignore */ }
+    const { bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords } = this;
+    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords, v: 2 })); } catch { /* ignore */ }
   },
 };
 settings.load();
