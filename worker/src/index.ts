@@ -86,11 +86,12 @@ function gameCsp(url: URL) {
   const ws = (url.protocol === "https:" ? "wss://" : "ws://") + url.host;
   return [
     "default-src 'self'",
-    "script-src 'self' blob:",
+    // (+ Cloudflare Web Analytics: Cloudflare adds its beacon script to the page when it's on for the site)
+    "script-src 'self' blob: https://static.cloudflareinsights.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
-    `connect-src 'self' ${ws}`,
+    `connect-src 'self' ${ws} https://cloudflareinsights.com`,
     "media-src 'self' data: blob:",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
