@@ -7,6 +7,22 @@ A spinning-top battle game built with three.js, TypeScript and Vite. Play it in 
 a phone (PWA), or run the Electron desktop build. Local multiplayer works on one screen with keyboards, mice,
 gamepads and touch. Online play uses parties on Cloudflare Workers.
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screens/battle.jpg" alt="Battle: four blades fighting in a bowl arena"><br><b>Battle</b>: knock them out, burst them, or outlast them</td>
+    <td width="50%"><img src="docs/screens/race.jpg" alt="Grand Prix: racers on a floating orange track"><br><b>Grand Prix</b>: laps on floating sky tracks</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screens/gauntlet.jpg" alt="Gauntlet: gems, saws, a pit and drones"><br><b>Gauntlet</b>: grab gems past hazards and drones</td>
+    <td width="50%"><img src="docs/screens/pinball.jpg" alt="Pinball: the blade is the ball on a neon table"><br><b>Pinball</b>: your blade is the ball</td>
+  </tr>
+</table>
+
+<img src="docs/screens/music-studio.jpg" alt="Music Studio: patterns, song arrangement, the 8-lane step sequencer and the piano roll">
+
+<b>Music Studio</b>: write chip-tune songs for menus, tracks and courses with the step sequencer and piano roll, then
+share one as a link.
+
 ## Play
 
 ### Modes
