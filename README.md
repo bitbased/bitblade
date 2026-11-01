@@ -226,4 +226,4 @@ scripts/      dev tunnel, Electron dev runner
 
 ## License
 
-[MIT](LICENSE): use it, change it, build on it. Keep the copyright notice.
+[MIT-0](LICENSE) (MIT No Attribution): use it, change it, build on it — no strings attached, no credit required.

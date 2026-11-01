@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "BitBlade - spinning top battle arena",
   "author": "bitbased",
-  "license": "MIT",
+  "license": "MIT-0",
   "repository": "github:bitbased/bitblade",
   "private": true,
   "type": "module",
