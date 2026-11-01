@@ -243,10 +243,10 @@ export class Results extends Base {
           // rematch / next go back through the lobby so a host's room follows along (and newcomers get slotted in)
           h('button.btn.primary.nav', { onclick: () => (again ? this.app.go('match', again) : this.app.go('lobby', { keep: true, autostart: true })) }, online === 'host' ? '↻ Rematch — everyone' : '↻ Rematch'),
           h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true, next: true, autostart: true }) }, cfg.arena.track ? 'Next Track ▶' : 'Next Arena ▶'),
-          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? 'Party Lobby — change track / players' : 'Lobby — change track / players'),
+          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? (hostRoom.matchOpen ? 'Match Lobby — change track / players' : 'Party Lobby — change track / players') : 'Lobby — change track / players'),
           online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
           testRide.from && !online ? h('button.btn.nav', { onclick: () => this.app.go(testRide.from!) }, `◀ Back to ${editorName()}`) : null,
-          h('button.btn.nav', { onclick: () => this.app.go(online === 'host' ? 'lobby' : 'menu', online === 'host' ? { keep: true } : undefined) }, online === 'host' ? 'Party Lobby' : 'Main Menu')),
+          h('button.btn.nav', { onclick: () => this.app.go(online === 'host' ? 'lobby' : 'menu', online === 'host' ? { keep: true } : undefined) }, online === 'host' ? (hostRoom.matchOpen ? 'Match Lobby' : 'Party Lobby') : 'Main Menu')),
     );
   }
   online?: 'host' | 'client';

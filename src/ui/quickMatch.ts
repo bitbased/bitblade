@@ -1,12 +1,11 @@
 // QUICK MATCH: a party queues from its lobby (the leader, or anyone with shared control) for the lobby's mode, as one
-// group — its people, not its CPUs. What a match does: the biggest party hosts it in its own room (its CPUs step aside,
-// everyone can drive, it starts by itself), every other party travels there together and comes home afterwards.
+// group — its people, not its CPUs. A match gets a room of its own — never anyone's party: the biggest party's leader
+// opens it (everyone can drive it, it starts by itself), every party goes there together, and goes home afterwards.
 import type { App } from './app';
 import { MODES } from '../game/types';
 import type { QueueMatch } from '../net/queue';
-import { hostRoom } from '../net/room';
 import { settings } from '../core/settings';
-import { partyTravel } from './lobby';
+import { hostMatch, partyTravel } from './lobby';
 
 /**
  * A match we're hosting. Everyone in it can drive the room and press START; otherwise it starts by itself: a
@@ -24,12 +23,7 @@ export function onQueueMatch(app: App, m: QueueMatch) {
   const others = m.names.filter((n) => n !== settings.playerName);
   app.toast(`Match found — ${mode?.name ?? m.mode}${others.length ? ` with ${others.join(', ')}` : ''}`);
   app.sfx.play('go');
-  if (m.role === 'host' && hostRoom.t?.code === m.code) {
-    pendingMatch.cur = { expect: m.expect, until: performance.now() + (MATCH_ARRIVE + MATCH_COUNTDOWN) * 1000, mode: m.mode };
-    hostRoom.matchOpen = true;
-    app.go('lobby', { keep: true, matchMode: m.mode });
-    return;
-  }
+  if (m.role === 'host') { hostMatch(app, m); return; }
   if (travel.room) travel.room(m.code);
   else partyTravel(app, m.code, 'match');
 }

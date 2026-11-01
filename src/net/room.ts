@@ -22,7 +22,7 @@ class HostRoom {
   /** connected, not let in yet (waiting for their hello) */
   private pending = new Map<number, ReturnType<typeof setTimeout>>();
   openControl = false;
-  /** a quick match is gathering here: its players come in without the password */
+  /** a quick match's own room (not anyone's party): its players come in without a password, and go home after */
   matchOpen = false;
   info: RoomInfo = { name: '', public: false, persistent: false, password: '' };
   /** latest lobby summary (mode / arena / players) — the lobby keeps it fresh */

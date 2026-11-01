@@ -1,5 +1,5 @@
 // Where a party goes, from whatever screen is up: open your party (ONLINE), join one, visit a room together (a quick
-// match, a public room), come home, and carry on when the leader leaves (the next member takes the party over).
+// match, a friend's party), come home, and carry on when the leader leaves (the next member takes the party over).
 // The lobby shows the party; this is the plumbing between rooms. main.ts wires clientRoom.onParty / onLost here.
 import type { App } from './app';
 import { allBlades, findBlade } from '../core/blade';
@@ -21,7 +21,7 @@ export function savePartyPrefs(p: Partial<PartyPrefs>) { try { localStorage.setI
 /** the party ONLINE opens: your kept party (same code every time) if you have one, else a fresh private one */
 export function myPartyOpts(): RoomOpts {
   const saved = homePartyCode() ? findMyRoom(homePartyCode()) : null;
-  if (saved) return { name: saved.name, public: saved.public, persistent: true, code: saved.code, key: saved.key, openControl: saved.openControl, password: saved.password ?? '' };
+  if (saved) return { name: saved.name, public: false, persistent: true, code: saved.code, key: saved.key, openControl: saved.openControl, password: saved.password ?? '' };
   const p = loadPartyPrefs();
   return { name: p.name, public: false, persistent: false, openControl: p.open };
 }
@@ -47,7 +47,7 @@ export const DENIED_TEXT: Record<string, string> = {
 
 /**
  * Join a party's room. `member`: it becomes your party (you leave the one you had). `visit`: your party is going
- * there together — a quick match, a public room — and stays your party. Retries while the room isn't open yet (a
+ * there together — a quick match, a friend's party — and stays your party. Retries while the room isn't open yet (a
  * matched room opening, a leader reopening the party) for up to `retryMs`. Returns '' once in, else why not.
  */
 export async function joinParty(app: App, input: string, o: { as?: 'member' | 'visit'; retryMs?: number; alive?: () => boolean; onIn?: () => void } = {}): Promise<string> {
@@ -113,7 +113,7 @@ export function leaveLabel() {
 /** party traffic, whatever screen is showing */
 export function onPartyMsg(app: App, m: any) {
   if (m.t === 'travel' && typeof m.code === 'string') {
-    // the leader's taking the party somewhere (a match, a public room): go too
+    // the leader's taking the party somewhere (a match, a friend's party): go too
     if (typeof m.pw === 'string' && m.pw) party.pw.set(m.code, m.pw);
     clientRoom.leave();
     app.toast(m.why === 'match' ? 'Match found — your party is heading there' : 'Your party is heading to another room');
@@ -160,7 +160,7 @@ export function roomLost(app: App, why: string, code: string) {
 
 /** the leader left and I'm next: open the party again under its code, with its settings — the others rejoin */
 function takeOver(app: App, snap: any, code: string) {
-  const opts: RoomOpts = { name: snap.roomName ?? '', public: !!snap.public, persistent: false, code, openControl: snap.control === 'all', password: clientRoom.partyPw };
+  const opts: RoomOpts = { name: snap.roomName ?? '', public: false, persistent: false, code, openControl: snap.control === 'all', password: clientRoom.partyPw };
   party.home = { code, leader: true, opts };
   app.toast('The leader left — you lead the party now');
   app.go('lobby', { keep: true, online: true, room: opts, takeover: snap });

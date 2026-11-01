@@ -11,7 +11,9 @@
 // home — they reopen the party, the others are sent back to it.
 
 /** how the lobby opens a party room: its name, listing, the code you keep, password, shared control */
-export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean; password?: string }
+export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean; password?: string;
+  /** a quick match's own room (not a party): its players' parties go home after it */
+  match?: boolean }
 
 /** the party you belong to: its code, whether you lead it, and (leader) how to reopen it after a visit */
 export interface PartyHome { code: string; leader: boolean; opts?: RoomOpts }

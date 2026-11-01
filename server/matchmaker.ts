@@ -7,7 +7,7 @@
 //   server → { t: 'match', role: 'host' | 'join', mode, code, expect, host }      you're in a match
 //
 // A ticket is one client: a solo player, or a whole room (size = its players, room = its code). The host of a match
-// is the biggest group that has a room (every party does), then whoever waited longest; everyone else joins its
+// (who opens the match's own room) is the biggest party, then whoever waited longest; everyone else joins its
 // room. A match starts at the mode's ideal size, or — once the longest-waiting player has waited RELAX seconds — at
 // its minimum (bots fill the rest). Never with fewer than two tickets: one person alone can play CPUs anywhere.
 
@@ -95,7 +95,7 @@ export class Matchmaker {
     // (the biggest party with a room hosts — every party has one now; then the longest waiting)
     const rooms = group.filter((t) => t.room);
     const host = [...(rooms.length ? rooms : group)].sort((a, b) => b.size - a.size || a.since - b.since)[0];
-    const code = host.room ?? this.newCode();
+    const code = this.newCode(); // (its own room: parties never take strangers into their party)
     const expect = group.reduce((n, t) => n + t.size, 0);
     for (const t of group) {
       this.tickets.delete(t.id);
