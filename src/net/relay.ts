@@ -131,11 +131,11 @@ export function parseJoinInput(input: string): { wsBase: string; code: string } 
   try {
     url = new URL(/^[a-z]+:\/\//i.test(s) ? s : `http://${s}`);
   } catch {
-    throw new Error("Invalid invite code or URL");
+    throw new Error("That isn't a party code or invite link");
   }
   const parts = url.pathname.split("/").filter(Boolean);
   const code = parts[parts.length - 1] ?? "";
-  if (!CODE_RE.test(code)) throw new Error("No room code found in invite");
+  if (!CODE_RE.test(code)) throw new Error("No party code in that — codes are 4-10 letters / digits, like K7QM2");
   const secure = url.protocol === "https:" || url.protocol === "wss:";
   return { wsBase: `${secure ? "wss" : "ws"}://${url.host}`, code: code.toUpperCase() };
 }

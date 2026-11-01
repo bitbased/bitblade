@@ -186,7 +186,7 @@ h1, h2, h3 { font-family: var(--font-h); margin: 0; letter-spacing: 0.06em; }
 /* ---------- forms ---------- */
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-family: var(--font-h); font-size: 10px; letter-spacing: 0.25em; color: var(--muted); }
-.field input[type=text], .field input[type=url], .field select { background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); color: var(--text); padding: 10px 12px; font-size: 16px; outline: none; }
+.field input[type=text], .field input[type=url], .field input[type=password], .field select { background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); color: var(--text); padding: 10px 12px; font-size: 16px; outline: none; }
 .field input:focus { border-color: var(--accent); }
 input[type=range] { accent-color: var(--accent); }
 
