@@ -57,6 +57,11 @@ type IpDay = { conns: number; hosts: number; msgs: number; bytes: number; floods
 
 /** rooms check in at least every 5 minutes (index.ts HEARTBEAT): one not heard from in 12 has closed */
 const LIVE_TTL = 12 * 60_000;
+type LiveRoom = { players: number; hostIp: string; since: number; name: string; seen: number };
+/** addresses per stored chunk of the day's per-IP counts */
+const IP_CHUNK = 300;
+/** how many open rooms the admin page lists (biggest first; the totals still count them all) */
+const LIVE_SHOWN = 50;
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
@@ -64,17 +69,20 @@ export class Admin {
   private cfg: AdminConfig | null = null;
   /** open rooms (by code — the code never leaves this object: the admin page gets an anonymous ref per room), saved so
    *  the list survives this object being unloaded while idle */
-  private live = new Map<string, { players: number; hostIp: string; since: number; name: string; seen: number }>();
+  private live = new Map<string, LiveRoom>();
   private liveLoaded = false;
   /** refs are a hash of the code with this per-instance salt: they can't be turned back into a join code */
   private salt = crypto.randomUUID();
+  // (one storage key per open room: a single list would pass the 128 KB value limit somewhere past ~700 rooms)
   private async loadLive() {
     if (this.liveLoaded) return;
     this.liveLoaded = true;
-    const saved = await this.state.storage.get<[string, { players: number; hostIp: string; since: number; name: string; seen: number }][]>("live");
-    for (const [k, v] of saved ?? []) if (!this.live.has(k)) this.live.set(k, v);
+    for (const [k, v] of await this.state.storage.list<LiveRoom>({ prefix: "live:" })) if (!this.live.has(k.slice(5))) this.live.set(k.slice(5), v);
+    const legacy = await this.state.storage.get<[string, LiveRoom][]>("live"); // (the old single-list format)
+    if (legacy) { for (const [k, v] of legacy) if (!this.live.has(k)) { this.live.set(k, v); await this.putLive(k); } await this.state.storage.delete("live"); }
   }
-  private saveLive() { return this.state.storage.put("live", [...this.live]); }
+  private putLive(code: string) { const v = this.live.get(code); return v ? this.state.storage.put(`live:${code}`, v) : this.dropLive(code); }
+  private dropLive(code: string) { this.live.delete(code); return this.state.storage.delete(`live:${code}`); }
   private async refOf(code: string) {
     const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(this.salt + code));
     return [...new Uint8Array(d).slice(0, 6)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -117,22 +125,31 @@ export class Admin {
     return this.bucket.b;
   }
   private async ipRow(ip: string, now: number) {
+    await this.loadIps(now);
+    let r = this.ips!.m.get(ip);
+    if (!r) { r = { conns: 0, hosts: 0, msgs: 0, bytes: 0, floods: 0, denied: 0, last: now }; this.ips!.m.set(ip, r); }
+    r.last = now;
+    return r;
+  }
+  /** today's per-IP counts, from storage if this object just woke up (the admin page reads them too) */
+  private async loadIps(now: number) {
     const day = dayKey(now);
     if (this.ips?.day !== day) {
       if (this.ips) await this.saveIps();
-      const m = new Map<string, IpDay>(Object.entries((await this.state.storage.get<Record<string, IpDay>>(`ip:${day}`)) ?? {}));
+      const m = new Map<string, IpDay>(Object.entries((await this.state.storage.get<Record<string, IpDay>>(`ip:${day}`)) ?? {})); // (old format)
+      for (const part of (await this.state.storage.list<Record<string, IpDay>>({ prefix: `ip:${day}:` })).values()) for (const [k, v] of Object.entries(part)) m.set(k, v);
       this.ips = { day, m };
     }
-    let r = this.ips.m.get(ip);
-    if (!r) { r = { conns: 0, hosts: 0, msgs: 0, bytes: 0, floods: 0, denied: 0, last: now }; this.ips.m.set(ip, r); }
-    r.last = now;
-    return r;
   }
   private async saveIps() {
     if (!this.ips) return;
     // (keep the 2000 busiest addresses a day — enough to see who's hammering it)
     const top = [...this.ips.m.entries()].sort((a, b) => b[1].msgs + b[1].conns * 100 - (a[1].msgs + a[1].conns * 100)).slice(0, 2000);
-    await this.state.storage.put(`ip:${this.ips.day}`, Object.fromEntries(top));
+    // (in chunks of 300 — about 50 KB each, under the 128 KB a stored value can be — and the rest forgotten in memory
+    //  too, so a viral day with 100k addresses doesn't grow this object without end)
+    for (let i = 0; i * IP_CHUNK < Math.max(top.length, 1); i++) await this.state.storage.put(`ip:${this.ips.day}:${i}`, Object.fromEntries(top.slice(i * IP_CHUNK, (i + 1) * IP_CHUNK)));
+    await this.state.storage.delete(`ip:${this.ips.day}`);
+    if (this.ips.m.size > 4000) this.ips.m = new Map(top);
   }
   private async flushSoon(now: number) {
     if (now - this.dirtyAt < 5000) return;
@@ -200,15 +217,13 @@ export class Admin {
         for (const k of this.live.keys()) if ((await this.refOf(k)) === String(body.ref)) code = k;
         if (!code) return json({ error: "That room isn't open any more (the list was out of date)" }, 404);
         await this.roomCmd(code, { a: "close", why: String(body.why ?? "Closed by the admin") });
-        this.live.delete(code);
-        await this.saveLive();
+        await this.dropLive(code);
         return json({ ok: true });
       }
       case "/close-all": {
         const codes = [...this.live.keys()];
         await Promise.all(codes.map((code) => this.roomCmd(code, { a: "close", why: String(body.why ?? "Online play is paused") })));
-        this.live.clear();
-        await this.saveLive();
+        for (const c of codes) await this.dropLive(c);
         return json({ closed: codes.length });
       }
     }
@@ -234,12 +249,14 @@ export class Admin {
     }
     for (const f of r.floods ?? []) { b.floods++; (await this.ipRow(f.ip, now)).floods++; }
     const had = this.live.get(r.code);
-    if (r.live === null) this.live.delete(r.code);
-    else if (r.live) this.live.set(r.code, { ...r.live, seen: now });
+    if (r.live === null) await this.dropLive(r.code);
+    else if (r.live) {
+      this.live.set(r.code, { ...r.live, seen: now });
+      // (saved when it changes, and with each heartbeat — not on every traffic report)
+      if (!had || had.players !== r.live.players || had.name !== r.live.name || now - had.seen > 60_000) await this.putLive(r.code);
+    }
     // (a room that's missed two heartbeats is gone — it closed without saying so)
-    for (const [k, v] of this.live) if (now - v.seen > LIVE_TTL) this.live.delete(k);
-    // (saved when the list changes, and with each heartbeat — not on every traffic report)
-    if (!had || r.live === null || !r.live || had.players !== r.live.players || now - had.seen > 60_000) await this.saveLive();
+    for (const [k, v] of this.live) if (now - v.seen > LIVE_TTL) await this.dropLive(k);
     b.peakRooms = Math.max(b.peakRooms, this.live.size);
     await this.flushSoon(now);
   }
@@ -262,14 +279,20 @@ export class Admin {
       for (const k of (await this.state.storage.list({ prefix: "h:" })).keys()) if (k < hourKey(now - 90 * DAY)) await this.state.storage.delete(k);
       for (const k of (await this.state.storage.list({ prefix: "ip:" })).keys()) if (k < `ip:${dayKey(now - 14 * DAY)}`) await this.state.storage.delete(k);
     }
-    const today = this.ips?.day === dayKey(now) ? this.ips.m : new Map<string, IpDay>();
+    await this.loadIps(now);
+    const today = this.ips!.m;
     const cfg = await this.config();
     const banned = new Set(cfg.bans.map((b) => b.ip));
     const topIps = [...today.entries()].map(([ip, v]) => ({ ip, ...v, banned: banned.has(ip), flag: flagIp(v) }))
       .sort((a, b) => (b.flag ? 1 : 0) - (a.flag ? 1 : 0) || b.msgs - a.msgs || b.conns - a.conns).slice(0, 50);
-    const live = await Promise.all([...this.live.entries()].filter(([, v]) => now - v.seen < LIVE_TTL).sort((a, b) => b[1].players - a[1].players)
+    // (the totals count every open room; the list shows the biggest LIVE_SHOWN — a few hundred parties would make
+    //  a page nobody reads, and each row costs a hash on every refresh)
+    const open = [...this.live.entries()].filter(([, v]) => now - v.seen < LIVE_TTL)
+      .sort((a, b) => b[1].players - a[1].players || b[1].since - a[1].since);
+    const liveTotal = open.length, playersTotal = open.reduce((n, [, v]) => n + v.players, 0);
+    const live = await Promise.all(open.slice(0, LIVE_SHOWN)
       .map(async ([code, v]) => ({ ref: await this.refOf(code), name: v.name, players: v.players, hostIp: v.hostIp, since: v.since })));
-    return { now, config: cfg, live, hours, month: { month, ...mt }, cost: costEstimate(mt, now), topIps };
+    return { now, config: cfg, live, liveTotal, playersTotal, hours, month: { month, ...mt }, cost: costEstimate(mt, now), topIps };
   }
 }
 
@@ -540,8 +563,9 @@ if (!AUTHED) {
     }
     $('queue').checked = c.queue; if (document.activeElement !== $('msg')) $('msg').value = c.message; $('flood').value = c.floodPerSec; $('rtc').value = c.rtc || 'off'; $('rtcm').value = c.rtcMobile || 'off';
     if (document.activeElement !== $('white')) $('white').value = c.whitelist.join('\\n');
-    const players = data.live.reduce((a, r) => a + r.players, 0);
-    $('now').innerHTML = '<div class="row"><span class="stat"><b class="big">' + data.live.length + '</b><span>rooms open</span></span><span class="stat"><b class="big">' + players + '</b><span>players connected</span></span></div>';
+    const total = data.liveTotal ?? data.live.length, players = data.playersTotal ?? data.live.reduce((a, r) => a + r.players, 0);
+    $('now').innerHTML = '<div class="row"><span class="stat"><b class="big">' + total + '</b><span>rooms open</span></span><span class="stat"><b class="big">' + players + '</b><span>players connected</span></span></div>'
+      + (total > data.live.length ? '<div class="muted">Showing the ' + data.live.length + ' biggest of ' + total + ' open — most players first.</div>' : '');
     $('rooms').innerHTML = data.live.length ? th([['Party'], ['Players', 'num'], ['Leader IP'], ['Open'], ['']]) + data.live.map((r) => tr([['Party', r.name ? esc(r.name) : '<span class="muted">(no name)</span>', 'wrap'], ['Players', r.players, 'num'], ['Leader IP', esc(r.hostIp), 'ip'], ['Open', ago(r.since)], ['', '<button data-close="' + esc(r.ref) + '" data-name="' + esc(r.name || 'this party') + '">Close</button>', 'act']])).join('') : '<tr><td class="muted">No rooms open.</td></tr>';
     const m = data.month, e = data.cost;
     $('cost').innerHTML = '<div class="row"><span class="stat"><b class="big">$' + e.total.toFixed(2) + '</b><span>so far</span></span><span class="stat"><b class="big">$' + e.projected.toFixed(2) + '</b><span>month projected</span></span></div>'
