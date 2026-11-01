@@ -42,3 +42,10 @@ interface DurableObjectState {
 interface Fetcher {
   fetch(request: Request): Promise<Response>;
 }
+
+interface KVNamespace {
+  get(key: string): Promise<string | null>;
+  get<T = unknown>(key: string, type: "json"): Promise<T | null>;
+  put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
+  delete(key: string): Promise<void>;
+}

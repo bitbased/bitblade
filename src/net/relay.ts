@@ -1,5 +1,9 @@
 // Browser client for the BitBlade relay (server/relay-bun.ts, electron/relay-node.cjs, worker/).
 // Hosts connect to /room/new and get a code; clients join /room/<code>.
+import { party } from "./party";
+
+/** this browser's id rides along on every connection (the server can turn a banned browser away) */
+const devQ = () => `&dev=${encodeURIComponent(party.deviceId)}`;
 
 export type RelayRole = "host" | "client";
 
@@ -57,12 +61,12 @@ export class RelayClient {
   static host(wsBase: string, name = "host", opts: { code?: string; key?: string } = {}): Promise<RelayClient> {
     const code = opts.code ? encodeURIComponent(opts.code.toUpperCase()) : "new";
     const key = opts.key ? `&key=${encodeURIComponent(opts.key)}` : "";
-    const c = new RelayClient(wsBase, `/room/${code}?role=host&name=${encodeURIComponent(name)}${key}`, "host");
+    const c = new RelayClient(wsBase, `/room/${code}?role=host&name=${encodeURIComponent(name)}${key}${devQ()}`, "host");
     return c.ready();
   }
 
   static join(wsBase: string, code: string, name: string): Promise<RelayClient> {
-    const c = new RelayClient(wsBase, `/room/${encodeURIComponent(code.toUpperCase())}?role=client&name=${encodeURIComponent(name)}`, "client");
+    const c = new RelayClient(wsBase, `/room/${encodeURIComponent(code.toUpperCase())}?role=client&name=${encodeURIComponent(name)}${devQ()}`, "client");
     return c.ready();
   }
 

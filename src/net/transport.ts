@@ -121,6 +121,20 @@ export function publicJoinInput(code: string) {
   return `${cloudRelayUrl().replace(/^ws/, 'http').replace(/\/+$/, '')}/join/${code}`;
 }
 
+/** is online play available for this player right now? (main menu) — null when there's no answer (offline, a local relay) */
+export async function onlineStatus(dev: string): Promise<{ online: boolean; queue: boolean; message: string } | null> {
+  const base = cloudRelayUrl().replace(/^ws/, 'http').replace(/\/+$/, '');
+  if (!base) return null;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(`${base}/api/status?dev=${encodeURIComponent(dev)}`, { signal: ctl.signal, cache: 'no-store' });
+    clearTimeout(t);
+    const j = await r.json();
+    return typeof j?.online === 'boolean' ? j : null;
+  } catch { return null; }
+}
+
 /** Join by bare code, invite URL or host:port/CODE. */
 export async function joinAny(input: string, name: string): Promise<ClientTransport> {
   let { wsBase, code } = parseJoinInput(input);

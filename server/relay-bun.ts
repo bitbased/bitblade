@@ -54,6 +54,7 @@ const server = Bun.serve<Peer>({
   fetch(req, srv) {
     const url = new URL(req.url);
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname === "/api/status") return Response.json({ online: true, queue: true, message: "" }, { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } });
     if (url.pathname === "/api/rooms") {
       const now = Date.now();
       for (const [k, v] of listings) if (now - v.updated > LISTING_TTL) listings.delete(k);

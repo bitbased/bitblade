@@ -4,7 +4,8 @@ import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
 import { PICK_MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
-import { cloudRelayUrl } from '../net/transport';
+import { cloudRelayUrl, onlineStatus } from '../net/transport';
+import { party } from '../net/party';
 import { FINISH_LABEL, fmtTime } from '../game/sim';
 import type { MatchSummary } from './match';
 import { TEAM_COLORS } from './hud';
@@ -132,7 +133,17 @@ export class MusicCorner {
 
 // ------------------------------------------------------------------ main menu
 export class MainMenu extends Base {
+  /** ONLINE, and why it's unavailable right now (paused by the admin — or banned, which reads just the same) */
+  onlineItem: HTMLElement | null = null;
+  offline = '';
   build() {
+    void onlineStatus(party.deviceId).then((st) => {
+      if (!st || st.online || !this.onlineItem?.isConnected) return;
+      this.offline = st.message || 'Online play is temporarily unavailable';
+      this.onlineItem.classList.add('unavail');
+      const sub = this.onlineItem.querySelector('small');
+      if (sub) sub.textContent = st.message.replace(/^Online play is temporarily unavailable( — )?/, 'Temporarily unavailable$1') || 'Temporarily unavailable';
+    });
     const item = (label: string, sub: string, fn: () => void) => h('button.menu-item.nav', { onclick: () => { this.app.sfx.play('select'); fn(); } }, label, h('small', null, sub));
     const p = getPlatform();
     testRide.from = null; // reaching the main menu ends a test ride: Back no longer returns to the editor
@@ -142,7 +153,7 @@ export class MainMenu extends Base {
         h('div.menu-logo', null, 'BITBLADE'),
         session ? item('CONTINUE', `${session.mode} · ${session.arena} · ${session.humans}P${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
         item(session ? 'NEW GAME' : 'PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
-        item('ONLINE', 'Your party: play with friends, quick match, or join a party', () => goOnline(this.app)),
+        this.onlineItem = item('ONLINE', 'Your party: play with friends, quick match, or join a party', () => { if (this.offline) { this.app.toast(this.offline); return; } goOnline(this.app); }),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
         item('TRACK STUDIO', 'Build race tracks and track adventures from segments', () => this.app.go('tracks')),

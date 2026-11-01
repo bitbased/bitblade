@@ -19,6 +19,7 @@ export interface RoomOpts { name: string; public: boolean; persistent: boolean; 
 export interface PartyHome { code: string; leader: boolean; opts?: RoomOpts }
 
 const DEV_KEY = 'bitblade.deviceId';
+const PUB_KEY = 'bitblade.publicId';
 const BLOCK_KEY = 'bitblade.blocked';
 
 export interface Blocked { id: string; name: string; at: number }
@@ -27,25 +28,30 @@ class Party {
   home: PartyHome | null = null;
   /** passwords you've typed, by party code (sent with every hello to that party, so rejoining just works) */
   pw = new Map<string, string>();
-  private dev = '';
+  private ids: Record<string, string> = {};
 
-  /** this browser: a random id kept forever (blocking works on it, not on names) */
-  get deviceId() {
-    if (this.dev) return this.dev;
-    try { this.dev = localStorage.getItem(DEV_KEY) || ''; } catch { /* ignore */ }
-    if (!this.dev) {
-      this.dev = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
-      try { localStorage.setItem(DEV_KEY, this.dev); } catch { /* ignore */ }
+  /** a random id kept forever in this browser */
+  private id(key: string) {
+    if (this.ids[key]) return this.ids[key];
+    let v = '';
+    try { v = localStorage.getItem(key) || ''; } catch { /* ignore */ }
+    if (!v) {
+      v = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      try { localStorage.setItem(key, v); } catch { /* ignore */ }
     }
-    return this.dev;
+    return (this.ids[key] = v);
   }
+  /** this browser, as the server knows it (admin bans / whitelist) — only ever sent to the server, never to players */
+  get deviceId() { return this.id(DEV_KEY); }
+  /** this browser, as party leaders see it (their BLOCK list) — a different id, so it can't be used to pose as you */
+  get publicId() { return this.id(PUB_KEY); }
 
   /** in someone else's room with your party (a match, a public room) — not in your party's own room */
   away(roomCode: string | undefined | null) { return !!this.home && !!roomCode && roomCode !== this.home.code; }
 
   /** what you send arriving in room `code` (and again when your name changes): `partyCode` is the party you belong to */
   hello(code: string, partyCode: string, extra: Record<string, unknown> = {}) {
-    return { t: 'hello', dev: this.deviceId, party: partyCode, pw: this.pw.get(code) || undefined, ...extra };
+    return { t: 'hello', dev: this.publicId, party: partyCode, pw: this.pw.get(code) || undefined, ...extra };
   }
 
   // ---- blocking (each leader's own list, on this browser)

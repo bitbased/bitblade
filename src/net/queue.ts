@@ -1,6 +1,7 @@
 // QUICK MATCH queue client (server: server/matchmaker.ts, on the relay at /mm). One connection while you're
 // queued — solo from the Online screen, or your whole room from the lobby — and it survives switching screens.
 import { cloudRelayUrl } from './transport';
+import { party } from './party';
 
 export interface QueueStatus { wait: number; queued: number; modes: Record<string, number> }
 export interface QueueMatch { role: 'host' | 'join'; mode: string; code: string; expect: number; host: string; names: string[] }
@@ -30,12 +31,13 @@ class QueueClient {
     if (this.ws) { this.notify(); return; } // (connecting: the ticket goes when it opens)
     const base = cloudRelayUrl().replace(/^http/, 'ws').replace(/\/+$/, '');
     if (!base) { this.ticket = null; this.error = 'No online relay configured'; this.notify(); return; }
-    const ws = new WebSocket(`${base}/mm?name=${encodeURIComponent(t.name)}`);
+    const ws = new WebSocket(`${base}/mm?name=${encodeURIComponent(t.name)}&dev=${encodeURIComponent(party.deviceId)}`);
     this.ws = ws;
     ws.onopen = () => { if (this.ticket) ws.send(JSON.stringify({ t: 'queue', ...this.ticket })); };
     ws.onmessage = (e) => {
       let m: any;
       try { m = JSON.parse(String(e.data)); } catch { return; }
+      if (m?.t === 'error') { this.ticket = null; this.status = null; this.error = String(m.msg ?? 'Quick match is unavailable'); this.close(); this.notify(); return; }
       if (m?.t === 'status') { this.status = m; this.notify(); }
       else if (m?.t === 'match') {
         this.ticket = null; this.status = null;
