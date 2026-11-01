@@ -116,14 +116,14 @@ export class MusicCorner {
         ? h('button.mm-play.nav', { title: 'Browsers wait for a click before playing sound — tap to start the music', onclick: () => { this.app.sfx.ensure(); void this.app.sfx.ctx?.resume().then(() => this.refresh()); this.app.sfx.music(true); this.app.sfx.useMusic('menu'); this.refresh(); } },
             h('b', null, icon('play')), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? 'Radio' : song ? `♪ ${song.name}` : '')))
         : null,
-      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'SURPRISE SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
-      h('button.mm-ic.nav', { title: 'Shuffle: a brand-new surprise song, a preset or one of your own songs (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
+      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'GENERATED SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
+      h('button.mm-ic.nav', { title: 'Shuffle: a freshly generated song, a preset or one of your own songs (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library', 'data-ic': 'check' }, icon('check'))
         : h('button.mm-ic.nav', { title: 'Save this song to your Music Studio library', onclick: () => { saveCustomSongs([{ ...song, custom: true }, ...loadCustomSongs().filter((s) => s.id !== song.id)]); this.app.toast(`♪ ${song.name} saved to your songs`); redo(); }, 'data-ic': 'save' }, icon('save'))) : null,
       h('button.mm-ic.mm-radio.nav' + (on && musicPrefs.radio ? '.on' : ''), {
         'aria-pressed': on && musicPrefs.radio ? 'true' : 'false',
-        title: on && musicPrefs.radio ? 'Radio on: a new song every 45s or so (surprises, presets and your own songs) — click to stay on this one' : 'Radio: keep the songs coming — new surprises, presets and your own songs (each one at least 45s)',
+        title: on && musicPrefs.radio ? 'Radio on: a new song every 45s or so (generated songs, presets and your own songs) — click to stay on this one' : 'Radio: keep the songs coming — newly generated songs, presets and your own songs (each one at least 45s)',
         onclick: () => { musicPrefs.radio = !(on && musicPrefs.radio); saveMusicPrefs(); if (!on) roll(); else { sfx.useMusic('menu'); redo(); } },
         'data-ic': 'radio',
       }, icon('radio')),
@@ -368,7 +368,7 @@ export class SettingsScreen extends Base {
         slider('MUSIC VOLUME', sfx.musicVolume, 0, 1, 0.05, (v) => { sfx.musicVolume = v; sfx.save(); }),
         slider('SPIN SOUND VOLUME', sfx.humVolume, 0, 1.5, 0.05, (v) => { sfx.humVolume = v; sfx.save(); }, undefined, (inp) => { spin.holdOn(inp); inp.addEventListener('navx', spin.burst); }),
         (() => { const se = h<HTMLSelectElement>('select.nav', { onchange: () => { sfx.humStyle = se.value as HumStyle; sfx.save(); } }, ...HUM_STYLES.map((s) => h('option', { value: s.id, selected: sfx.humStyle === s.id }, s.label))); return h('div.field', null, h('label', null, 'SPIN SOUND'), h('div.spin-test-row', null, se, spin.btn)); })(),
-        musicPick('MENU MUSIC', 'menu', [['surprise', '🎲 Surprise — a brand-new song each session'], ['random', '🔀 Random — a new song every couple of loops'], ['off', 'Off']]),
+        musicPick('MENU MUSIC', 'menu', [['surprise', '🎲 Generated song — a brand-new one each session'], ['random', '🔀 Random — a new song every couple of loops'], ['off', 'Off']]),
         musicPick('MATCH MUSIC', 'game', [['track', "Each track / course's own song"], ['random', '🎲 Random — a new song every couple of loops'], ['off', 'Off']]),
         toggle('BLOOM GLOW', () => settings.bloom, (v) => { settings.bloom = v; settings.save(); }),
         toggle('TRAJECTORY PREDICTION', () => settings.trajectories, (v) => { settings.trajectories = v; settings.save(); }),

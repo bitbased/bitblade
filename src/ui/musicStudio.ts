@@ -8,6 +8,7 @@ import {
   type Lane, type ScaleId, type Song,
 } from '../game/music';
 import { setBackdropVisible } from './backdrop';
+import { icon } from './icons';
 import { draftBar, draftsOf, dropDraft, getDraft, lastOpen, putDraft, setLastOpen } from './drafts';
 import './musicStudio.css';
 
@@ -222,8 +223,8 @@ class MusicStudio {
     L.append(
       h('div.ms-actions', null,
         h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.openFresh(s); } }, '+ New'),
-        h('button.btn.small.nav', { onclick: () => this.surprise() }, '🎲 Surprise'),
         h('button.btn.small.nav', { onclick: () => this.openFresh({ ...clone(this.song), id: newSong().id, name: this.song.name + ' copy', custom: true }) }, 'Duplicate'),
+        h('button.btn.small.nav.ms-wide.ms-gen', { onclick: () => this.surprise(), title: 'Generate a brand-new song (press again for another — an untouched one is replaced)' }, icon('dice'), ' Generate Song'),
         h('button.btn.small.nav', { onclick: () => this.exportSong() }, 'Export'),
         h('button.btn.small.nav', { onclick: () => this.importSong() }, 'Import'),
         this.isPreset || this.fresh ? null : h('button.btn.small.nav.ms-danger', { onclick: () => this.deleteSong() }, 'Delete'),

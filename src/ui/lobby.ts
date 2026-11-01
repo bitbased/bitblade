@@ -223,8 +223,8 @@ hostRoom.onMemberLeft = (peer) => {
   if (!lobbyApp || !L.song || L.radioBy !== peer) return;
   const app = lobbyApp;
   roomRadio.mode = 'surprise'; L.radioBy = RADIO_HOST;
-  app.toast('📻 Their radio left with them — surprise radio takes over');
-  armRadio(app, (n) => hostRoomSong(app, n, '📻 Surprise radio', RADIO_HOST));
+  app.toast('📻 Their radio left with them — generated radio takes over');
+  armRadio(app, (n) => hostRoomSong(app, n, '📻 Gen radio', RADIO_HOST));
   if (activeLobby?.el?.isConnected) { activeLobby.dirty = true; activeLobby.renderOnline(); }
 };
 

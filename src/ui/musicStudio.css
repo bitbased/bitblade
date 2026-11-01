@@ -91,3 +91,5 @@
   .ms-rc { height: 22px; }
   .ms-knob input[type=range] { width: 76px; }
 }
+.ms-gen { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.ms-gen svg { width: 16px; height: 16px; flex: none; }

@@ -646,7 +646,7 @@ let surpriseLong = Math.random() < 0.5;
  */
 export function surpriseSong(shape?: 'loop' | 'long'): Song {
   const long = shape ? shape === 'long' : (surpriseLong = !surpriseLong);
-  const s = newSong('Surprise ' + Math.floor(Math.random() * 900 + 100));
+  const s = newSong('Gen ' + Math.floor(Math.random() * 900 + 100));
   const scales = Object.keys(SCALES) as ScaleId[];
   s.scale = scales[Math.floor(Math.random() * scales.length)];
   s.bpm = 90 + Math.floor(Math.random() * 14) * 5;

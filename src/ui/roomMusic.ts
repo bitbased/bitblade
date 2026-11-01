@@ -43,7 +43,7 @@ export function onRoomSong(app: App, radioBy: number | null | undefined, onPick:
   }
   if (roomRadio.mode !== 'off') armRadio(app, onPick);
 }
-export const RADIO_LABEL = { off: 'Radio off', mine: '📻 Radio: my songs', surprise: '📻 Radio: surprise songs' };
+export const RADIO_LABEL = { off: 'Radio off', mine: '📻 Radio: my songs', surprise: '📻 Radio: generated songs' };
 export function radioPick(current?: string | null): Song {
   if (roomRadio.mode === 'surprise') return surpriseSong();
   const mine = loadCustomSongs(), pool = (mine.length ? mine : PRESET_SONGS).filter((s) => s.id !== current);
@@ -85,9 +85,9 @@ export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canS
     o.canSet ? h('button.arrow', { onclick: () => cycle(-1) }, '◀') : null,
     h('div.val', null, h('b', null, s ? `♪ ${s.name}` : 'AUTO'), h('span', null, sub)),
     o.canSet ? h('button.arrow', { onclick: () => cycle(1) }, '▶') : null,
-    o.canSet ? h('button.arrow.rm-dice', { title: 'Surprise the room: a brand-new song, shared with everyone (press again for another)', onclick: (e: Event) => { e.stopPropagation(); o.onSet(surpriseSong()); } }, icon('dice')) : null,
+    o.canSet ? h('button.arrow.rm-dice', { title: 'Generate a brand-new song for the room, shared with everyone (press again for another)', onclick: (e: Event) => { e.stopPropagation(); o.onSet(surpriseSong()); } }, icon('dice')) : null,
     o.canSet ? h('button.arrow.rm-dice.rm-radio' + (roomRadio.mode !== 'off' ? '.on' : ''), {
-      title: 'Room radio — keeps new songs coming for everyone: off → your songs → surprise songs → off',
+      title: 'Room radio — keeps new songs coming for everyone: off → your songs → generated songs → off',
       onclick: (e: Event) => {
         e.stopPropagation();
         roomRadio.mode = roomRadio.mode === 'off' ? 'mine' : roomRadio.mode === 'mine' ? 'surprise' : 'off';
