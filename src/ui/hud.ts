@@ -135,20 +135,20 @@ export class Hud {
     }
     const tl = Math.max(0, s.timeLeft);
     const m = Math.floor(tl / 60), sec = Math.floor(tl % 60);
-    this.timer.textContent = s.phase === 'launch' ? (MODES.find((x) => x.id === this.cfg.mode)!.rounds ? `R${s.round}` : 'READY') : `${m}:${sec.toString().padStart(2, '0')}`;
+    setText(this.timer, s.phase === 'launch' ? (MODES.find((x) => x.id === this.cfg.mode)!.rounds ? `R${s.round}` : 'READY') : `${m}:${sec.toString().padStart(2, '0')}`);
     this.timer.classList.toggle('low', tl < 10 && s.phase === 'battle');
-    this.scoreEls.forEach((el, i) => (el.textContent = this.cfg.mode === 'koth' ? Math.floor(s.teamScores[i] ?? 0).toString() : String(s.teamScores[i] ?? 0)));
-    if (this.cfg.mode === 'gauntlet') this.obj.textContent = `GEMS ${s.teamScores[0] ?? 0} / ${this.cfg.target} · ${Math.ceil(tl)}s`;
-    if (this.cfg.mode === 'quest') { const cps = this.cfg.arena.markers.filter((m) => m.kind === 'checkpoint').length; const gems = this.cfg.arena.markers.filter((m) => m.kind === 'gem').length; this.obj.textContent = `REACH THE GOAL · GEMS ${s.teamScores[0] ?? 0}/${gems}${cps ? ` · ${cps} CHECKPOINTS` : ''}`; }
+    this.scoreEls.forEach((el, i) => setText(el, this.cfg.mode === 'koth' ? Math.floor(s.teamScores[i] ?? 0).toString() : String(s.teamScores[i] ?? 0)));
+    if (this.cfg.mode === 'gauntlet') setText(this.obj, `GEMS ${s.teamScores[0] ?? 0} / ${this.cfg.target} · ${Math.ceil(tl)}s`);
+    if (this.cfg.mode === 'quest') { const cps = this.cfg.arena.markers.filter((m) => m.kind === 'checkpoint').length; const gems = this.cfg.arena.markers.filter((m) => m.kind === 'gem').length; setText(this.obj, `REACH THE GOAL · GEMS ${s.teamScores[0] ?? 0}/${gems}${cps ? ` · ${cps} CHECKPOINTS` : ''}`); }
     if (this.cfg.mode === 'pinball') {
       // pinball: the score up top, the ball and the controls under it
       const p0 = s.tops.find((t) => !t.extra && !t.drone);
-      this.timer.textContent = (s.teamScores[0] | 0).toLocaleString();
+      setText(this.timer, (s.teamScores[0] | 0).toLocaleString());
       this.scoreEls.forEach((el) => (el.style.display = 'none'));
-      this.obj.textContent = `BALL ${Math.min(3, 4 - (p0?.lives ?? 3))}/3${s.pin?.tilted ? ' · TILT!' : ''}`;
+      setText(this.obj, `BALL ${Math.min(3, 4 - (p0?.lives ?? 3))}/3${s.pin?.tilted ? ' · TILT!' : ''}`);
     }
     this.hint.style.display = s.phase === 'launch' ? '' : 'none';
-    if (s.phase === 'launch') this.hint.textContent = s.phaseT < 3 ? (this.cfg.mode === 'pinball' ? 'HOLD ↓ TO PULL THE PLUNGER — LET GO TO FIRE' : 'PRESS DASH WHEN THE RING IS GREEN!') : '';
+    if (s.phase === 'launch') setText(this.hint, s.phaseT < 3 ? (this.cfg.mode === 'pinball' ? 'HOLD ↓ TO PULL THE PLUNGER — LET GO TO FIRE' : 'PRESS DASH WHEN THE RING IS GREEN!') : '');
     if (this.standings) {
       const order = s.tops.map((t, i) => ({ t, i })).sort((a, b) => (a.t.place || 99) - (b.t.place || 99));
       const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${esc(clean(this.cfg.players[i].name))}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
@@ -158,12 +158,12 @@ export class Hud {
       const c = this.cardEls[i];
       if (!c) return;
       c.el.classList.toggle('out', !t.alive);
-      c.spin.style.transform = `scaleX(${Math.max(0, Math.min(1, t.spin))})`;
+      c.spin.style.transform = `scaleX(${Math.max(0, Math.min(1, t.spin)).toFixed(3)})`;
       c.spin.parentElement!.classList.toggle('over', t.spin > 1.005 || t.fx.surge > 0);
-      c.burst.style.transform = `scaleX(${Math.min(1, t.burst)})`;
-      c.sp.style.transform = `scaleX(${t.special})`;
+      c.burst.style.transform = `scaleX(${Math.min(1, t.burst).toFixed(3)})`;
+      c.sp.style.transform = `scaleX(${t.special.toFixed(3)})`;
       c.spBar.classList.toggle('full', t.special >= 1);
-      c.rpm.textContent = t.alive ? `${Math.round(t.spin * 9800)} RPM` : t.out ? t.out.toUpperCase() : '';
+      setText(c.rpm, t.alive ? `${Math.round(t.spin * 9800)} RPM` : t.out ? t.out.toUpperCase() : '');
       const it = t.item ? ITEMS[t.item] : null;
       c.item.classList.toggle('on', !!it);
       c.item.classList.toggle('roll', t.roll > 0);
@@ -235,4 +235,12 @@ export class Hud {
   }
 
   dispose() { this.root.remove(); }
+}
+
+/** per-frame text: touch the page only when it changed (a textContent write always swaps the text node) */
+function setText(el: HTMLElement, txt: string) {
+  if (el.textContent === txt) return;
+  const n = el.firstChild;
+  if (n && n.nodeType === 3 && !n.nextSibling) n.nodeValue = txt; // (same text node, new words: no node churn)
+  else el.textContent = txt;
 }

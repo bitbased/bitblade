@@ -2,7 +2,7 @@ import './style.css';
 import { Input } from './input/input';
 import { Sfx } from './game/audio';
 import { getRenderer } from './game/render';
-import { perf } from './core/settings';
+import { perf, settings } from './core/settings';
 import { enhanceInputs } from './ui/widgets';
 import { h, MenuNav, type App, type Screen, type ScreenName } from './ui/app';
 import { TitleScreen, MainMenu, ModeSelect, Results, SettingsScreen } from './ui/menus';
@@ -120,7 +120,7 @@ clientRoom.onLost = (why, code) => roomLost(app, why, code);
 const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);
 const partyLink = location.search.match(/[?&]party=([A-Za-z0-9]{4,10})/); // (a party invite: /?party=CODE)
 const sharedSong = takeSongFromUrl(); // (a shared song: /#song=…)
-if (import.meta.env.DEV) (window as any).__app = app; // headless checks
+if (import.meta.env.DEV) { (window as any).__app = app; (window as any).__renderer = () => getRenderer(canvas).renderer; } // headless checks
 if (m) app.go('online', { join: location.protocol.startsWith('http') && location.pathname.includes('/join/') ? location.href : decodeURIComponent(m[1]) });
 else if (partyLink) app.go('online', { join: partyLink[1].toUpperCase() });
 else if (sharedSong) { app.go('menu'); void showSharedSong(app, sharedSong); } // (a song link: the song, ready to play / keep)
@@ -129,7 +129,18 @@ else app.go('title');
 addEventListener('hashchange', () => { const s = takeSongFromUrl(); if (s) void showSharedSong(app, s); });
 
 let last = performance.now();
+/** when the next frame is due under the frame cap */
+let due = 0;
 function frame(now: number) {
+  requestAnimationFrame(frame);
+  // FRAME CAP: on a faster display, skip refreshes until the next frame is due (1.5ms early is close enough —
+  // display refreshes don't land exactly on time)
+  const cap = settings.fpsCap;
+  if (cap > 0) {
+    const iv = 1000 / cap;
+    if (now < due - 1.5) return;
+    due = Math.max(due + iv, now - iv); // (a late frame doesn't bunch the next ones up)
+  }
   // real elapsed time drives everything (physics runs in fixed 1/120s steps off this), so game speed is the same
   // at 30, 60 or 144 fps; only a long stall (tab in background, debugger) is treated as a pause instead of a jump
   const raw = (now - last) / 1000;
@@ -142,7 +153,6 @@ function frame(now: number) {
   app.sfx.update(dt);
   MenuNav.endFrame();
   app.input.endFrame();
-  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 

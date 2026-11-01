@@ -293,18 +293,21 @@ export class SettingsScreen extends Base {
    *  a tap / Enter / pad press gives a short burst. Shared by the HOLD TO SPIN button and the spin volume slider. */
   spinner() {
     const sfx = this.app.sfx;
-    let level = 0, held = false, burst = 0, raf = 0, last = 0, started = 0;
+    let level = 0, held = false, burst = 0, raf = 0, last = 0, started = 0, ducked = false;
+    // (the music dips while it spins, so the spin sound is heard over it — and comes back as it winds down)
+    const duck = (on: boolean) => { if (on !== ducked) { ducked = on; sfx.duck(on ? 0.15 : 1); } };
     const btn = h<HTMLButtonElement>('button.btn.small.nav.spin-test', { title: 'Hold to hear the spin sound: it spins up while held, and winds down when you let go' }, 'HOLD TO SPIN');
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
-      if (!btn.isConnected || (!held && burst <= 0 && level <= 0 && sfx.ctx?.state !== 'running' && now - started > 3000)) { sfx.setHum(0); raf = 0; return; }
+      if (!btn.isConnected || (!held && burst <= 0 && level <= 0 && sfx.ctx?.state !== 'running' && now - started > 3000)) { sfx.setHum(0); duck(false); raf = 0; return; }
       burst = Math.max(0, burst - dt);
       if (held || burst > 0) level += (1 - level) * Math.min(1, dt * 2.4); // spin up (~1s to full)
       else level = Math.max(0, level - dt * 1.8); // wind down (~0.5s)
       sfx.setHum(level);
+      duck(held || burst > 0 || level > 0.15);
       btn.style.setProperty('--spin', String(level));
       btn.textContent = held || burst > 0 ? 'SPINNING…' : 'HOLD TO SPIN';
-      if (level > 0 || held || burst > 0 || sfx.ctx?.state !== 'running') raf = requestAnimationFrame(tick); else { raf = 0; sfx.setHum(0); }
+      if (level > 0 || held || burst > 0 || sfx.ctx?.state !== 'running') raf = requestAnimationFrame(tick); else { raf = 0; sfx.setHum(0); duck(false); }
     };
     // (wake the audio first — a sleeping context would swallow the first press — and keep ticking until it's up)
     const go = () => { sfx.ensure(); if (sfx.ctx && sfx.ctx.state !== 'running') void sfx.ctx.resume().catch(() => {}); started = performance.now(); if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } };
@@ -379,6 +382,11 @@ export class SettingsScreen extends Base {
           return h('div.field', { title: 'Rings under the other blades. Everyone: team colours in team games, each blade’s own colour otherwise. My team / Their team: just that side (in a free-for-all, everyone else is their team). Your own blade always has its ring.' }, h('label', null, 'RINGS ON OTHER BLADES'), se);
         })(),
         toggle("HIDE OFFENSIVE WORDS (other players' names)", () => settings.filterWords, (v) => { settings.filterWords = v; settings.save(); }),
+        (() => {
+          const se = h<HTMLSelectElement>('select.nav', { onchange: () => { settings.fpsCap = Number(se.value); settings.save(); } },
+            ...([[30, '30 — battery saver'], [60, '60'], [120, '120'], [0, 'Unlimited (display rate)']] as const).map(([v, t]) => h('option', { value: String(v), selected: settings.fpsCap === v }, t)));
+          return h('div.field', { title: 'The most frames drawn per second. Higher only helps on a 120 / 144 Hz screen, and costs battery, heat and fan noise.' }, h('label', null, 'FRAME RATE LIMIT'), se);
+        })(),
         toggle('AUTO RESOLUTION (keeps FPS up)', () => settings.adaptive, (v) => { settings.adaptive = v; settings.save(); }),
         slider('RESOLUTION SCALE', settings.pixelRatio, 0.5, 2, 0.25, (v) => { settings.pixelRatio = v; settings.save(); const r = getRenderer(this.app.canvas).renderer; r.setPixelRatio(v); r.setSize(innerWidth, innerHeight); }),
         // (the web game always uses its own site's server; only dev and the desktop app can point elsewhere)

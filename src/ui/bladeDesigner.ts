@@ -72,6 +72,7 @@ class BladeDesigner implements Screen {
 
   unmount() {
     this.app.sfx.setHum(0); // (the SPIN sound stops with the screen)
+    if (this.ducked) this.app.sfx.duck(1);
     window.clearTimeout(this.rebuildTimer);
     if (this.saveTimer) { window.clearTimeout(this.saveTimer); this.persist(); }
     for (const c of this.cleanup) c();
@@ -253,6 +254,7 @@ class BladeDesigner implements Screen {
     (this.turntable.children[1] as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>).material.color.set(this.cur.glow);
   }
 
+  private ducked = false;
   update(dt: number) {
     this.time += dt;
     this.nav.update(dt);
@@ -264,6 +266,9 @@ class BladeDesigner implements Screen {
       if (this.spinHeld || this.spinBurst > 0) this.spinLevel += (1 - this.spinLevel) * Math.min(1, dt * 2.4);
       else this.spinLevel = Math.max(0, this.spinLevel - dt * 1.2);
       this.app.sfx.setHum(this.spinLevel);
+      // (the music dips while it spins, so the spin sound is heard over it)
+      const duck = this.spinHeld || this.spinBurst > 0 || this.spinLevel > 0.15;
+      if (duck !== this.ducked) { this.ducked = duck; this.app.sfx.duck(duck ? 0.15 : 1); }
       this.angle += this.cur.spinDir * dt * (0.6 + this.spinLevel * 42);
       this.model.spinner.rotation.y = this.angle;
       const wob = 0.008 + this.spinLevel * 0.025;

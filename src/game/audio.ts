@@ -53,6 +53,9 @@ export class Sfx {
     const unlock = () => { this.ensure(); this.ctx?.resume(); };
     addEventListener('pointerdown', unlock);
     addEventListener('keydown', unlock);
+    // (on a touch screen the press itself doesn't count as a click for the browser's sound rules — letting go does)
+    addEventListener('pointerup', unlock);
+    addEventListener('touchend', unlock);
   }
 
   save() {
@@ -269,6 +272,11 @@ export class Sfx {
   }
 
   music(on: boolean) { this.musicOn = on; }
+  /** music turned down (k < 1) while a sound is being previewed — the spin test was buried under the menu music */
+  duck(k: number) {
+    if (!this.ctx || !this.musicGain) return;
+    this.musicGain.gain.setTargetAtTime(this.musicVolume * k, this.ctx.currentTime, k < 1 ? 0.05 : 0.25);
+  }
   /** is music actually audible right now? (browsers keep audio locked until the first click / key) */
   get musicLive() { return this.musicOn && this.ctx?.state === 'running' && this.musicVolume > 0 && musicPrefs.menu !== 'off'; }
 

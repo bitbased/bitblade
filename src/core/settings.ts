@@ -4,6 +4,9 @@ export const settings = {
   trajectories: true,
   pixelRatio: Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, 1.5),
   adaptive: true, // auto-lower resolution when the frame rate drops
+  /** frames per second at most (0: as fast as the display refreshes). 60 by default: a 120 / 144 Hz screen would
+   *  otherwise draw 2–2.4× as many frames — that much more battery, heat and fan — for little visible gain. */
+  fpsCap: 60,
   playerName: 'Blader',
   /** rings under the other blades (yours always has its own): none, everyone (team colours in team games, each
    *  blade's own colour otherwise), only your team, or only the other side */
@@ -21,8 +24,8 @@ export const settings = {
     } catch { /* ignore */ }
   },
   save() {
-    const { bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords } = this;
-    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords, v: 2 })); } catch { /* ignore */ }
+    const { bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords, fpsCap } = this;
+    try { localStorage.setItem('bitblade.settings', JSON.stringify({ bloom, trajectories, pixelRatio, playerName, adaptive, rings, filterWords, fpsCap, v: 2 })); } catch { /* ignore */ }
   },
 };
 settings.load();
@@ -42,8 +45,10 @@ export const perf = {
     const fps = this.frames / this.acc;
     this.acc = 0;
     this.frames = 0;
-    if (fps < 50 && this.scale > 0.5) { this.scale = Math.max(0.5, this.scale - (fps < 35 ? 0.2 : 0.1)); this.version++; }
-    else if (fps > 58 && this.scale < 1) { this.slow++; if (this.slow > 3) { this.scale = Math.min(1, this.scale + 0.1); this.version++; this.slow = 0; } }
+    // (measured against the frame cap: capped at 30, 30 fps is full speed, not a reason to drop the resolution)
+    const want = settings.fpsCap > 0 ? Math.min(60, settings.fpsCap) : 60;
+    if (fps < want * 0.83 && this.scale > 0.5) { this.scale = Math.max(0.5, this.scale - (fps < want * 0.58 ? 0.2 : 0.1)); this.version++; }
+    else if (fps > want * 0.966 && this.scale < 1) { this.slow++; if (this.slow > 3) { this.scale = Math.min(1, this.scale + 0.1); this.version++; this.slow = 0; } }
     else this.slow = 0;
   },
   ratio() { return Math.max(0.5, settings.pixelRatio * this.scale); },

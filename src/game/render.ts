@@ -2254,7 +2254,10 @@ export class GameView {
   }
 
   perfVersion = -1;
+  private passCheck = -1;
   render() {
+    // (whenever objects come or go: flat see-through effects draw in one pass — see singlePass)
+    if (this.scene.children.length !== this.passCheck) { this.passCheck = this.scene.children.length; singlePass(this.scene); }
     if (this.perfVersion !== perf.version) {
       this.perfVersion = perf.version;
       this.renderer.setPixelRatio(perf.ratio());
@@ -2293,14 +2296,35 @@ export class GameView {
   }
 
   dispose() {
+    // (textures too: labels, decals and canvas textures were left on the GPU after every match. Cached ones that
+    // get used again just upload again; the shared environment map stays.)
+    const env = shared?.env;
+    const freeTex = (mat: THREE.Material) => { for (const v of Object.values(mat)) if ((v as THREE.Texture)?.isTexture && v !== env && !(v as THREE.Texture & { isRenderTargetTexture?: boolean }).isRenderTargetTexture) (v as THREE.Texture).dispose(); };
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
       const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else mat?.dispose();
+      for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) { freeTex(x); x.dispose(); }
     });
     this.composer.dispose();
   }
+}
+
+/**
+ * three.js draws a see-through double-sided material twice (back faces, then front) and marks it changed between the
+ * two, so its shader setup is rebuilt twice per draw, every frame — the biggest single CPU cost in a match. Flat
+ * things (rings, decals, discs, open tubes) look the same in one pass, so they get one.
+ */
+const FLAT = new Set(['RingGeometry', 'PlaneGeometry', 'CircleGeometry', 'ShapeGeometry']);
+function singlePass(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh && !(o as THREE.Line).isLine) return;
+    const g = m.geometry as THREE.BufferGeometry & { parameters?: { openEnded?: boolean } };
+    const flat = FLAT.has(g.type) || (g.type === 'CylinderGeometry' && !!g.parameters?.openEnded) || !(m as THREE.Mesh).isMesh;
+    if (!flat) return;
+    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) if (mat.transparent && mat.side === THREE.DoubleSide) mat.forceSinglePass = true;
+  });
 }
 
 /** Race chase camera: behind the leading followed blade, looking down the track (pure, unit-testable). */
