@@ -82,8 +82,9 @@ export async function joinParty(app: App, input: string, o: { as?: 'member' | 'v
       }
       clientRoom.leave();
       last = r.why;
-      if (FINAL.has(r.why)) return r.why;
+      if (FINAL.has(r.why) || /^Too many/.test(r.why)) return r.why; // (throttled: retrying only makes it longer)
     } catch (e) { last = String((e as Error).message || e); }
+    if (/^Too many/.test(last)) return last;
     if (onlineState.turnedAway(last)) return last; // (online play is paused: no point retrying)
     if (performance.now() >= until) return last;
     await sleep(1200);

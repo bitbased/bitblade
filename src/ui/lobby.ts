@@ -1,5 +1,7 @@
 // Local + online-host lobby: player slots (+ PLAYER: press any device to join · + CPU), blades, teams, arena, rules,
 // invite codes. A player's input only changes on their card's input selector (or when they join).
+import { sanitizeBlade } from '../core/blade';
+import { sanitizeArena } from '../net/sanitize';
 import { safeColor } from '../core/safe';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { glyph } from './nav';
@@ -370,7 +372,7 @@ export class LobbyScreen implements Screen {
     if (!lb) { this.renderOnline(); return; }
     const me = clientRoom.t?.id ?? -1;
     L.mode = (MODES.some((m) => m.id === lb.mode) ? lb.mode : 'duel') as ModeId;
-    this.remoteArena = lb.arenaDef ?? allArenas().find((a) => a.id === lb.arenaId) ?? null;
+    this.remoteArena = lb.arenaDef ? sanitizeArena(lb.arenaDef) : allArenas().find((a) => a.id === lb.arenaId) ?? null;
     L.arenaId = lb.arenaId;
     L.sizeFilter = ((Object.entries(SIZE_LABEL) as [ArenaSize, string][]).find(([, v]) => v === lb.sizeFilter)?.[0] ?? 'ALL') as typeof L.sizeFilter;
     L.items = !!lb.items; L.target = lb.target ?? L.target; L.time = lb.time ?? L.time;
@@ -379,7 +381,8 @@ export class LobbyScreen implements Screen {
     if (lb.rubber !== undefined) L.rubber = lb.rubber;
     if (lb.teamSplit) L.teamSplit = lb.teamSplit;
     L.random = !!lb.random;
-    L.slots = (lb.slots as { name: string; ctrl: string; blade?: BladeDesign; team: number; lock?: boolean; auto?: boolean }[]).map((s) => {
+    L.slots = ((Array.isArray(lb.slots) ? lb.slots.slice(0, 16) : []) as { name: string; ctrl: string; blade?: BladeDesign; team: number; lock?: boolean; auto?: boolean }[]).map((s0) => {
+      const s = { ...s0, name: String(s0?.name ?? '').slice(0, 24), ctrl: String(s0?.ctrl ?? ''), blade: sanitizeBlade(s0?.blade) ?? undefined, team: Number(s0?.team) || 0 };
       const peer = s.ctrl.startsWith('online:') ? Number(s.ctrl.slice(7)) : -1;
       const ctrl: ControllerSpec = s.ctrl.startsWith('CPU') ? { type: 'cpu', level: 2 } : { type: 'remote', peer };
       return { name: s.name, ctrl, bladeId: s.blade?.id ?? PRESETS[0].id, blade: s.blade, team: s.team, teamLock: !!s.lock, auto: !!s.auto, label: s.ctrl, mine: peer === me && me >= 0 };

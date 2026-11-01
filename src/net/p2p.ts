@@ -14,6 +14,8 @@ export const STUN: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 's
 const FAST = new Set(['in', 'snap']);
 /** how long a link may take to open before it's given up on (the relay carries on) */
 export const LINK_TIMEOUT = 10_000;
+/** the biggest message taken over a direct link (the relay's limit too: worker/src/index.ts MAX_MSG) */
+const MAX_LINK_MSG = 512 * 1024;
 
 export class PeerLink {
   private pc: RTCPeerConnection;
@@ -46,7 +48,8 @@ export class PeerLink {
     if (ch.label === 'rel') this.rel = ch; else if (ch.label === 'fast') this.fast = ch; else return;
     ch.onopen = () => { if (this.open) { if (this.timer) clearTimeout(this.timer); this.timer = null; this.onChange(); } };
     ch.onclose = () => { if (!this.closed) this.fail(); };
-    ch.onmessage = (e) => { let m: unknown; try { m = JSON.parse(String(e.data)); } catch { return; } this.onMsg(m); };
+    // (the same size cap as the relay: a direct link doesn't get to send what the server wouldn't pass on)
+    ch.onmessage = (e) => { if (typeof e.data !== 'string' || e.data.length > MAX_LINK_MSG) return; let m: unknown; try { m = JSON.parse(e.data); } catch { return; } this.onMsg(m); };
   }
 
   /** wait for the address search to finish (or 2.5s), so one message carries the whole offer / answer */

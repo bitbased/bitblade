@@ -5,6 +5,7 @@
 // The door: someone connecting is only "pending" until their hello passes — not blocked, and the right password
 // (a matched quick-match room lets its players in without one). Pending peers get nothing from the room, and are
 // dropped if they never say hello.
+import { sanitizeBlade } from '../core/blade';
 import type { BladeDesign } from '../core/blade';
 import type { ClientTransport, HostTransport, RoomListing } from './transport';
 import { party } from './party';
@@ -90,7 +91,7 @@ class HostRoom {
     {
       if (m.t === 'hello' || m.t === 'blade') {
         if (m.name) mem.name = String(m.name).slice(0, 16);
-        if (m.blade) mem.blade = m.blade as BladeDesign;
+        if (m.blade) mem.blade = sanitizeBlade(m.blade) ?? mem.blade;
         this.notify();
       } else if (m.t === 'home' && typeof m.party === 'string') {
         // a visiting party's leader is taking them home: tell the rest of their party
@@ -128,7 +129,7 @@ class HostRoom {
     clearTimeout(this.pending.get(peer)!);
     this.pending.delete(peer);
     this.members.set(peer, {
-      peer, name: String(m.name ?? '').slice(0, 16) || `Guest ${peer}`, blade: (m.blade as BladeDesign) ?? null, dev,
+      peer, name: String(m.name ?? '').slice(0, 16) || `Guest ${peer}`, blade: sanitizeBlade(m.blade), dev,
       party: typeof m.party === 'string' && /^[A-Z0-9]{4,10}$/.test(m.party) ? m.party : undefined,
     });
     this.t?.send(peer, { t: 'admitted' });

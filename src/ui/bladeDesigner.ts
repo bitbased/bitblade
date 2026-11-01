@@ -8,7 +8,7 @@ import { autoTune, effectiveTune, pointsUsed, STAT_INFO, STAT_KEYS, TUNE_BUDGET,
 import { getRenderer } from '../game/render';
 import { buildBladeModel, type BladeModel } from '../core/bladeMesh';
 import {
-  computeStats, defaultDesign, EMBLEMS, loadCustomBlades, newBladeId, PATTERNS, PRESETS, randomDesign, randomizeDesign, saveCustomBlades, TIPS,
+  computeStats, defaultDesign, EMBLEMS, sanitizeBlade, loadCustomBlades, newBladeId, PATTERNS, PRESETS, randomDesign, randomizeDesign, saveCustomBlades, TIPS,
   type BladeDesign, type Decal, type TipType,
 } from '../core/blade';
 
@@ -680,8 +680,9 @@ class BladeDesigner implements Screen {
     const raw = prompt('Paste blade JSON:');
     if (!raw) return;
     try {
-      const obj = JSON.parse(raw) as Partial<BladeDesign>;
-      const d: BladeDesign = { ...defaultDesign(), ...obj, id: newBladeId(), decals: Array.isArray(obj.decals) ? obj.decals : [] };
+      const d = sanitizeBlade(JSON.parse(raw));
+      if (!d) throw new Error('not a blade');
+      d.id = newBladeId();
       this.addCustom(d);
       this.app.toast(`Imported ${d.name}`);
     } catch {

@@ -34,6 +34,13 @@ class_name = "Admin"
 # it they're kept in the Admin Durable Object, which is fine. To use it: `bun x wrangler kv namespace create ADMIN_KV`
 # and put the id in worker/deploy.env as ADMIN_KV_ID.
 
+# Join / host attempts per IP (Cloudflare's rate limiter — no extra cost): 60 a minute. Code guessing and password
+# guessing both mean connecting again and again; real play (even a party's auto-rejoin retries) stays well under.
+[[ratelimits]]
+name = "JOIN_LIMIT"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]

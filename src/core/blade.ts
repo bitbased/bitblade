@@ -198,8 +198,8 @@ export function loadCustomBlades(): BladeDesign[] {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return [];
-    const arr = JSON.parse(raw) as BladeDesign[];
-    return arr.map((b) => ({ ...defaultDesign(), ...b }));
+    const arr = JSON.parse(raw) as unknown[];
+    return (Array.isArray(arr) ? arr : []).map((b) => sanitizeBlade(b)).filter((b): b is BladeDesign => !!b);
   } catch {
     return [];
   }
@@ -339,4 +339,56 @@ export function randomizeDesign(base: BladeDesign, part: RandomPart = 'all', sty
   }
   if (!keepName || part === 'all') d.name = `${NAME_A[Math.floor(r() * NAME_A.length)]} ${NAME_B[Math.floor(r() * NAME_B.length)]}`;
   return d;
+}
+
+// ---------------------------------------------------------------- blades from other players
+const clampNum = (v: unknown, lo: number, hi: number, dflt: number, int = false) => {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return dflt;
+  const c = Math.max(lo, Math.min(hi, x));
+  return int ? Math.round(c) : c;
+};
+const COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const color = (v: unknown, dflt: string) => (typeof v === 'string' && COLOR_RE.test(v) ? v : dflt);
+const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
+/** most decals a blade can carry (the designer had no limit; each one is drawn into the blade's texture) */
+export const MAX_DECALS = 32;
+
+/**
+ * A blade design from somewhere we don't control (another player, an old save, an import) brought back within what
+ * the Blade Forge can make: every slider inside its range, only real tips / patterns / emblems, real colours, a
+ * bounded number of decals, and a stat tune that's legal (else the blade follows its shape). A patched client could
+ * otherwise send 10⁹ wings (freezes every browser in the party), an unknown tip (breaks the match start) or a huge
+ * hitbox. null if it isn't a blade at all.
+ */
+export function sanitizeBlade(raw: unknown): BladeDesign | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, any>;
+  const d = defaultDesign();
+  const n = (k: keyof BladeDesign, lo: number, hi: number, int = false) => clampNum(r[k], lo, hi, d[k] as number, int);
+  const out: BladeDesign = {
+    id: text(r.id, 48).replace(/[^\w-]/g, '') || d.id,
+    name: text(r.name, 24) || d.name,
+    spinDir: r.spinDir === -1 ? -1 : 1,
+    wings: n('wings', 1, 8, true), wingLength: n('wingLength', 0, 1), wingWidth: n('wingWidth', 0, 1), wingCurve: n('wingCurve', -1, 1),
+    wingSharp: n('wingSharp', 0, 1), wingTilt: n('wingTilt', -1, 1), ringRadius: n('ringRadius', 0, 1), ringThickness: n('ringThickness', 0, 1),
+    discSize: n('discSize', 0, 1), discWeight: n('discWeight', 0, 1), discNotches: n('discNotches', 0, 8, true),
+    tip: Object.prototype.hasOwnProperty.call(TIPS, r.tip) ? r.tip : d.tip, tipHeight: n('tipHeight', 0, 1),
+    primary: color(r.primary, d.primary), secondary: color(r.secondary, d.secondary), accent: color(r.accent, d.accent), glow: color(r.glow, d.glow),
+    metal: n('metal', 0, 1), rough: n('rough', 0, 1),
+    pattern: PATTERNS.includes(r.pattern) ? r.pattern : d.pattern,
+    emblem: EMBLEMS.includes(r.emblem) ? r.emblem : '',
+    emblemColor: color(r.emblemColor, d.emblemColor),
+    decals: (Array.isArray(r.decals) ? r.decals : []).slice(0, MAX_DECALS).filter((x: unknown) => x && typeof x === 'object').map((x: any) => ({
+      glyph: text(x.glyph, 12), x: clampNum(x.x, -1, 1, 0), y: clampNum(x.y, -1, 1, 0), size: clampNum(x.size, 0.05, 1, 0.25),
+      rot: clampNum(x.rot, -100, 100, 0), color: color(x.color, d.accent),
+    })),
+  };
+  // (a manual tune only counts if it's whole points within the limits and the budget; otherwise: auto, from the shape)
+  const t = r.tune;
+  if (t && typeof t === 'object' && STAT_KEYS.every((k) => Number.isInteger(t[k]) && t[k] >= TUNE_MIN && t[k] <= TUNE_MAX)) {
+    const tune = Object.fromEntries(STAT_KEYS.map((k) => [k, t[k] as number])) as Tune;
+    if (pointsUsed(tune) <= TUNE_BUDGET) out.tune = tune;
+  }
+  return out;
 }

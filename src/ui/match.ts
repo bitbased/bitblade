@@ -1,4 +1,5 @@
 // Match screen: runs the sim (local / host) or mirrors snapshots (client), renders, HUD, pause.
+import { sanitizeMatchConfig } from '../net/sanitize';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { allSongs } from '../game/music';
 import { Hud } from './hud';
@@ -56,6 +57,11 @@ export class MatchScreen implements Screen {
   mount(app: App, arg: unknown) {
     this.app = app;
     this.arg = arg as MatchArg;
+    // (a member's match: the leader's config, checked — sizes, blades, arena, song: see net/sanitize.ts)
+    if (this.arg.client) {
+      this.arg.cfg = sanitizeMatchConfig(this.arg.cfg);
+      this.arg.client.mine = (Array.isArray(this.arg.client.mine) ? this.arg.client.mine : []).filter((i) => Number.isInteger(i) && i >= 0 && i < this.arg.cfg.players.length);
+    }
     const cfg = this.arg.cfg;
     setBackdropVisible(false);
     document.body.classList.add('ingame');

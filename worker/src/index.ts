@@ -19,7 +19,15 @@ export interface Env {
   ADMIN_KV?: KVNamespace;
   /** the admin page password (wrangler secret put ADMIN_TOKEN; .dev.vars locally) — unset: admin is off */
   ADMIN_TOKEN?: string;
+  /** Cloudflare's rate limiter (wrangler.toml [[ratelimits]]): join / host attempts per IP. Unset: no limit */
+  JOIN_LIMIT?: { limit(o: { key: string }): Promise<{ success: boolean }> };
 }
+
+/** the biggest message the relay passes on: the largest real one (a match start with a custom course, 8 blades and
+ *  a song) is well under half of this */
+const MAX_MSG = 512 * 1024;
+/** wrong party passwords from one address before that party stops letting it try, and for how long */
+const PW_TRIES = 5, PW_WINDOW = 10 * 60_000;
 
 interface Ctx { waitUntil(p: Promise<unknown>): void }
 
@@ -59,11 +67,37 @@ const dir = (env: Env) => env.DIR.get(env.DIR.idFromName("global"));
 function linkCard(res: Response, url: URL): Response {
   if (!(res.headers.get("Content-Type") ?? "").includes("text/html")) return res;
   const abs = { element(el: HTMLRewriterElement) { const c = el.getAttribute("content"); if (c) el.setAttribute("content", new URL(c, url.origin).href); } };
-  return new HTMLRewriter()
+  const out = new HTMLRewriter()
     .on('meta[property="og:image"]', abs)
     .on('meta[name="twitter:image"]', abs)
     .on('meta[property="og:url"]', abs)
     .transform(res);
+  const page = new Response(out.body, out);
+  page.headers.set("Content-Security-Policy", gameCsp(url));
+  return page;
+}
+
+/**
+ * The game page's Content-Security-Policy: only the game's own scripts run (plus the music engine's audio processor,
+ * which it makes itself — blob:), and it only talks to its own server. So even if some text a player sent ever slipped
+ * into the page as markup, it couldn't load or run anything, or send data anywhere. (/admin has its own page.)
+ */
+function gameCsp(url: URL) {
+  const ws = (url.protocol === "https:" ? "wss://" : "ws://") + url.host;
+  return [
+    "default-src 'self'",
+    "script-src 'self' blob:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    `connect-src 'self' ${ws}`,
+    "media-src 'self' data: blob:",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join("; ");
 }
 
 export default {
@@ -83,6 +117,10 @@ export default {
     // has to be served from the root — at /join/<CODE> its scripts resolved to /join/assets/… and the page was blank)
     const join = url.pathname.match(/^\/join\/([A-Za-z0-9]{4,10})\/?$/);
     if (join) return Response.redirect(`${url.origin}/?join=${join[1].toUpperCase()}`, 302);
+    // (one address can only try so many parties a minute: code guessing and password guessing both mean connecting
+    //  again and again. Generous for real play — a party's auto-rejoin retries stay well under it.)
+    if ((url.pathname === "/mm" || url.pathname.startsWith("/room/")) && env.JOIN_LIMIT && !(await env.JOIN_LIMIT.limit({ key: ip })).success)
+      return refuse("Too many tries — wait a minute and try again");
     if (url.pathname === "/mm") {
       if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
       const why = await turnAway("queue");
@@ -232,6 +270,8 @@ export class Room {
     } else {
       const host = this.host();
       if (!host) return this.reject(ws, clientSide, "no host");
+      const fails = await this.state.storage.get<{ n: number; since: number }>(`pw:${ip}`);
+      if (fails && Date.now() - fails.since < PW_WINDOW && fails.n >= PW_TRIES) return this.reject(ws, clientSide, "Too many wrong passwords — try again in a few minutes");
       const id = ((await this.state.storage.get<number>("nextId")) ?? 1);
       await this.state.storage.put("nextId", id + 1);
       const peer: Peer = { id, role, name, code, ip, dev, since: Date.now() };
@@ -248,6 +288,11 @@ export class Room {
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
     const peer = ws.deserializeAttachment() as Peer;
     const size = typeof raw === "string" ? raw.length : raw.byteLength;
+    if (size > MAX_MSG) {
+      this.send(ws, { t: "error", msg: "Message too big — disconnected" });
+      try { ws.close(1009, "too big"); } catch {}
+      return;
+    }
     // usage: totals, busy time (gaps under 10s count as busy), and per-connection counts with a flood cut-off
     const now = Date.now(), u = this.usage;
     u.msgs++; u.bytes += size;
@@ -276,6 +321,7 @@ export class Room {
       return;
     }
     if (msg?.t === "to") {
+      if (msg.m?.t === "denied" && msg.m.why === "wrong password") await this.passwordFailed(Number(msg.to));
       const data = JSON.stringify(msg.m);
       const targets = msg.to === "all" ? this.state.getWebSockets("client") : [this.client(Number(msg.to))];
       for (const c of targets) if (c) try { c.send(data); } catch {}
@@ -293,6 +339,15 @@ export class Room {
 
   async webSocketClose(ws: WebSocket) {
     await this.onGone(ws);
+  }
+
+  /** a wrong password from this connection's address (after PW_TRIES in PW_WINDOW, this party refuses it for a while) */
+  private async passwordFailed(id: number) {
+    const ip = (this.client(id)?.deserializeAttachment() as Peer | null)?.ip;
+    if (!ip) return;
+    const k = `pw:${ip}`, now = Date.now();
+    const f = await this.state.storage.get<{ n: number; since: number }>(k);
+    await this.state.storage.put(k, f && now - f.since < PW_WINDOW ? { n: f.n + 1, since: f.since } : { n: 1, since: now });
   }
 
   /** the heartbeat: still open → tell the admin page, and again in a while (wakes a hibernating room only briefly) */
