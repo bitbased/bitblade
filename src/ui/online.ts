@@ -14,7 +14,8 @@ import { MODES, PICK_MODES, type ModeId } from '../game/types';
 import { icon } from './icons';
 import { MODE_ICON } from './menus';
 import { DENIED_TEXT, goOnline, joinParty } from './partyFlow';
-import { leadsParty, partyTravel } from './lobby';
+import { leadsParty, offlineBanner, partyTravel } from './lobby';
+import { onlineState } from '../net/onlineStatus';
 
 export type { RoomOpts } from '../net/party';
 
@@ -23,6 +24,9 @@ export class OnlineScreen implements Screen {
   el!: HTMLElement;
   nav!: MenuNav;
   statusEl!: HTMLElement;
+  offEl!: HTMLElement;
+  joinBtn: HTMLButtonElement | null = null;
+  partyBtn: HTMLButtonElement | null = null;
   myEl!: HTMLElement;
   codeIn!: HTMLInputElement;
   pwIn!: HTMLInputElement;
@@ -39,6 +43,9 @@ export class OnlineScreen implements Screen {
     if (a.resume && clientRoom.t) { queueMicrotask(() => this.app.go('lobby', { guest: true })); this.el = h('div'); this.nav = new MenuNav(app, this.el); return; }
     this.el = this.build(a.join ?? a.party ?? '');
     app.root.append(this.el);
+    onlineState.listeners.add(this.onStatus);
+    this.onStatus();
+    void onlineState.refresh();
     this.nav = new MenuNav(app, this.el, () => this.back());
     this.nav.focus(1);
     if (a.match) this.waitFor(a.match, 25, 'MATCH FOUND — joining', 'visit');
@@ -56,6 +63,7 @@ export class OnlineScreen implements Screen {
     this.pwIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.join(); });
     this.pwRow = h('div.field', null, h('label', null, 'PASSWORD'), this.pwIn);
     this.statusEl = h('div.online-status');
+    this.offEl = h('div');
     this.myEl = h('div.room-list');
     this.renderMyRooms();
     const leading = leadsParty();
@@ -63,14 +71,15 @@ export class OnlineScreen implements Screen {
     return h('div.screen', null,
       h('div.screen-head', null, h('button.btn.small.nav', { onclick: () => this.back() }, hostRoom.t ? '◀ Your Party' : '◀ Back'), h('div.screen-title', null, 'ONLINE'),
         h('div.screen-sub', null, leading ? 'Joining a party takes your whole party there — you come home together' : "Join a friend's party by code or invite link · your kept parties"),
-        h('div.spacer'), hostRoom.t ? null : h('button.btn.primary.nav', { onclick: () => goOnline(this.app) }, icon('users'), ' MY PARTY')),
+        h('div.spacer'), hostRoom.t ? null : (this.partyBtn = h<HTMLButtonElement>('button.btn.primary.nav', { onclick: () => goOnline(this.app) }, icon('users'), ' MY PARTY'))),
+      this.offEl,
       h('div.online-grid', null,
         col('min(420px, 100%)',
           h('h3', null, 'JOIN A PARTY'),
           h('div.field', null, h('label', null, 'YOUR NAME'), name),
           h('div.field', null, h('label', null, 'PARTY CODE OR INVITE LINK'), this.codeIn),
           this.pwRow,
-          h('button.btn.primary.nav', { onclick: () => this.join() }, leading ? 'TAKE MY PARTY ▶' : 'JOIN ▶'),
+          this.joinBtn = h<HTMLButtonElement>('button.btn.primary.nav', { onclick: () => this.join() }, leading ? 'TAKE MY PARTY ▶' : 'JOIN ▶'),
           clientRoom.lastJoin ? h('button.btn.small.nav', { onclick: () => { this.codeIn.value = clientRoom.lastJoin!; this.join(); }, title: clientRoom.lastJoin }, `↻ Last party (${clientRoom.lastJoin.split('/').pop()!.toUpperCase()})`) : null,
           this.statusEl),
         col('min(420px, 100%)',
@@ -96,6 +105,7 @@ export class OnlineScreen implements Screen {
   /** JOIN: your party goes there together (if you lead one with friends in it), or it becomes your party */
   async join(input = this.codeIn.value) {
     if (this.busy) return;
+    if (!onlineState.ok) { this.status(onlineState.message, 'var(--gold)'); return; }
     if (!input.trim()) { this.app.toast('Enter a party code or link'); return; }
     let code: string;
     try { code = parseJoinInput(input).code; } catch (e) { this.status(String((e as Error).message || e), 'var(--red)'); return; }
@@ -202,7 +212,16 @@ export class OnlineScreen implements Screen {
     if (this.wait && Math.floor(performance.now() / 1000) !== Math.floor((performance.now() - dt * 1000) / 1000)) this.renderWait();
   }
 
+  /** online play paused / back: the banner, and JOIN */
+  onStatus = () => {
+    if (!this.offEl) return;
+    this.offEl.replaceChildren(...(onlineState.ok ? [] : [offlineBanner()]));
+    if (this.joinBtn) this.joinBtn.disabled = !onlineState.ok;
+    if (this.partyBtn) this.partyBtn.disabled = !onlineState.ok;
+  };
+
   unmount() {
+    onlineState.listeners.delete(this.onStatus);
     this.wait = null;
     this.el.remove();
   }

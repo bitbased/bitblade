@@ -804,3 +804,18 @@ body.hints-on .music-chip { bottom: 56px; }
 /* main menu: ONLINE while online play is unavailable (paused, or banned — they look the same) */
 .menu-item.unavail { opacity: 0.55; }
 .menu-item.unavail small { color: var(--gold); }
+
+/* online play unavailable (paused by the admin, or banned — they read the same) */
+.menu-item .unavail-tag { display: none; vertical-align: middle; margin-left: 14px; font-family: var(--font-b); font-size: 13px; font-weight: 700; letter-spacing: 0.14em; color: #1a1200; background: var(--gold); padding: 3px 8px; position: relative; top: -0.35em; }
+.menu-item.unavail { color: rgba(232, 240, 255, 0.32); }
+.menu-item.unavail .unavail-tag { display: inline-block; }
+.menu-item.unavail small { opacity: 1; color: var(--gold); border-left-color: var(--gold); }
+.online-off { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--gold); background: rgba(255, 210, 58, 0.08); }
+.online-off b { font-family: var(--font-h); letter-spacing: 0.12em; color: var(--gold); font-size: 13px; }
+.online-off span { color: var(--text); font-size: 14px; }
+.screen > .online-off, .screen > div > .online-off { margin: 0 0 12px; }
+.notice-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(2, 3, 8, 0.65); padding: 16px; }
+.notice { width: min(440px, 100%); padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; border-color: var(--gold) !important; }
+.notice h2 { margin: 0; font-family: var(--font-h); letter-spacing: 0.12em; color: var(--gold); font-size: 20px; }
+.notice p { margin: 0; font-size: 16px; line-height: 1.4; }
+.notice .btn { align-self: flex-end; min-width: 110px; }

@@ -23,6 +23,7 @@ import { queue } from '../net/queue';
 import { party, setHomePartyCode, type RoomOpts } from '../net/party';
 import { joinParty, leaveLabel, leaveRoom, savePartyPrefs } from './partyFlow';
 import { clean } from '../core/textFilter';
+import { onlineState } from '../net/onlineStatus';
 import { MATCH_ARRIVE, MATCH_COUNTDOWN, pendingMatch, travel } from './quickMatch';
 import type { QueueMatch } from '../net/queue';
 import type { Song } from '../game/music';
@@ -227,6 +228,12 @@ hostRoom.onMemberLeft = (peer) => {
   if (activeLobby?.el?.isConnected) { activeLobby.dirty = true; activeLobby.renderOnline(); }
 };
 
+/** ONLINE IS UNAVAILABLE, and why — wherever online play would start */
+export function offlineBanner() {
+  const why = onlineState.message.replace(/^Online play is temporarily unavailable( — )?/, '');
+  return h('div.online-off', null, h('b', null, 'ONLINE IS UNAVAILABLE'), h('span', null, why || 'Online play is paused for now — try again later.'));
+}
+
 export class LobbyScreen implements Screen {
   app!: App;
   el!: HTMLElement;
@@ -321,6 +328,8 @@ export class LobbyScreen implements Screen {
     addEventListener('pointerdown', this.onTap, true);
     this.unsub = hostRoom.subscribe(() => this.syncMembers());
     queue.listeners.add(this.onQueue);
+    onlineState.listeners.add(this.onStatus);
+    void onlineState.refresh();
     travel.room = (code) => this.travelTo(code);
     hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
     hostRoom.inMatch = false;
@@ -1082,13 +1091,14 @@ export class LobbyScreen implements Screen {
     el.innerHTML = '';
     if (hostRoom.t) { if (hostRoom.matchOpen) this.renderMatchBox(el); else this.renderPartyBox(el); return; }
     const p = getPlatform();
+    const off = !onlineState.ok && !(p && !cloudRelayUrl()); // (a desktop LAN party doesn't need the online service)
     el.append(
-      h('div.hint', null, 'PLAY ONLINE — WITH FRIENDS OR A QUICK MATCH'),
+      off ? offlineBanner() : h('div.hint', null, 'PLAY ONLINE — WITH FRIENDS OR A QUICK MATCH'),
       h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-        h('button.btn.small.primary.nav', { onclick: () => this.openRoom(p && !cloudRelayUrl() ? 'lan' : 'cloud'), title: 'Open your party online: friends join with its code, and you can quick match' }, icon('users'), ' GO ONLINE'),
+        h('button.btn.small.primary.nav', { disabled: off, onclick: () => this.openRoom(p && !cloudRelayUrl() ? 'lan' : 'cloud'), title: off ? onlineState.message : 'Open your party online: friends join with its code, and you can quick match' }, icon('users'), ' GO ONLINE'),
         p ? h('button.btn.small.nav', { onclick: () => this.openRoom('lan'), title: 'Direct connection on your network' }, 'LAN') : null,
-        p ? h('button.btn.small.nav', { onclick: () => this.openRoom('tunnel') }, 'Public Link') : null,
-        h('button.btn.small.nav', { onclick: () => this.app.go('online'), title: 'Join a friend\'s party, a public party, or one of your kept parties' }, 'FIND A PARTY')),
+        p ? h('button.btn.small.nav', { disabled: off, onclick: () => this.openRoom('tunnel') }, 'Public Link') : null,
+        h('button.btn.small.nav', { disabled: off, onclick: () => this.app.go('online'), title: off ? onlineState.message : 'Join a friend\'s party by code or link, or open one of your kept parties' }, 'JOIN A PARTY')),
     );
   }
 
@@ -1241,6 +1251,7 @@ export class LobbyScreen implements Screen {
     } catch (e) {
       const msg = String((e as Error).message || e);
       if (this.takeover && o.code) { this.takeover = false; this.app.go('online', { rejoin: o.code, wait: 30 }); return; } // (someone else took the party over first: join them)
+      if (onlineState.turnedAway(msg)) { this.renderOnline(); return; } // (paused: the box says so — and so does everything else)
       this.app.toast(msg === 'room already hosted' ? `${o.code ?? 'This party'} is already open (another tab or device?) — join it from FIND A PARTY instead` : msg);
     }
     this.renderOnline();
@@ -1362,6 +1373,7 @@ export class LobbyScreen implements Screen {
 
   /** FIND PLAYERS (queue this room for its mode) — or, while searching, how long and CANCEL */
   findBtn() {
+    if (!onlineState.queueOk) return h('button.btn.small.nav', { disabled: true, title: onlineState.message }, icon('bolt'), ' QUICK MATCH UNAVAILABLE');
     const pm = pendingMatch.cur;
     if (pm && hostRoom.t) return h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${pm.expect})`);
     if (queue.active) {
@@ -1488,8 +1500,12 @@ export class LobbyScreen implements Screen {
     if (now >= at) { pendingMatch.cur = null; this.start(); }
   }
 
+  /** online play paused / back: the box (GO ONLINE, QUICK MATCH) shows it */
+  onStatus = () => { this.renderOnline(); };
+
   unmount() {
     queue.listeners.delete(this.onQueue);
+    onlineState.listeners.delete(this.onStatus);
     travel.room = null;
     if (this.guest) {
       // (your own lobby comes back as you left it)

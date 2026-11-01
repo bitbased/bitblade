@@ -1,11 +1,13 @@
 // BitBlade service worker: network-first for navigation, cache-first for built assets (offline play).
-const CACHE = 'bitblade-v1';
+const CACHE = 'bitblade-v2'; // (v2: v1 also cached live answers like /api/status — a new name clears it)
 self.addEventListener('install', (e) => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icon-192.png']))); });
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.pathname.startsWith('/room/') || url.origin !== location.origin) return;
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
+  // live answers are never cached: online status, rooms, the queue, invites, the admin page and its data
+  if (/^\/(api|admin|room|mm|join|health)(\/|$)/.test(url.pathname)) return;
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then((r) => { const cp = r.clone(); caches.open(CACHE).then((c) => c.put('./index.html', cp)); return r; }).catch(() => caches.match('./index.html')));
     return;

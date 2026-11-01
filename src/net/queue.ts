@@ -2,6 +2,7 @@
 // queued — solo from the Online screen, or your whole room from the lobby — and it survives switching screens.
 import { cloudRelayUrl } from './transport';
 import { party } from './party';
+import { onlineState } from './onlineStatus';
 
 export interface QueueStatus { wait: number; queued: number; modes: Record<string, number> }
 export interface QueueMatch { role: 'host' | 'join'; mode: string; code: string; expect: number; host: string; names: string[] }
@@ -37,7 +38,7 @@ class QueueClient {
     ws.onmessage = (e) => {
       let m: any;
       try { m = JSON.parse(String(e.data)); } catch { return; }
-      if (m?.t === 'error') { this.ticket = null; this.status = null; this.error = String(m.msg ?? 'Quick match is unavailable'); this.close(); this.notify(); return; }
+      if (m?.t === 'error') { this.ticket = null; this.status = null; this.error = String(m.msg ?? 'Quick match is unavailable'); onlineState.turnedAway(this.error); this.close(); this.notify(); return; }
       if (m?.t === 'status') { this.status = m; this.notify(); }
       else if (m?.t === 'match') {
         this.ticket = null; this.status = null;

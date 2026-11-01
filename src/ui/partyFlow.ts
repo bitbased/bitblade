@@ -9,6 +9,7 @@ import { parseJoinInput } from '../net/relay';
 import { clientRoom, hostRoom } from '../net/room';
 import { homePartyCode, party, type PartyHome, type RoomOpts } from '../net/party';
 import { findMyRoom } from '../net/myRooms';
+import { onlineState } from '../net/onlineStatus';
 
 const PREF_KEY = 'bitblade.roomPrefs';
 export type PartyPrefs = { name: string; open: boolean };
@@ -81,6 +82,7 @@ export async function joinParty(app: App, input: string, o: { as?: 'member' | 'v
       last = r.why;
       if (FINAL.has(r.why)) return r.why;
     } catch (e) { last = String((e as Error).message || e); }
+    if (onlineState.turnedAway(last)) return last; // (online play is paused: no point retrying)
     if (performance.now() >= until) return last;
     await sleep(1200);
   }

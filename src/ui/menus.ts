@@ -4,8 +4,9 @@ import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
 import { PICK_MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
-import { cloudRelayUrl, onlineStatus } from '../net/transport';
-import { party } from '../net/party';
+import { cloudRelayUrl } from '../net/transport';
+import { onlineState } from '../net/onlineStatus';
+import { notice } from './notice';
 import { clean } from '../core/textFilter';
 import { FINISH_LABEL, fmtTime } from '../game/sim';
 import type { MatchSummary } from './match';
@@ -136,25 +137,29 @@ export class MusicCorner {
 export class MainMenu extends Base {
   /** ONLINE, and why it's unavailable right now (paused by the admin — or banned, which reads just the same) */
   onlineItem: HTMLElement | null = null;
-  offline = '';
+  /** ONLINE says so plainly when online play is unavailable: a tag on the item, the reason under it */
+  showOnline = () => {
+    const it = this.onlineItem;
+    if (!it) return;
+    const off = !onlineState.ok;
+    it.classList.toggle('unavail', off);
+    const sub = it.querySelector('small');
+    if (sub) sub.textContent = off ? onlineState.message : 'Your party: play with friends, quick match, or join a party';
+  };
   build() {
-    void onlineStatus(party.deviceId).then((st) => {
-      if (!st || st.online || !this.onlineItem?.isConnected) return;
-      this.offline = st.message || 'Online play is temporarily unavailable';
-      this.onlineItem.classList.add('unavail');
-      const sub = this.onlineItem.querySelector('small');
-      if (sub) sub.textContent = st.message.replace(/^Online play is temporarily unavailable( — )?/, 'Temporarily unavailable$1') || 'Temporarily unavailable';
-    });
+    onlineState.listeners.add(this.showOnline);
+    void onlineState.refresh(true);
     const item = (label: string, sub: string, fn: () => void) => h('button.menu-item.nav', { onclick: () => { this.app.sfx.play('select'); fn(); } }, label, h('small', null, sub));
     const p = getPlatform();
     testRide.from = null; // reaching the main menu ends a test ride: Back no longer returns to the editor
     const session = lobbySession();
+    queueMicrotask(() => { this.onlineItem?.insertBefore(h('span.unavail-tag', null, 'UNAVAILABLE'), this.onlineItem.querySelector('small')); this.showOnline(); });
     return h('div.menu-screen', null,
       h('div.menu-col', null,
         h('div.menu-logo', null, 'BITBLADE'),
         session ? item('CONTINUE', `${session.mode} · ${session.arena} · ${session.humans}P${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
         item(session ? 'NEW GAME' : 'PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
-        this.onlineItem = item('ONLINE', 'Your party: play with friends, quick match, or join a party', () => { if (this.offline) { this.app.toast(this.offline); return; } goOnline(this.app); }),
+        this.onlineItem = item('ONLINE', 'Your party: play with friends, quick match, or join a party', () => { if (!onlineState.ok) { notice(this.app, 'ONLINE IS UNAVAILABLE', onlineState.message); return; } goOnline(this.app); }),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
         item('TRACK STUDIO', 'Build race tracks and track adventures from segments', () => this.app.go('tracks')),
@@ -169,7 +174,7 @@ export class MainMenu extends Base {
 
   corner: MusicCorner | null = null;
   update(dt: number) { super.update(dt); this.corner?.watch(); }
-  unmount() { this.corner?.dispose(); super.unmount(); }
+  unmount() { onlineState.listeners.delete(this.showOnline); this.corner?.dispose(); super.unmount(); }
   onBack() { this.app.go('title'); }
 }
 
