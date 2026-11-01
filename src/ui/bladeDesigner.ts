@@ -39,8 +39,10 @@ class BladeDesigner implements Screen {
   turntable!: THREE.Group;
   glowLight!: THREE.PointLight;
   yaw = 0.6; pitch = 0.55; dist = 3.4;
-  spinOn = true;
-  spinSpeed = 0.6;
+  /** SPIN (hold): how spun-up the blade is (0 = the slow showroom turn, 1 = full spin, with its sound) */
+  spinLevel = 0;
+  spinHeld = false;
+  spinBurst = 0;
   angle = 0;
   time = 0;
   rebuildTimer = 0;
@@ -69,6 +71,7 @@ class BladeDesigner implements Screen {
   }
 
   unmount() {
+    this.app.sfx.setHum(0); // (the SPIN sound stops with the screen)
     window.clearTimeout(this.rebuildTimer);
     if (this.saveTimer) { window.clearTimeout(this.saveTimer); this.persist(); }
     for (const c of this.cleanup) c();
@@ -256,9 +259,14 @@ class BladeDesigner implements Screen {
     const tag = (document.activeElement as HTMLElement | null)?.tagName;
     if (this.app.input.pressed.has('KeyR') && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') this.randomize('all');
     if (this.model) {
-      if (this.spinOn) this.angle += this.cur.spinDir * dt * (2 + this.spinSpeed * 40);
+      // a slow showroom turn; SPIN (held) spins it up with its sound, and it winds back down when let go
+      this.spinBurst = Math.max(0, this.spinBurst - dt);
+      if (this.spinHeld || this.spinBurst > 0) this.spinLevel += (1 - this.spinLevel) * Math.min(1, dt * 2.4);
+      else this.spinLevel = Math.max(0, this.spinLevel - dt * 1.2);
+      this.app.sfx.setHum(this.spinLevel);
+      this.angle += this.cur.spinDir * dt * (0.6 + this.spinLevel * 42);
       this.model.spinner.rotation.y = this.angle;
-      const wob = this.spinOn ? 0.03 : 0;
+      const wob = 0.008 + this.spinLevel * 0.025;
       this.holder.rotation.set(Math.sin(this.time * 2.3) * wob, 0, Math.cos(this.time * 2.3) * wob);
       this.holder.position.y = Math.sin(this.time * 1.4) * 0.02;
     }
@@ -345,14 +353,16 @@ class BladeDesigner implements Screen {
     // center
     this.nameInput = h('input.bd-name', { type: 'text', maxLength: 24, value: this.cur.name }) as HTMLInputElement;
     this.nameInput.addEventListener('input', () => this.modify((d) => { d.name = this.nameInput.value || 'Unnamed'; }));
-    const spinBtn = h('button.bd-mini.nav.bd-on', { onclick: () => { this.spinOn = !this.spinOn; spinBtn.classList.toggle('bd-on', this.spinOn); } }, 'Spin');
-    const spd = h('input.bd-range.nav', { type: 'range', min: '0', max: '1', step: '0.01', value: String(this.spinSpeed), 'data-navx': '', style: { width: '90px' } }) as HTMLInputElement;
-    spd.addEventListener('input', () => (this.spinSpeed = +spd.value));
-    this.bindNavX(spd);
+    // SPIN: hold to spin it up (with its sound, like Settings' HOLD TO SPIN); a key / pad press gives a short spin
+    const spinBtn = h('button.bd-mini.nav.bd-spin', { title: 'Hold to spin it up — and hear it' }, icon('swirl'), ' SPIN');
+    const wake = () => { const sfx = this.app.sfx; sfx.ensure(); if (sfx.ctx && sfx.ctx.state !== 'running') void sfx.ctx.resume().catch(() => {}); };
+    spinBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); spinBtn.setPointerCapture?.((e as PointerEvent).pointerId); wake(); this.spinHeld = true; this.spinBurst = Math.max(this.spinBurst, 0.5); spinBtn.classList.add('bd-on'); });
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) spinBtn.addEventListener(ev, () => { this.spinHeld = false; spinBtn.classList.remove('bd-on'); });
+    spinBtn.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0) { wake(); this.spinBurst = Math.max(this.spinBurst, 1.4); } });
     this.stage = h('div.bd-stage', null, h('div.bd-hint', null, 'Drag to orbit · Wheel to zoom')) as HTMLDivElement;
     this.statsEl = h('div.bd-stats') as HTMLDivElement;
     const center = h('div.bd-center', null,
-      h('div.bd-namebar', null, this.nameInput, spinBtn, spd),
+      h('div.bd-namebar', null, this.nameInput, spinBtn),
       this.stage,
       this.buildRandomizer(),
       h('div.bd-panel', null, this.statsEl),

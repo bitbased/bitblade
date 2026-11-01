@@ -236,3 +236,5 @@
   .bd-center { overflow-y: auto; }
   .bd-mini { padding: 4px 6px; font-size: 11px; }
 }
+.bd-spin { display: inline-flex; align-items: center; gap: 4px; touch-action: none; user-select: none; }
+.bd-spin svg { width: 14px; height: 14px; }
