@@ -126,7 +126,7 @@ bun run worker:deploy      # asks a few questions the first time, builds the gam
 ```
 
 The first time, with no `worker/deploy.env`, `worker:deploy` asks you to choose:
-1. **Deploy to the free address.** It goes live at **https://bitblade.&lt;your-account&gt;.workers.dev** with online
+1. **Deploy to the free address.** It goes live at `https://bitblade.<your-account>.workers.dev` with online
    play working: no domain, KV or other setup.
 2. **Set up `worker/deploy.env` now.** It asks for a custom domain and whether to keep the admin settings in KV, and
    creates the KV namespace for you if you want one.
