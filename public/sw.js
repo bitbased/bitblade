@@ -1,5 +1,5 @@
 // BitBlade service worker: network-first for navigation, cache-first for built assets (offline play).
-const CACHE = 'bitblade-v2'; // (v2: v1 also cached live answers like /api/status — a new name clears it)
+const CACHE = 'bitblade-v3'; // (a new name clears the old cache — v2: v1 cached live answers like /api/status; v3: the new icon)
 self.addEventListener('install', (e) => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icon-192.png']))); });
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', (e) => {

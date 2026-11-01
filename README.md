@@ -1,9 +1,13 @@
-# BitBlade
+<p align="center"><a href="https://bitblade.bitbased.net"><img src="public/icon.svg" width="128" alt="BitBlade"></a></p>
 
-A spinning-top battle game built with three.js, TypeScript and Vite. Play in the browser at
-**[bitblade.bitbased.net](https://bitblade.bitbased.net)**, install it as an app on a phone (PWA), or run the Electron
-desktop build. Local multiplayer works on one screen with keyboards, mice, gamepads and touch. Online play uses
-parties on Cloudflare Workers.
+<h1 align="center">BitBlade</h1>
+
+<p align="center"><b><a href="https://bitblade.bitbased.net">▶ Play it now at bitblade.bitbased.net</a></b><br>
+In your browser: no install or account needed.</p>
+
+A spinning-top battle game built with three.js, TypeScript and Vite. Play it in the browser, install it as an app on
+a phone (PWA), or run the Electron desktop build. Local multiplayer works on one screen with keyboards, mice,
+gamepads and touch. Online play uses parties on Cloudflare Workers.
 
 ## Play
 

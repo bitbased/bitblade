@@ -1,12 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- BitBlade: three swept blades spinning round a gold core -->
   <defs>
-    <radialGradient id="bg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#1a1050"/><stop offset="1" stop-color="#05060a"/></radialGradient>
-    <linearGradient id="r" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3cf2ff"/><stop offset="1" stop-color="#ff3db4"/></linearGradient>
+    <radialGradient id="bg" cx="50%" cy="40%" r="75%"><stop offset="0" stop-color="#1c1352"/><stop offset="1" stop-color="#05060c"/></radialGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3cf2ff"/><stop offset="1" stop-color="#ff3db4"/></linearGradient>
   </defs>
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <g transform="translate(256 256)">
-    <path fill="url(#r)" d="M0-190 C40-150 60-120 70-80 L150-120 C130-70 110-40 80-10 L170 40 C120 55 85 60 50 55 L60 160 C25 120 5 95-10 70 L-110 150 C-95 100-80 70-60 45 L-170 20 C-120-5-85-15-55-20 L-110-140 C-60-110-35-90-20-60 Z"/>
-    <circle r="62" fill="#05060a" stroke="#ffd23a" stroke-width="12"/>
-    <path fill="#ffd23a" d="M8-42 L-26 8 H-2 L-10 42 L26-10 H2 Z"/>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+  <g transform="translate(256 256) scale(1)">
+    <path d="M-26.0 -79.9 C-65.8 -134.8 21.7 -206.9 141.0 -136.2 C85.8 -118.1 99.6 -83.6 82.7 -14.6 A84 84 0 0 0 -26.0 -79.9 Z" fill="url(#g)"/>
+    <path d="M82.2 17.5 C149.6 10.5 168.3 122.3 47.4 190.2 C59.4 133.4 22.6 128.0 -28.7 78.9 A84 84 0 0 0 82.2 17.5 Z" fill="url(#g)"/>
+    <path d="M-56.2 62.4 C-83.9 124.4 -190.0 84.6 -188.4 -54.0 C-145.2 -15.3 -122.2 -44.5 -54.0 -64.3 A84 84 0 0 0 -56.2 62.4 Z" fill="url(#g)"/>
+    <circle r="56" fill="#ffd23a"/>
   </g>
 </svg>
