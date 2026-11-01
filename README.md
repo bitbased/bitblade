@@ -14,7 +14,7 @@ gamepads and touch. Online play uses parties on Cloudflare Workers.
   </tr>
   <tr>
     <td width="50%"><img src="docs/screens/gauntlet.jpg" alt="Gauntlet: gems, saws, a pit and drones"><br><b>Gauntlet</b>: grab gems past hazards and drones</td>
-    <td width="50%"><img src="docs/screens/pinball.jpg" alt="Pinball: the blade is the ball on a neon table"><br><b>Pinball</b>: your blade is the ball</td>
+    <td width="50%"><img src="docs/screens/pinball.jpg" alt="Pinball: the blade is the ball on Star Cadet, the space table"><br><b>Pinball</b>: your blade is the ball</td>
   </tr>
 </table>
 
