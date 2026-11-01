@@ -10,7 +10,8 @@ compatibility_date = "2026-09-01"
 directory = "../dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/room/*", "/health", "/api/*", "/join/*", "/mm", "/admin", "/admin/*"]
+# ("/": the page itself goes through the worker for its link-preview card — linkCard in src/index.ts)
+run_worker_first = ["/", "/index.html", "/room/*", "/health", "/api/*", "/join/*", "/mm", "/admin", "/admin/*"]
 
 [[durable_objects.bindings]]
 name = "ROOMS"

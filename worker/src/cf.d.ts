@@ -1,4 +1,13 @@
 // Minimal Cloudflare Workers type declarations (avoids a @cloudflare/workers-types dependency).
+interface HTMLRewriterElement {
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): HTMLRewriterElement;
+}
+declare class HTMLRewriter {
+  on(selector: string, handlers: { element?(el: HTMLRewriterElement): void }): HTMLRewriter;
+  transform(res: Response): Response;
+}
+
 declare class WebSocketPair {
   0: WebSocket;
   1: WebSocket;

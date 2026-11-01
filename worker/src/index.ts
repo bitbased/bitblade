@@ -52,6 +52,20 @@ async function sha(s: string) {
 
 const dir = (env: Env) => env.DIR.get(env.DIR.idFromName("global"));
 
+/**
+ * Link previews want full URLs: the page's card image and address (index.html has them as paths) become URLs on the
+ * domain this request came to — bitblade.bitbased.net, a workers.dev address, a self-hosted domain alike.
+ */
+function linkCard(res: Response, url: URL): Response {
+  if (!(res.headers.get("Content-Type") ?? "").includes("text/html")) return res;
+  const abs = { element(el: HTMLRewriterElement) { const c = el.getAttribute("content"); if (c) el.setAttribute("content", new URL(c, url.origin).href); } };
+  return new HTMLRewriter()
+    .on('meta[property="og:image"]', abs)
+    .on('meta[name="twitter:image"]', abs)
+    .on('meta[property="og:url"]', abs)
+    .transform(res);
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: Ctx): Promise<Response> {
     const url = new URL(req.url);
@@ -107,7 +121,7 @@ export default {
       fwd.headers.set("X-Client-IP", ip); // (set here, never taken from the client)
       return env.ROOMS.get(env.ROOMS.idFromName(code)).fetch(fwd);
     }
-    return env.ASSETS.fetch(req);
+    return linkCard(await env.ASSETS.fetch(req), url);
   },
 };
 
