@@ -21,8 +21,18 @@ export interface AdminConfig {
   bans: Ban[];
   /** relay flood limit: messages per second per connection before it's cut off */
   floodPerSec: number;
+  /**
+   * WebRTC (players connect directly; this server only introduces them, using Google's public STUN — no TURN relay):
+   * off · on (direct where it connects, the WebSocket relay where it doesn't) · required (direct only: a player who
+   * can't connect directly to their party leader can't stay). `rtcMobile` is the same for phones / mobile data (some
+   * phones' radios have choked on WebRTC), applied instead of `rtc` there.
+   */
+  rtc: RtcPolicy;
+  rtcMobile: RtcPolicy;
 }
-const DEFAULT_CONFIG: AdminConfig = { online: "on", queue: true, message: "", whitelist: [], bans: [], floodPerSec: 240 };
+export type RtcPolicy = "off" | "on" | "required";
+const RTC = ["off", "on", "required"];
+const DEFAULT_CONFIG: AdminConfig = { online: "on", queue: true, message: "", whitelist: [], bans: [], floodPerSec: 240, rtc: "off", rtcMobile: "off" };
 
 /** what a room reports (every ~minute while busy, and when a connection closes) */
 export interface UsageReport {
@@ -142,6 +152,8 @@ export class Admin {
         if (typeof body.message === "string") c.message = body.message.slice(0, 200);
         if (Array.isArray(body.whitelist)) c.whitelist = [...new Set(body.whitelist.map((x: unknown) => String(x).trim()).filter(Boolean))].slice(0, 200) as string[];
         if (typeof body.floodPerSec === "number" && body.floodPerSec >= 30) c.floodPerSec = Math.min(5000, Math.floor(body.floodPerSec));
+        if (RTC.includes(body.rtc)) c.rtc = body.rtc;
+        if (RTC.includes(body.rtcMobile)) c.rtcMobile = body.rtcMobile;
         await this.saveConfig(c);
         return json(c);
       }
@@ -303,7 +315,8 @@ export async function gate(env: Env, ip: string, dev: string, what: "room" | "qu
 export async function status(env: Env, ip: string, dev: string) {
   const room = await gate(env, ip, dev, "room");
   const queue = room ?? (await gate(env, ip, dev, "queue"));
-  return { online: !room, queue: !queue, message: room ?? queue ?? "" };
+  const c = await adminConfig(env);
+  return { online: !room, queue: !queue, message: room ?? queue ?? "", rtc: c.rtc ?? "off", rtcMobile: c.rtcMobile ?? "off" };
 }
 
 // ------------------------------------------------------------------ the admin page + its API
@@ -410,6 +423,7 @@ td.flag { color: var(--gold); }
   <div class="row" id="modes"></div>
   <div class="row"><label><input type="checkbox" id="queue"> Quick match on</label></div>
   <div class="row" style="flex-direction:column;align-items:stretch"><span class="muted">Message for players turned away</span><input id="msg" maxlength="200" placeholder="e.g. Back in 10 minutes — updating!"></div>
+  <div class="row"><span class="muted" title="Players connect directly to their party leader (the server only introduces them; Google's public STUN, no TURN relay). ON: direct where it connects, the server relay where it doesn't. REQUIRED: direct only — anyone who can't connect directly can't stay.">WebRTC (direct)</span><select id="rtc"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select><span class="muted">phones / mobile data</span><select id="rtcm"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select></div>
   <div class="row"><span class="muted">Flood limit</span><input id="flood" type="number" min="30" max="5000" style="width:90px"><span class="muted">msgs/sec per connection</span></div>
   <div class="row"><button id="save" class="on">Save</button><button id="closeall" class="danger">Close all rooms now</button></div>
   <div class="muted">WHITELIST only: just these can play (you testing). OFF: nobody — except these. One per line: an IP (v4 or v6, any notation), a range like 203.0.113.0/24 or 2001:db8:1:2::/64, a prefix ending in . or :, or a browser as id:… </div><div class="row"><span class="muted">This browser:</span><code id="mydev"></code><button id="addme">Whitelist this browser</button><button id="addip" title="Adds __MYNET__ — on IPv6 that's your whole home network (the part of the address that doesn't rotate)">Whitelist my network</button></div>
@@ -457,7 +471,7 @@ if (!AUTHED) {
       const b = document.createElement('button'); b.textContent = label; b.className = (c.online === k ? 'on ' : '') + (k === 'off' ? 'danger' : '');
       b.onclick = async () => { data.config = await api('set', { online: k }); render(); }; $('modes').append(b);
     }
-    $('queue').checked = c.queue; if (document.activeElement !== $('msg')) $('msg').value = c.message; $('flood').value = c.floodPerSec;
+    $('queue').checked = c.queue; if (document.activeElement !== $('msg')) $('msg').value = c.message; $('flood').value = c.floodPerSec; $('rtc').value = c.rtc || 'off'; $('rtcm').value = c.rtcMobile || 'off';
     if (document.activeElement !== $('white')) $('white').value = c.whitelist.join('\\n');
     const players = data.live.reduce((a, r) => a + r.players, 0);
     $('now').innerHTML = '<div class="row"><span class="stat"><b class="big">' + data.live.length + '</b><span>rooms open</span></span><span class="stat"><b class="big">' + players + '</b><span>players connected</span></span></div>';
@@ -481,7 +495,7 @@ if (!AUTHED) {
     if (t.dataset.bandev && confirm('Ban browser ' + t.dataset.bandev + ' for a day? (Clearing site data gets around this — an IP ban is harder to dodge.)')) { await api('ban', { ip: 'id:' + t.dataset.bandev, hours: 24, reason: 'browser, from the address list' }); load(); }
     if (t.dataset.unban) { await api('unban', { ip: t.dataset.unban }); load(); }
   });
-  $('save').onclick = async () => { data.config = await api('set', { queue: $('queue').checked, message: $('msg').value, floodPerSec: Number($('flood').value), whitelist: $('white').value.split('\\n') }); render(); };
+  $('save').onclick = async () => { data.config = await api('set', { queue: $('queue').checked, message: $('msg').value, floodPerSec: Number($('flood').value), rtc: $('rtc').value, rtcMobile: $('rtcm').value, whitelist: $('white').value.split('\\n') }); render(); };
   $('closeall').onclick = async () => { if (!confirm('Close EVERY open room now? Everyone online is disconnected.')) return; const r = await api('close-all', { why: $('msg').value || 'Online play is paused' }); alert('Closed ' + r.closed + ' rooms'); load(); };
   $('ban').onclick = async () => { const ip = $('banip').value.trim(); if (!ip) return; data.config = await api('ban', { ip, hours: Number($('banh').value), reason: $('banwhy').value }); $('banip').value = ''; $('banwhy').value = ''; load(); };
   let myDev = ''; try { myDev = localStorage.getItem('bitblade.deviceId') || ''; } catch {}

@@ -350,6 +350,7 @@ export class LobbyScreen implements Screen {
     this.nav = new MenuNav(app, this.el, () => this.leave());
     this.nav.focus(1);
     this.joining = 0;
+    clientRoom.onLink = () => { if (this.guest) this.renderOnline(); };
     clientRoom.handler = (m) => {
       if (m?.t === 'lobby') this.applyRemote();
       else if (m?.t === 'busy') this.renderOnline();
@@ -1165,7 +1166,7 @@ export class LobbyScreen implements Screen {
       const me = !m, open = m && this.openMember === m.peer;
       const visitor = m && m.party !== t.code;
       const c = h('div.pm-chip' + (me ? '.me' : '') + (visitor ? '.visitor' : '') + (open ? '.open' : ''), { onclick: () => { if (!m) return; this.openMember = open ? null : m.peer; this.renderOnline(); }, title: m ? `${m.name}${visitor ? ' — visiting with a quick match' : ''} — tap for options` : 'You lead the party' },
-        me ? icon('crown') : null, me ? `${L.slots[0]?.name ?? 'You'} (you)` : clean(m!.name));
+        me ? icon('crown') : null, me ? `${L.slots[0]?.name ?? 'You'} (you)` : clean(m!.name), m && hostRoom.isDirect(m.peer) ? h('span.pm-direct', { title: 'Connected directly (WebRTC) — their match traffic skips the server' }, icon('bolt')) : null);
       if (!open || !m) return c;
       return h('div.pm-acts', null, c,
         h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'kick-' + m.peer, `Press again to remove ${m.name}`)) return; this.openMember = null; hostRoom.kick(m.peer); } }, 'REMOVE'),
@@ -1277,7 +1278,7 @@ export class LobbyScreen implements Screen {
       t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, persistent: hostRoom.info.persistent, locked: !!hostRoom.info.password, mode: L.mode, random: L.random,
       heir: this.heir(), searching: queue.active ? queue.waited() : '', matchFound: pendingMatch.cur ? pendingMatch.cur.expect : 0,
       matchRoom: hostRoom.matchOpen,
-      members: (() => { const code = myPartyCode(), grps: string[] = []; return [...hostRoom.members.values()].map((m) => { const g = m.party === code || !m.party ? 0 : (grps.indexOf(m.party) + 1 || grps.push(m.party)); return { peer: m.peer, name: m.name, mine: g === 0, grp: g }; }); })(), arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
+      members: (() => { const code = myPartyCode(), grps: string[] = []; return [...hostRoom.members.values()].map((m) => { const g = m.party === code || !m.party ? 0 : (grps.indexOf(m.party) + 1 || grps.push(m.party)); return { peer: m.peer, name: m.name, mine: g === 0, grp: g, direct: hostRoom.isDirect(m.peer) }; }); })(), arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
       startIn: pendingMatch.cur && !hostRoom.inMatch ? this.lastLeft : undefined,
       teamSplit: L.teamSplit,
       items: L.items, target: L.target, time: L.time, nudge: L.nudge, kothShare: L.kothShare, rubber: L.rubber, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
@@ -1399,7 +1400,7 @@ export class LobbyScreen implements Screen {
     // (the snapshot comes every second while searching / counting down: only the search text changes — patch it, don't
     // rebuild the box, so nothing flickers or replays its animation)
     const searchTxt = lb?.searching ? (this.canCtl ? `SEARCHING ${lb.searching} · CANCEL` : `QUICK MATCH — searching ${lb.searching}`) : '';
-    const key = JSON.stringify([t?.code, this.canCtl, clientRoom.busy, L.slots.some((s) => s.mine), L.slots.filter((s) => s.ctrl.type !== 'cpu').length, party.home, lb && { ...lb, searching: !!lb.searching, startIn: undefined, slots: undefined }]);
+    const key = JSON.stringify([t?.code, this.canCtl, clientRoom.busy, clientRoom.direct, !!clientRoom.link?.failed, L.slots.some((s) => s.mine), L.slots.filter((s) => s.ctrl.type !== 'cpu').length, party.home, lb && { ...lb, searching: !!lb.searching, startIn: undefined, slots: undefined }]);
     const live = el.querySelector('.qm-live');
     if (key === this.guestKey && el.childElementCount && (!searchTxt || live)) { if (live) live.textContent = searchTxt; return; }
     this.guestKey = key;
@@ -1414,6 +1415,7 @@ export class LobbyScreen implements Screen {
     const chip = (name: string, cls: string, ic?: string, title = '') => h('div.pm-chip' + cls, { title }, ic ? icon(ic) : null, name);
     const mem = (m: (typeof members)[number]) => chip(m.peer === t.id ? `${m.name} (you)` : clean(m.name), m.peer === t.id ? '.me' : '', m.peer === lb.heir ? 'star' : undefined, m.peer === lb.heir ? 'Leads the party if the leader leaves' : '');
     const myGrp = members.find((m) => m.peer === t.id)?.grp ?? 0;
+    const linkEl = clientRoom.direct ? h('div.hint.pm-link', { title: 'Your match traffic goes straight to the leader (WebRTC)' }, icon('bolt'), ' DIRECT CONNECTION') : clientRoom.link && !clientRoom.link.failed && !clientRoom.link.closed ? h('div.hint.pm-link', null, 'Connecting directly…') : null;
     const grps = [...new Set(members.map((m) => m.grp ?? 0))].filter((g) => g > 0);
     el.append(...([
       h('div.hint', null, lb?.matchRoom
@@ -1425,6 +1427,7 @@ export class LobbyScreen implements Screen {
         h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast(lb?.locked ? 'Invite link copied — they\'ll need the password too' : 'Invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
       lb ? h('div.pm-row', null, lb.matchRoom ? h('span.pm-lbl', null, myGrp === 0 ? 'YOUR PARTY' : 'PARTY') : null, chip(leader, '', 'crown', lb.matchRoom ? 'Opened the match room' : 'Party leader'), ...members.filter((m) => !m.grp).map(mem)) : null,
       ...(lb ? grps.map((g) => h('div.pm-row', null, h('span.pm-lbl', null, g === myGrp ? 'YOUR PARTY' : lb.matchRoom ? 'PARTY' : 'VISITING'), ...members.filter((m) => m.grp === g).map(mem))) : []),
+      linkEl,
       lb?.matchFound ? h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${lb.matchFound})`)
         : lb?.searching ? (this.canCtl
           ? h('button.btn.small.nav.qm-searching.qm-live', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }) }, searchTxt)
@@ -1510,7 +1513,7 @@ export class LobbyScreen implements Screen {
     if (this.guest) {
       // (your own lobby comes back as you left it)
       try { Object.assign(L, JSON.parse(this.guestBackup)); } catch { /* ignore */ }
-      clientRoom.handler = null;
+      clientRoom.handler = null; clientRoom.onLink = null;
       this.guest = false;
       this.el.remove();
       return;

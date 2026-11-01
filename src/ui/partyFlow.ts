@@ -37,13 +37,14 @@ export function goOnline(app: App) {
 function myBlade() { try { return findBlade(localStorage.getItem('bitblade.lastBlade') || ''); } catch { return allBlades()[0]; } }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** answers that won't change by trying again */
-const FINAL = new Set(['password', 'wrong password', 'blocked', 'removed']);
+const FINAL = new Set(['password', 'wrong password', 'blocked', 'removed', 'direct']);
 
 export const DENIED_TEXT: Record<string, string> = {
   password: 'This party needs a password',
   'wrong password': 'Wrong password',
   blocked: 'You can\'t join this party',
   removed: 'You were removed from this party',
+  direct: "Couldn't connect directly to the party leader — online play needs a direct connection right now (try another network)",
 };
 
 /**
@@ -134,9 +135,10 @@ export function onPartyMsg(app: App, m: any) {
 export function roomLost(app: App, why: string, code: string) {
   const snap = clientRoom.lobby;
   const home = party.home;
-  if (why === 'removed' || why === 'blocked') {
+  if (why === 'removed' || why === 'blocked' || why === 'direct') {
     if (home?.code === code) party.home = null;
     app.toast(why === 'blocked' ? 'You were removed from the party' : DENIED_TEXT[why]);
+    if (why === 'direct') party.home = null;
     app.go('menu');
     return;
   }

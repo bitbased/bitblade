@@ -832,3 +832,9 @@ body.hints-on .music-chip { bottom: 56px; }
 .shared-song .ss-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .shared-song .ss-btns .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 14px; }
 .shared-song .ss-btns .btn svg { width: 14px; height: 14px; }
+
+/* WebRTC: who's connected directly */
+.pm-direct { display: inline-flex; margin-left: 2px; color: var(--green, #4dffa6); }
+.pm-direct svg { width: 11px; height: 11px; color: var(--green, #4dffa6) !important; }
+.online-box .pm-link { color: var(--green, #4dffa6); display: flex; align-items: center; gap: 4px; }
+.online-box .pm-link svg { width: 12px; height: 12px; }

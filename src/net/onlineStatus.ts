@@ -4,7 +4,8 @@
 import { onlineStatus as fetchStatus } from './transport';
 import { party } from './party';
 
-export interface OnlineState { online: boolean; queue: boolean; message: string }
+export type RtcPolicy = 'off' | 'on' | 'required';
+export interface OnlineState { online: boolean; queue: boolean; message: string; rtc?: RtcPolicy; rtcMobile?: RtcPolicy }
 
 const UNAVAILABLE = 'Online play is temporarily unavailable';
 
@@ -37,8 +38,8 @@ class OnlineStatusStore {
 
   /** a connection was just turned away with this message: if it's the pause / ban, everything shows it now */
   turnedAway(msg: string) {
-    if (msg.startsWith(UNAVAILABLE)) this.set({ online: false, queue: false, message: msg });
-    else if (msg.startsWith('Quick match is temporarily unavailable')) this.set({ online: true, queue: false, message: msg });
+    if (msg.startsWith(UNAVAILABLE)) this.set({ ...this.st, online: false, queue: false, message: msg });
+    else if (msg.startsWith('Quick match is temporarily unavailable')) this.set({ ...this.st, online: true, queue: false, message: msg });
     else return false;
     this.at = performance.now();
     return true;
@@ -46,3 +47,16 @@ class OnlineStatusStore {
 }
 
 export const onlineState = new OnlineStatusStore();
+
+/** a phone, or anything on mobile data — where the separate (more careful) WebRTC setting applies */
+export function onMobile() {
+  const conn = (navigator as Navigator & { connection?: { type?: string } }).connection;
+  if (conn?.type === 'cellular') return true;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) && matchMedia('(pointer: coarse)').matches;
+}
+/** this device's WebRTC rule right now (off until the server says otherwise) */
+export function rtcPolicy(): RtcPolicy {
+  const st = onlineState.st;
+  const p = onMobile() ? st?.rtcMobile : st?.rtc;
+  return p === 'on' || p === 'required' ? p : 'off';
+}

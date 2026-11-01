@@ -8,6 +8,8 @@
 import type { BladeDesign } from '../core/blade';
 import type { ClientTransport, HostTransport, RoomListing } from './transport';
 import { party } from './party';
+import { LINK_TIMEOUT, PeerLink } from './p2p';
+import { onlineState, rtcPolicy } from './onlineStatus';
 
 /** dev: their browser id (blocking) · party: the party they belong to (parties stay together on teams, go home together) */
 export interface Member { peer: number; name: string; blade: BladeDesign | null; party?: string; dev?: string }
@@ -65,6 +67,7 @@ class HostRoom {
       this.pending.set(peer, setTimeout(() => this.deny(peer, 'timeout'), 12_000));
     });
     t.onLeave((peer) => {
+      this.dropLink(peer);
       const p = this.pending.get(peer);
       if (p !== undefined) { clearTimeout(p); this.pending.delete(peer); return; }
       if (!this.members.delete(peer)) return;
@@ -73,8 +76,18 @@ class HostRoom {
     t.onMessage((peer, m) => {
       if (!m) return;
       if (this.pending.has(peer)) { if (m.t === 'hello') this.admit(peer, m); return; }
-      const mem = this.members.get(peer);
-      if (!mem) return;
+      if (m.t === 'rtc') { this.onRtc(peer, m); return; }
+      this.handle(peer, m);
+    });
+    this.notify();
+  }
+
+  /** a member's message — through the relay or straight from them (WebRTC): the same either way */
+  private handle(peer: number, m: any) {
+    const t = this.t;
+    const mem = this.members.get(peer);
+    if (!mem || !t || !m) return;
+    {
       if (m.t === 'hello' || m.t === 'blade') {
         if (m.name) mem.name = String(m.name).slice(0, 16);
         if (m.blade) mem.blade = m.blade as BladeDesign;
@@ -85,9 +98,26 @@ class HostRoom {
       } else if (m.t === 'ctl') this.onCtl?.(peer, m);
       else if (m.t === 'in') this.onInput?.(peer, m);
       else if (m.t === 'quitmatch') this.onQuitMatch?.(peer);
-    });
-    this.notify();
+    }
   }
+
+  // ---- WebRTC: direct links to members (the relay introduces them; it carries on wherever a link doesn't open)
+  private links = new Map<number, PeerLink>();
+  /** a member is linked directly (their match traffic skips the server) */
+  isDirect(peer: number) { return !!this.links.get(peer)?.open; }
+  private onRtc(peer: number, m: any) {
+    if (!this.members.has(peer) || rtcPolicy() === 'off') return;
+    let link = this.links.get(peer);
+    if (!link || link.closed) {
+      link = new PeerLink(false, (sig) => this.t?.send(peer, sig), (msg) => this.handle(peer, msg), () => {
+        if (this.links.get(peer)?.closed) this.links.delete(peer);
+        this.notify();
+      });
+      this.links.set(peer, link);
+    }
+    void link.signal(m);
+  }
+  private dropLink(peer: number) { this.links.get(peer)?.close(); this.links.delete(peer); }
 
   /** a pending peer's hello: blocked? the password? — then they're in */
   private admit(peer: number, m: any) {
@@ -103,11 +133,14 @@ class HostRoom {
     });
     this.t?.send(peer, { t: 'admitted' });
     if (this.inMatch) this.t?.send(peer, { t: 'busy' });
+    // (WebRTC REQUIRED: a member has a little while to link up directly, or they're out)
+    if (rtcPolicy() === 'required') setTimeout(() => { if (this.members.has(peer) && !this.isDirect(peer)) this.deny(peer, 'direct'); }, LINK_TIMEOUT + 4000);
     this.notify();
   }
 
   /** turn someone away (or out): they're told why, then disconnected */
   deny(peer: number, why: string) {
+    this.dropLink(peer);
     const p = this.pending.get(peer);
     if (p !== undefined) { clearTimeout(p); this.pending.delete(peer); }
     const t = this.t;
@@ -126,6 +159,8 @@ class HostRoom {
     if (this.beat) { clearInterval(this.beat); this.beat = null; }
     for (const p of this.pending.values()) clearTimeout(p);
     this.pending.clear();
+    for (const l of this.links.values()) l.close();
+    this.links.clear();
     if (this.t) { try { this.t.close(); } catch { /* ignore */ } }
     this.t = null;
     this.members.clear();
@@ -137,8 +172,11 @@ class HostRoom {
   /** to one member, or everyone let in (never to someone still at the door) */
   send(peer: number | 'all', m: unknown) {
     if (!this.t) return;
-    if (peer !== 'all' || !this.pending.size) { this.t.send(peer, m); return; }
-    for (const p of this.members.keys()) this.t.send(p, m);
+    const msg = m as { t?: string };
+    if (peer !== 'all') { if (!this.links.get(peer)?.send(msg)) this.t.send(peer, m); return; }
+    // (nobody linked directly and nobody at the door: one message to the relay reaches everyone)
+    if (!this.pending.size && ![...this.links.values()].some((l) => l.open)) { this.t.send('all', m); return; }
+    for (const p of this.members.keys()) if (!this.links.get(p)?.send(msg)) this.t.send(p, m);
   }
   /** to the party's own members only (not visitors from a quick match) */
   sendParty(m: unknown) { if (this.t) for (const mem of this.members.values()) if (mem.party === this.t.code) this.t.send(mem.peer, m); }
@@ -186,6 +224,42 @@ class ClientRoom {
     this.myId = t.id;
     t.onMessage((m) => {
       if (this.t !== t) return;
+      if (m?.t === 'rtc') { void this.link?.signal(m); return; }
+      if (m?.t === 'admitted') this.startLink(t);
+      this.dispatch(m);
+    });
+    t.onClose((r) => {
+      if (this.t !== t) return;
+      this.t = null;
+      this.link?.close(); this.link = null;
+      const why = this.denied || r;
+      const joining = !!this.acceptWait;
+      this.settle({ ok: false, why });
+      if (!joining) this.onLost?.(why, t.code);
+    });
+  }
+
+  // ---- WebRTC: a direct link to the party leader (match traffic skips the server); the relay carries on otherwise
+  link: PeerLink | null = null;
+  /** linked directly to the leader */
+  get direct() { return !!this.link?.open; }
+  /** link state changes (the lobby shows DIRECT / RELAY) */
+  onLink: (() => void) | null = null;
+  private async startLink(t: ClientTransport) {
+    this.link?.close();
+    this.link = null;
+    if (!onlineState.st) await onlineState.refresh(); // (the server's WebRTC setting decides)
+    if (this.t !== t || rtcPolicy() === 'off') return;
+    const link: PeerLink = new PeerLink(true, (sig) => t.send(sig), (msg) => { if (this.t === t) this.dispatch(msg); }, () => this.onLink?.());
+    this.link = link;
+    void link.start();
+  }
+
+  /** a message from the host — through the relay or straight from them: the same either way */
+  private dispatch(m: any) {
+    const t = this.t;
+    if (!t) return;
+    {
       if (m?.t === 'denied') { this.denied = String(m.why ?? 'denied'); this.settle({ ok: false, why: this.denied }); return; }
       if (m?.t === 'admitted') { this.settle({ ok: true }); return; }
       if (m?.t === 'lobby' || m?.t === 'busy' || m?.t === 'start') this.settle({ ok: true });
@@ -194,15 +268,7 @@ class ClientRoom {
       if (m?.t === 'partycfg') { this.partyPw = String(m.pw ?? ''); if (this.partyPw) party.pw.set(t.code, this.partyPw); else party.pw.delete(t.code); return; }
       if (m?.t === 'travel' || m?.t === 'gohome' || m?.t === 'promote') { if (m.t === 'promote') this.heir = Number(m.heir); this.onParty?.(m); return; }
       this.handler?.(m);
-    });
-    t.onClose((r) => {
-      if (this.t !== t) return;
-      this.t = null;
-      const why = this.denied || r;
-      const joining = !!this.acceptWait;
-      this.settle({ ok: false, why });
-      if (!joining) this.onLost?.(why, t.code);
-    });
+    }
   }
 
   /** after the hello: wait to be let in (the first lobby / busy) or turned away */
@@ -215,11 +281,12 @@ class ClientRoom {
   }
   private settle(r: JoinResult) { this.acceptWait?.(r); }
 
-  send(m: unknown) { this.t?.send(m); }
+  send(m: unknown) { if (!this.link?.send(m as { t?: string })) this.t?.send(m); }
 
   leave() {
     const t = this.t;
     this.t = null;
+    this.link?.close(); this.link = null;
     this.lobby = null;
     try { t?.close(); } catch { /* ignore */ }
   }

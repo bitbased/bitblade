@@ -122,7 +122,7 @@ export function publicJoinInput(code: string) {
 }
 
 /** is online play available for this player right now? (main menu) — null when there's no answer (offline, a local relay) */
-export async function onlineStatus(dev: string): Promise<{ online: boolean; queue: boolean; message: string } | null> {
+export async function onlineStatus(dev: string): Promise<{ online: boolean; queue: boolean; message: string; rtc?: 'off' | 'on' | 'required'; rtcMobile?: 'off' | 'on' | 'required' } | null> {
   const base = cloudRelayUrl().replace(/^ws/, 'http').replace(/\/+$/, '');
   if (!base) return null;
   try {
