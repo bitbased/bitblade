@@ -109,7 +109,9 @@ export class MusicCorner {
   build(): HTMLElement {
     const sfx = this.app.sfx;
     const on = musicPrefs.menu === 'surprise';
-    const song = on ? sfx.surprise : songById(musicPrefs.menu);
+    // (Random mix picks its own songs as it goes: show whichever one is playing, not just "Random mix")
+    const rnd = musicPrefs.menu === 'random';
+    const song = on ? sfx.surprise : rnd ? sfx.player?.song ?? null : songById(musicPrefs.menu);
     // (the radio also plays presets and your own songs: those are already in the library)
     const saved = !!song && (loadCustomSongs().some((s) => s.id === song.id) || PRESET_SONGS.some((s) => s.id === song.id));
     const redo = () => this.refresh();
@@ -129,7 +131,7 @@ export class MusicCorner {
         ? h('button.mm-play.nav', { title: 'Browsers wait for a click before playing sound — tap to start the music', onclick: () => { this.app.sfx.ensure(); void this.app.sfx.ctx?.resume().then(() => this.refresh()); this.app.sfx.music(true); this.app.sfx.useMusic('menu'); this.refresh(); } },
             h('b', null, icon('play')), h('span', null, h('i', null, 'TAP TO PLAY MUSIC'), h('em', null, on && musicPrefs.radio ? 'Radio' : song ? `♪ ${song.name}` : '')))
         : null,
-      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'GENERATED SONG' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
+      sfx.musicLive || musicPrefs.menu === 'off' ? h('div.mm-now', null, (on && musicPrefs.radio ? h('span', null, icon('radio', 'ico mm-tiny'), ' RADIO ON') : h('span', null, on && !saved ? 'GENERATED SONG' : rnd ? 'RANDOM MIX' : 'NOW PLAYING')), h('b', null, song ? `♪ ${song.name}` : musicPrefs.menu === 'random' ? '♪ Random mix' : musicPrefs.menu === 'off' ? 'Music off' : '')) : null,
       h('button.mm-ic.nav', { title: 'Shuffle: a freshly generated song, a preset or one of your own songs (press again for another)', onclick: roll, 'data-ic': 'dice' }, icon('dice')),
       on && song ? (saved
         ? h('span.mm-ic.mm-done', { title: 'Saved in your Music Studio library', 'data-ic': 'check' }, icon('check'))
