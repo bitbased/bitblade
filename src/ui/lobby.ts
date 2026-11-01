@@ -306,6 +306,8 @@ export class LobbyScreen implements Screen {
     L.active = true;
     if (a.takeover) this.adoptParty(a.takeover);
     if (a.matchMode && a.matchMode !== L.mode) this.setMode(a.matchMode, true);
+    // (a mode card picked: that mode — RANDOM from an earlier lobby doesn't carry over)
+    if (a.mode && !a.keep) L.random = false;
     if (a.mode && !a.keep && a.mode !== L.mode) this.setMode(a.mode);
     else if (a.mode && !a.keep) this.setMode(a.mode, true);
     if (a.arenaId && allArenas().some((x) => x.id === a.arenaId && this.fits(x))) L.arenaId = a.arenaId;
