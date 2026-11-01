@@ -6,6 +6,7 @@
 
 import { Matchmaker } from "../../server/matchmaker";
 import { adminConfig, adminStub, gate, handleAdmin, status, type UsageReport } from "./admin";
+import { ipMatches } from "./ip";
 export { Admin } from "./admin";
 
 export interface Env {
@@ -182,7 +183,8 @@ export class Room {
       const all = [...this.state.getWebSockets("client"), ...(host ? [host] : [])];
       for (const ws of all) {
         const p = ws.deserializeAttachment() as Peer | null;
-        const hit = cmd.a === "close" || (cmd.a === "kick" && !!p && (p.ip === cmd.who || (!!p.dev && `id:${p.dev}` === cmd.who) || (!!cmd.who?.match(/[.:]$/) && p.ip.startsWith(cmd.who!))));
+        const who = cmd.who ?? "";
+        const hit = cmd.a === "close" || (cmd.a === "kick" && !!p && (who.startsWith("id:") ? !!p.dev && `id:${p.dev}` === who : ipMatches(p.ip, who)));
         if (hit) { this.send(ws, { t: "error", msg: cmd.why ?? "Online play is temporarily unavailable" }); try { ws.close(1000, "removed"); } catch {} }
       }
       return new Response("ok");

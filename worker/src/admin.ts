@@ -7,6 +7,7 @@
 //   /admin             the admin page (password: the ADMIN_TOKEN secret; a signed cookie after that)
 //   /admin/api/*       its JSON API (same cookie)
 import type { Env } from "./index";
+import { ipMatches, networkRule } from "./ip";
 
 /** who: an IP, an IP prefix (ends in . or :), or a browser id ("id:" + the id the game keeps per browser) · until 0 = for good */
 export interface Ban { ip: string; until: number; reason: string; at: number }
@@ -275,11 +276,7 @@ export async function adminConfig(env: Env): Promise<AdminConfig> {
   return cache!.cfg;
 }
 
-export function ipMatches(ip: string, rule: string) {
-  if (rule === ip) return true;
-  // (a prefix rule: "203.0.113." or "2001:db8:")
-  return rule.endsWith(".") || rule.endsWith(":") ? ip.startsWith(rule) : false;
-}
+export { ipMatches };
 
 export const UNAVAILABLE = "Online play is temporarily unavailable";
 function banned(c: AdminConfig, ip: string, dev: string) {
@@ -350,7 +347,7 @@ export async function handleAdmin(req: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === "/admin/logout") return new Response(null, { status: 302, headers: { Location: "/admin", "Set-Cookie": "bb_admin=; Path=/admin; Max-Age=0" } });
   const ok = await signed(env, req);
-  if (url.pathname === "/admin" || url.pathname === "/admin/") return new Response(ADMIN_PAGE.replace("__AUTHED__", ok ? "true" : "false").replaceAll("__MYIP__", ip.replace(/[^0-9a-fA-F.:]/g, "")), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
+  if (url.pathname === "/admin" || url.pathname === "/admin/") return new Response(ADMIN_PAGE.replace("__AUTHED__", ok ? "true" : "false").replaceAll("__MYIP__", ip.replace(/[^0-9a-fA-F.:]/g, "")).replaceAll("__MYNET__", networkRule(ip).replace(/[^0-9a-fA-F.:/]/g, "")), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
   if (!ok) return json({ error: "not signed in" }, 401);
   const api = url.pathname.match(/^\/admin\/api\/([a-z-]+)$/);
   if (!api) return json({ error: "not found" }, 404);
@@ -415,14 +412,14 @@ td.flag { color: var(--gold); }
   <div class="row" style="flex-direction:column;align-items:stretch"><span class="muted">Message for players turned away</span><input id="msg" maxlength="200" placeholder="e.g. Back in 10 minutes — updating!"></div>
   <div class="row"><span class="muted">Flood limit</span><input id="flood" type="number" min="30" max="5000" style="width:90px"><span class="muted">msgs/sec per connection</span></div>
   <div class="row"><button id="save" class="on">Save</button><button id="closeall" class="danger">Close all rooms now</button></div>
-  <div class="muted">WHITELIST only: just these can play (you testing). OFF: nobody — except these. One per line: an IP, a prefix ending in . or :, or a browser as id:… </div><div class="row"><span class="muted">This browser:</span><code id="mydev"></code><button id="addme">Whitelist this browser</button><button id="addip">Whitelist my IP</button></div>
+  <div class="muted">WHITELIST only: just these can play (you testing). OFF: nobody — except these. One per line: an IP (v4 or v6, any notation), a range like 203.0.113.0/24 or 2001:db8:1:2::/64, a prefix ending in . or :, or a browser as id:… </div><div class="row"><span class="muted">This browser:</span><code id="mydev"></code><button id="addme">Whitelist this browser</button><button id="addip" title="Adds __MYNET__ — on IPv6 that's your whole home network (the part of the address that doesn't rotate)">Whitelist my network</button></div>
   <textarea id="white" placeholder="203.0.113.7"></textarea>
 </section>
 <section><h2>Right now</h2><div id="now"></div><div class="scroll"><table id="rooms"></table></div></section>
 <section><h2>This month (estimate)</h2><div id="cost"></div></section>
 <section class="wide"><h2>Last 72 hours</h2><div class="row"><select id="metric"></select><span id="mtot" class="muted"></span></div><div class="chart" id="chart"></div><div class="row muted" style="justify-content:space-between"><span id="c0"></span><span>now</span></div></section>
 <section class="wide"><h2>Addresses today</h2><div class="muted">Busiest first — flagged ones look like abuse. Ban for a while or for good; banning also drops them from rooms they're in. Banned players just see "temporarily unavailable" — the same as a pause.</div><div class="scroll"><table id="ips"></table></div></section>
-<section><h2>Bans</h2><div class="row"><input id="banip" placeholder="IP, prefix (1.2.3.) or id:browser" style="flex:1"><select id="banh"><option value="1">1 hour</option><option value="24" selected>1 day</option><option value="168">1 week</option><option value="0">for good</option></select></div><div class="row"><input id="banwhy" placeholder="reason (for you)" style="flex:1"><button id="ban" class="danger">Ban</button></div><table id="bans"></table></section>
+<section><h2>Bans</h2><div class="row"><input id="banip" placeholder="IP, range (…/24, …::/64), prefix, or id:browser" style="flex:1"><select id="banh"><option value="1">1 hour</option><option value="24" selected>1 day</option><option value="168">1 week</option><option value="0">for good</option></select></div><div class="row"><input id="banwhy" placeholder="reason (for you)" style="flex:1"><button id="ban" class="danger">Ban</button></div><table id="bans"></table></section>
 </main></div>
 <script>
 const AUTHED = __AUTHED__;
@@ -491,7 +488,7 @@ if (!AUTHED) {
   $('mydev').textContent = myDev ? 'id:' + myDev : '(play once in this browser first)';
   const addWhite = (v) => { if (!v) return; const l = $('white').value.split('\\n').map((x) => x.trim()).filter(Boolean); if (!l.includes(v)) l.push(v); $('white').value = l.join('\\n'); $('save').click(); };
   $('addme').onclick = () => addWhite(myDev && 'id:' + myDev);
-  $('addip').onclick = () => addWhite('__MYIP__');
+  $('addip').onclick = () => addWhite('__MYNET__');
   $('refresh').onclick = load;
   load(); setInterval(load, 15000);
 }
