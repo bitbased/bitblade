@@ -1,163 +1,62 @@
-// Parties: you and your friends, together across rooms. Online play is party-first — a party (even a party of one)
-// goes into a room together: the leader hosts a room, joins one, or is matched by QUICK MATCH, and every member
-// follows. When the leader leaves a room, the party comes back to the Online screen together.
+// Parties. All online play is a party — of one or more: your party IS your online room. Its leader hosts it (the
+// lobby shows it, with every room control: name, public / private, password, shared control, a code you keep), the
+// others are in it as members. The party plays private games on its own, queues for QUICK MATCH, or visits a
+// public room — and comes back home together afterwards.
 //
-// A party is a small private room on the relay with no game in it — just who's in the party and where they're
-// headed. The leader hosts it; members are its clients. If the leader drops, the next member re-hosts the same code
-// and everyone else reconnects, so the party survives.
+// This module is just the bookkeeping that outlives screens and rooms: which party you belong to (`home`), how to
+// reopen it when you lead it, passwords you've typed, this browser's id, and who you've blocked.
 //
-//   leader → all     { t: 'party', members: [{ id, name }], leader, room }   who's here and which room we're in
-//   member → leader  { t: 'hi', name }                                       my name (on join and when it changes)
-import { cloudRelayUrl, hostCloud, hostLocal, joinAny, type ClientTransport, type HostTransport } from './transport';
-import { getPlatform } from './platform';
+// Home vs away: you're HOME when the room you're in is your party's room (or you host it). You're AWAY when your
+// party went to someone else's room (a quick match, a public room): the leader leaving that room brings everyone
+// home — they reopen the party, the others are sent back to it.
 
-export interface PartyMember { id: number; name: string }
+/** how the lobby opens a party room: its name, listing, the code you keep, password, shared control */
+export interface RoomOpts { name: string; public: boolean; persistent: boolean; code?: string; key?: string; openControl?: boolean; password?: string }
+
+/** the party you belong to: its code, whether you lead it, and (leader) how to reopen it after a visit */
+export interface PartyHome { code: string; leader: boolean; opts?: RoomOpts }
+
+const DEV_KEY = 'bitblade.deviceId';
+const BLOCK_KEY = 'bitblade.blocked';
+
+export interface Blocked { id: string; name: string; at: number }
 
 class Party {
-  /** I lead: the party's room is mine */
-  private host: HostTransport | null = null;
-  /** I'm a member: my connection to the leader */
-  private client: ClientTransport | null = null;
-  code = '';
-  myId = 0;
-  myName = 'Player';
-  /** everyone, leader first (the leader's id is 0) */
-  members: PartyMember[] = [];
-  /** the game room the party is in (the leader's room; null = the Online screen) */
-  room: string | null = null;
-  /** redraw whatever shows the party */
-  listeners = new Set<() => void>();
-  /** a member: the leader's moved the party to another room (or back out of one) — main.ts follows */
-  onGoto: ((room: string | null) => void) | null = null;
-  /** a member: the party ended (left, kicked, or nobody could take over) */
-  onEnded: ((why: string) => void) | null = null;
-  private leaveT: ReturnType<typeof setTimeout> | null = null;
-  private migrating = false;
+  home: PartyHome | null = null;
+  /** passwords you've typed, by party code (sent with every hello to that party, so rejoining just works) */
+  pw = new Map<string, string>();
+  private dev = '';
 
-  get inParty() { return !!(this.host || this.client); }
-  /** solo counts as leading a party of one */
-  get leads() { return !this.client; }
-  get size() { return this.inParty ? Math.max(1, this.members.length) : 1; }
-  get leaderName() { return this.members[0]?.name ?? this.myName; }
-  /** the party code as an invite link */
-  link() { return this.code ? `${(cloudRelayUrl() || location.origin).replace(/^ws/, 'http').replace(/\/+$/, '')}/?party=${this.code}` : ''; }
-
-  private notify() { for (const f of this.listeners) f(); }
-
-  private async hostTransport(code?: string) {
-    const opts = code ? { code } : {};
-    if (cloudRelayUrl()) return hostCloud(this.myName, opts);
-    if (!getPlatform()) return hostLocal(this.myName, false, opts); // (the page's own relay)
-    throw new Error('Parties need the online relay (Settings → Cloud relay URL)');
-  }
-
-  /** start a party: you lead it (whatever room you're in, the party follows from now on) */
-  async create(name: string, code?: string) {
-    this.myName = name || 'Player';
-    const t = await this.hostTransport(code);
-    this.leaveNow();
-    this.host = t;
-    this.code = t.code;
-    this.myId = 0;
-    this.members = [{ id: 0, name: this.myName }];
-    t.onJoin((peer, n) => { if (!this.members.some((m) => m.id === peer)) this.members.push({ id: peer, name: n.slice(0, 16) || `Player ${peer}` }); this.broadcast(); });
-    t.onLeave((peer) => { this.members = this.members.filter((m) => m.id !== peer); this.broadcast(); });
-    t.onMessage((peer, m) => {
-      if (m?.t === 'hi') { const mem = this.members.find((x) => x.id === peer); if (mem && m.name) { mem.name = String(m.name).slice(0, 16); this.broadcast(); } }
-    });
-    this.broadcast();
-  }
-
-  /** join a friend's party (they lead; you follow them into rooms) */
-  async join(code: string, name: string) {
-    this.myName = name || 'Player';
-    const t = await joinAny(code.trim().toUpperCase(), this.myName);
-    this.leaveNow();
-    this.client = t;
-    this.code = t.code;
-    this.myId = t.id;
-    t.onMessage((m) => {
-      if (m?.t !== 'party') return;
-      this.members = Array.isArray(m.members) ? m.members : [];
-      const room = typeof m.room === 'string' ? m.room : null;
-      const moved = room !== this.room;
-      this.room = room;
-      this.notify();
-      if (moved) this.onGoto?.(room);
-    });
-    t.onClose((why) => { if (this.client === t) this.leaderGone(why); });
-    t.send({ t: 'hi', name: this.myName });
-    this.notify();
-  }
-
-  /** the leader dropped: the first member left re-hosts the same code; the others reconnect to it */
-  private async leaderGone(why: string) {
-    const code = this.code, mine = this.myId;
-    const next = this.members.filter((m) => m.id !== 0)[0];
-    this.client = null;
-    if (why === 'kicked') { this.reset(); this.onEnded?.('You were removed from the party'); return; }
-    this.migrating = true;
-    this.notify();
-    if (next?.id === mine) {
-      try { await this.create(this.myName, code); this.migrating = false; this.notify(); return; } catch { /* someone else got it: join instead */ }
+  /** this browser: a random id kept forever (blocking works on it, not on names) */
+  get deviceId() {
+    if (this.dev) return this.dev;
+    try { this.dev = localStorage.getItem(DEV_KEY) || ''; } catch { /* ignore */ }
+    if (!this.dev) {
+      this.dev = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      try { localStorage.setItem(DEV_KEY, this.dev); } catch { /* ignore */ }
     }
-    const until = performance.now() + 12_000;
-    while (performance.now() < until && this.migrating) {
-      await new Promise((r) => setTimeout(r, 1200));
-      try { await this.join(code, this.myName); this.migrating = false; this.notify(); return; } catch { /* not back yet */ }
-    }
-    if (!this.migrating) return;
-    this.reset();
-    this.onEnded?.('Your party ended — the leader left');
+    return this.dev;
   }
 
-  private broadcast() {
-    if (!this.host) return;
-    this.host.send('all', { t: 'party', members: this.members, leader: this.myName, room: this.room });
-    this.notify();
+  /** in someone else's room with your party (a match, a public room) — not in your party's own room */
+  away(roomCode: string | undefined | null) { return !!this.home && !!roomCode && roomCode !== this.home.code; }
+
+  /** what you send arriving in room `code` (and again when your name changes): `partyCode` is the party you belong to */
+  hello(code: string, partyCode: string, extra: Record<string, unknown> = {}) {
+    return { t: 'hello', dev: this.deviceId, party: partyCode, pw: this.pw.get(code) || undefined, ...extra };
   }
 
-  /**
-   * The leader's game room changed (hosted, joined, matched — or left): the party follows. Leaving is held a moment,
-   * so moving straight on to another room (a quick match, a room travelling) doesn't bounce everyone out first.
-   */
-  leaderAt(room: string | null) {
-    if (!this.host) return;
-    if (this.leaveT) { clearTimeout(this.leaveT); this.leaveT = null; }
-    if (room === null) { this.leaveT = setTimeout(() => { this.leaveT = null; this.room = null; this.broadcast(); }, 1500); return; }
-    if (room === this.room) return;
-    this.room = room;
-    this.broadcast();
-  }
-
-  rename(name: string) {
-    this.myName = name || this.myName;
-    const me = this.members.find((m) => m.id === this.myId);
-    if (me) me.name = this.myName;
-    if (this.host) this.broadcast(); else this.client?.send({ t: 'hi', name: this.myName });
-  }
-
-  kick(id: number) { if (this.host && id !== 0) this.host.kick(id); }
-
-  /** leave (a member) or end the party for everyone (the leader — the next member takes over) */
-  leave() { this.leaveNow(); this.notify(); }
-
-  private leaveNow() {
-    this.migrating = false;
-    const h = this.host, c = this.client;
-    this.host = null; this.client = null;
-    try { h?.close(); } catch { /* ignore */ }
-    try { c?.close(); } catch { /* ignore */ }
-    this.reset(false);
-  }
-
-  private reset(notify = true) {
-    if (this.leaveT) { clearTimeout(this.leaveT); this.leaveT = null; }
-    this.code = ''; this.members = []; this.room = null; this.myId = 0;
-    if (notify) this.notify();
-  }
-
-  get reconnecting() { return this.migrating; }
+  // ---- blocking (each leader's own list, on this browser)
+  blocked(): Blocked[] { try { const v = JSON.parse(localStorage.getItem(BLOCK_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } }
+  isBlocked(id: string | undefined) { return !!id && this.blocked().some((b) => b.id === id); }
+  block(id: string, name: string) { if (!id || this.isBlocked(id)) return; this.saveBlocked([...this.blocked(), { id, name, at: Date.now() }]); }
+  unblock(id: string) { this.saveBlocked(this.blocked().filter((b) => b.id !== id)); }
+  private saveBlocked(v: Blocked[]) { try { localStorage.setItem(BLOCK_KEY, JSON.stringify(v.slice(-200))); } catch { /* ignore */ } }
 }
 
 export const party = new Party();
+
+/** the party you open from ONLINE: your home party (a kept code) if you have one, else a fresh private one */
+const HOME_KEY = 'bitblade.homeParty';
+export function homePartyCode(): string { try { return localStorage.getItem(HOME_KEY) || ''; } catch { return ''; } }
+export function setHomePartyCode(code: string) { try { if (code) localStorage.setItem(HOME_KEY, code); else localStorage.removeItem(HOME_KEY); } catch { /* ignore */ } }

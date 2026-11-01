@@ -9,6 +9,8 @@ export interface SavedRoom {
   name: string;
   public: boolean;
   openControl: boolean;
+  /** needed to join (empty: none) */
+  password?: string;
   mode: string;
   arenaId: string;
   lastUsed: number;

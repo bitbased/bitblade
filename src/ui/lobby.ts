@@ -8,6 +8,7 @@ import { allArenas, arenaSize, findArena, SIZE_LABEL, type ArenaDef, type ArenaS
 import { MODES, PICK_MODES, type ControllerSpec, type MatchConfig, type ModeId } from '../game/types';
 import { Input, specKey, specLabel } from '../input/input';
 import { cloudRelayUrl, hostCloud, hostLocal, publicJoinInput } from '../net/transport';
+import { parseJoinInput } from '../net/relay';
 import { getPlatform } from '../net/platform';
 import { TEAM_COLORS } from './hud';
 import { setBackdropVisible, setBackdropArena } from './backdrop';
@@ -17,10 +18,10 @@ import type { MatchArg } from './match';
 import { clientRoom, hostRoom } from '../net/room';
 import { testRide } from './testRide';
 import { findMyRoom, newOwnerKey, saveMyRoom } from '../net/myRooms';
-import type { RoomOpts } from './online';
 import { acceptSong, armRadio, onRoomSong, RADIO_HOST, roomMusicRow, roomRadio, roomSongHost } from './roomMusic';
 import { queue } from '../net/queue';
-import { party } from '../net/party';
+import { party, setHomePartyCode, type RoomOpts } from '../net/party';
+import { joinParty, leaveLabel, leaveRoom, savePartyPrefs } from './partyFlow';
 import { MATCH_COUNTDOWN, pendingMatch, travel } from './quickMatch';
 import type { Song } from '../game/music';
 
@@ -68,7 +69,60 @@ const L = {
   songBy: '',
   /** whose radio picked the room song (RADIO_HOST, a guest's room id) — null: picked by hand */
   radioBy: null as number | null,
+  /** a quick match we host: our own CPUs step aside (they don't play in it) and come back once the visitors have gone */
+  stash: null as null | { cpus: Slot[]; ctl: boolean; seen?: boolean },
 };
+
+/** a member the leader promoted: they take the party over when the leader steps down */
+let promoted: number | null = null;
+
+/** you lead a party with friends in it (not just yourself) */
+export function leadsParty() {
+  const t = hostRoom.t;
+  return !!t && [...hostRoom.members.values()].some((m) => m.party === t.code);
+}
+
+/** how to reopen the party you host, as it is now (after a visit, when someone takes it over) */
+function currentRoomOpts(): RoomOpts {
+  const t = hostRoom.t!, i = hostRoom.info;
+  return { name: i.name, public: i.public, persistent: i.persistent, code: t.code, key: findMyRoom(t.code)?.key, openControl: L.stash ? L.stash.ctl : hostRoom.openControl, password: i.password };
+}
+
+/**
+ * Your party goes to another room together (a quick match, a public room): you join it first (so a wrong password
+ * or a full room doesn't scatter everyone), then your members are sent after you and your own room closes. You
+ * come home together when you leave it. A party of one just goes (a match is still a visit: you come back after).
+ */
+export async function partyTravel(app: App, input: string, why: 'match' | 'room'): Promise<string> {
+  const t = hostRoom.t;
+  let code = '';
+  try { code = parseJoinInput(input).code; } catch (e) { return String((e as Error).message || e); }
+  if (!t) return joinParty(app, input, { as: why === 'match' ? 'visit' : 'member', retryMs: why === 'match' ? 20_000 : 0 });
+  const solo = !leadsParty();
+  if (why === 'room' && solo) return joinParty(app, input, { as: 'member' });
+  party.home = { code: t.code, leader: true, opts: currentRoomOpts() };
+  if (queue.active) queue.cancel();
+  pendingMatch.cur = null;
+  return joinParty(app, input, {
+    as: 'visit', retryMs: why === 'match' ? 20_000 : 0,
+    onIn: () => {
+      hostRoom.send('all', { t: 'travel', code, why, pw: party.pw.get(code) });
+      restoreStash();
+      L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
+    },
+  });
+}
+
+/** put the CPUs that stepped aside for a quick match back (and the room's control as it was) */
+function restoreStash() {
+  const st = L.stash;
+  if (!st) return;
+  L.stash = null;
+  hostRoom.openControl = st.ctl;
+  hostRoom.matchOpen = false;
+  L.slots = L.slots.filter((s) => !s.auto);
+  for (const c of st.cpus) L.slots.push(c);
+}
 
 /** the lobby you'll return to (players, mode, arena all kept), or null if there isn't one yet */
 export function lobbySession() {
@@ -211,9 +265,12 @@ export class LobbyScreen implements Screen {
     setBackdropVisible(true, app.canvas);
     // keep: coming back from a match/results/menu — leave mode, rules, players and arena exactly as they were
     // next: advance to the next arena for this mode; autostart: go straight into the match (rematch / next track)
-    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean; next?: boolean; autostart?: boolean; room?: RoomOpts };
+    const a = (arg ?? {}) as { mode?: ModeId; bladeId?: string; arenaId?: string; keep?: boolean; online?: boolean; next?: boolean; autostart?: boolean; room?: RoomOpts; takeover?: any; matchMode?: ModeId };
     if (a.room) this.roomOpts = a.room;
+    this.takeover = !!a.takeover;
     L.active = true;
+    if (a.takeover) this.adoptParty(a.takeover);
+    if (a.matchMode && a.matchMode !== L.mode) this.setMode(a.matchMode, true);
     if (a.mode && !a.keep && a.mode !== L.mode) this.setMode(a.mode);
     else if (a.mode && !a.keep) this.setMode(a.mode, true);
     if (a.arenaId && allArenas().some((x) => x.id === a.arenaId && this.fits(x))) L.arenaId = a.arenaId;
@@ -237,10 +294,12 @@ export class LobbyScreen implements Screen {
     this.unsub = hostRoom.subscribe(() => this.syncMembers());
     queue.listeners.add(this.onQueue);
     travel.room = (code) => this.travelTo(code);
+    if (L.stash && !pendingMatch.cur) this.endMatchSession();
     hostRoom.onCtl = (peer, m) => this.onRemoteCtl(peer, m);
     hostRoom.inMatch = false;
+    if (pendingMatch.cur && hostRoom.t) this.beginMatchSession();
     this.syncMembers();
-    if ((a.online || (party.leads && party.size > 1)) && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud'); // (a party leader's lobby opens online: the party comes along)
+    if (a.online && !hostRoom.t) this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud');
     if (a.autostart) setTimeout(() => { if (this.el.isConnected) { this.el.style.visibility = ''; this.start(); } }, 0);
   }
 
@@ -260,13 +319,7 @@ export class LobbyScreen implements Screen {
       if (m?.t === 'lobby') this.applyRemote();
       else if (m?.t === 'busy') this.renderOnline();
       else if (m?.t === 'full') app.toast('The room is full for this mode — you\'ll play when a place frees up');
-      else if (m?.t === 'travel' && typeof m.code === 'string') { app.toast('Your room found a match — heading there'); clientRoom.leave(); app.go('online', { match: m.code }); }
       else if (m?.t === 'start' && clientRoom.t) app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } } as MatchArg);
-    };
-    clientRoom.closeHandler = (r) => {
-      if (r === 'Host left' && clientRoom.lastJoin) { app.go('online', { rejoin: clientRoom.lastJoin }); return; }
-      app.toast(`Disconnected: ${r}`);
-      app.go('online');
     };
     this.applyRemote();
   }
@@ -365,7 +418,7 @@ export class LobbyScreen implements Screen {
       const key = (s: Slot) => { let x = L.mixSeed; for (const c of s.name + (s.ctrl.type === 'remote' ? s.ctrl.peer : '')) x = (x * 31 + c.charCodeAt(0)) % 1000003; return x; };
       for (const s of [...persons].sort((a, b) => key(a) - key(b))) place(s, true);
     } else {
-      const unitOf = (s: Slot) => s.ctrl.type === 'remote' ? (s.party ?? `peer:${s.ctrl.peer}`) : (party.code || 'local');
+      const unitOf = (s: Slot) => s.ctrl.type === 'remote' ? (s.party ?? `peer:${s.ctrl.peer}`) : (hostRoom.t?.code ?? 'local');
       const units = new Map<string, Slot[]>();
       for (const s of persons) { const k = unitOf(s); units.set(k, [...(units.get(k) ?? []), s]); }
       for (const u of [...units.values()].sort((a, b) => b.length - a.length)) { const t = pick(true); for (const s of u) put(s, t); }
@@ -507,7 +560,7 @@ export class LobbyScreen implements Screen {
     name.addEventListener('change', () => {
       const i = idx(), s = L.slots[i];
       if (!s) return;
-      if (this.guest) { if (!s.mine) return; settings.playerName = name.value.trim() || settings.playerName; settings.save(); clientRoom.send({ t: 'hello', name: settings.playerName, party: party.code || undefined }); return; }
+      if (this.guest) { if (!s.mine) return; settings.playerName = name.value.trim() || settings.playerName; settings.save(); clientRoom.send({ t: 'hello', name: settings.playerName }); return; }
       s.name = name.value || `Player ${i + 1}`;
       if (i === 0 && s.ctrl.type !== 'cpu') { settings.playerName = s.name; settings.save(); }
       this.dirty = true;
@@ -688,6 +741,7 @@ export class LobbyScreen implements Screen {
       case 'arena': this.stepArena(d); break;
       case 'size': this.stepSize(d); break;
       case 'items': this.toggleItems(); break;
+      case 'find': if (queue.active) queue.cancel(); else this.findPlayers(); this.app.toast(queue.active ? `${who} started a quick match search` : `${who} stopped the search`); return;
       case 'song': { const s = m.song === null ? null : acceptSong(m.song); if (m.song !== null && !s) return; this.setRoomSong(s, m.radio ? `📻 ${who}` : who, m.radio ? peer : null); return; }
       case 'start': this.app.toast(`${who} started the match`); this.start(); return;
       default: return;
@@ -724,12 +778,58 @@ export class LobbyScreen implements Screen {
       }
       L.slots.push({ name: m.name, ctrl: { type: 'remote', peer: m.peer }, bladeId: PRESETS[m.peer % PRESETS.length].id, blade: m.blade ?? undefined, team: 0, party: m.party });
       this.app.sfx.play('select');
-      this.app.toast(`${m.name} joined the room`);
+      this.app.toast(hostRoom.t && m.party === hostRoom.t.code ? `${m.name} joined your party` : `${m.name} is here for the match`);
       changed = true;
     }
     if (changed) { this.fillCpus(); this.assignTeams(); this.renderSlots(); }
+    // (the party's password goes to its members — whoever takes the party over keeps it)
+    if (hostRoom.t) for (const m of mem.values()) if (m.party === hostRoom.t.code && !this.cfgSent.has(m.peer)) { this.cfgSent.add(m.peer); hostRoom.send(m.peer, { t: 'partycfg', pw: hostRoom.info.password }); }
+    this.endMatchSession();
     this.dirty = true;
     if (this.onlineEl) this.renderOnline();
+  }
+  private cfgSent = new Set<number>();
+
+  /** a quick match is coming here: our CPUs step aside, everyone can drive, its players come in without the password */
+  beginMatchSession() {
+    hostRoom.matchOpen = true;
+    if (L.stash) return;
+    L.stash = { cpus: L.slots.filter((s) => s.ctrl.type === 'cpu' && !s.auto), ctl: hostRoom.openControl };
+    L.slots = L.slots.filter((s) => !(s.ctrl.type === 'cpu' && !s.auto));
+    hostRoom.openControl = true;
+    L.count = 0;
+    this.fillCpus();
+  }
+  /** the quick match's visitors have all gone: the party's own lobby comes back (CPUs, control) */
+  endMatchSession() {
+    if (!L.stash || !hostRoom.t) return;
+    const code = hostRoom.t.code;
+    if ([...hostRoom.members.values()].some((m) => m.party !== code)) { L.stash.seen = true; return; }
+    // (still gathering: wait for the visitors — unless they came and all left again before it started)
+    if (pendingMatch.cur && !L.stash.seen) return;
+    pendingMatch.cur = null;
+    restoreStash();
+    this.fillCpus(); this.renderSlots(); this.dirty = true;
+    this.app.toast('The match is over — your party\'s lobby is back');
+  }
+
+  /** taking the party over from a leader who left: carry on with its mode, arena, rules and music — and its CPUs */
+  adoptParty(s: any) {
+    if (MODES.some((m) => m.id === s.mode)) L.mode = s.mode;
+    if (allArenas().some((x) => x.id === s.arenaId)) L.arenaId = s.arenaId; else L.arenaId = this.mode.arenas[0];
+    L.items = !!s.items; L.target = s.target ?? L.target; L.time = s.time ?? L.time;
+    if (s.nudge !== undefined) L.nudge = !!s.nudge;
+    if (s.kothShare !== undefined) L.kothShare = !!s.kothShare;
+    if (s.rubber !== undefined) L.rubber = s.rubber;
+    if (s.teamSplit) L.teamSplit = s.teamSplit;
+    const song = s.song ? acceptSong(s.song) : null;
+    L.song = song; L.songBy = song ? s.songBy ?? '' : ''; L.radioBy = null;
+    const slots = (s.slots ?? []) as { name: string; ctrl: string; blade?: BladeDesign; team: number; auto?: boolean }[];
+    const mine = slots.find((x) => x.ctrl === `online:${clientRoom.myId}`);
+    const me: Slot = { name: settings.playerName || 'Player 1', ctrl: Input.isTouchDevice() && !matchMedia('(pointer: fine)').matches ? { type: 'touch' } : { type: 'kb' }, bladeId: mine?.blade?.id ?? PRESETS[0].id, blade: mine?.blade, team: 0 };
+    L.slots = [me, ...slots.filter((x) => x.ctrl.startsWith('CPU') && !x.auto).map((x): Slot => ({ name: x.name, ctrl: { type: 'cpu', level: 2 }, bladeId: x.blade?.id ?? PRESETS[0].id, blade: x.blade, team: x.team }))];
+    L.count = slots.length;
+    L.stash = null;
   }
 
   rebuild() { this.refresh(); }
@@ -899,7 +999,7 @@ export class LobbyScreen implements Screen {
   removeSlot(i: number) {
     const s = L.slots[i];
     if (s.auto) return;
-    if (s.ctrl.type === 'remote') hostRoom.t?.kick(s.ctrl.peer);
+    if (s.ctrl.type === 'remote') hostRoom.kick(s.ctrl.peer);
     L.slots.splice(i, 1);
     this.fillCpus();
     this.assignTeams();
@@ -947,83 +1047,179 @@ export class LobbyScreen implements Screen {
     return true;
   }
 
-  // -------------------------------------------------------------- online host
+  // -------------------------------------------------------------- your party (online)
+  /** member chips: which one's actions are open */
+  private openMember: number | null = null;
+  private showBlocked = false;
+  private editPw = false;
+
   renderOnline() {
     const el = this.onlineEl;
-    // in a room: the room box beside the cards; otherwise the small invite box at the end of the rules row
+    // in a party: the party box beside the cards; otherwise the small GO ONLINE box at the end of the rules row
     const inRoom = this.guest || !!hostRoom.t;
     const home = inRoom ? this.midEl : this.bottomEl;
     if (home && el.parentElement !== home) home.append(el);
     this.el?.classList.toggle('in-room', inRoom);
     if (this.guest) { this.renderGuestBox(); return; }
-    if (this.ui) this.ui.back.textContent = hostRoom.t ? '◀ Close Room' : '◀ Back';
-    // typing a room name: redraw once they're done instead of wiping the field mid-word
-    const typing = el.querySelector<HTMLInputElement>('.room-name');
-    if (typing && document.activeElement === typing) { typing.addEventListener('blur', () => this.renderOnline(), { once: true }); return; }
+    if (this.ui) this.ui.back.textContent = this.backLabel();
+    // typing (party name, password): redraw once they're done instead of wiping the field mid-word
+    const typing = el.querySelector<HTMLInputElement>('input:focus');
+    if (typing) { typing.addEventListener('blur', () => this.renderOnline(), { once: true }); return; }
     el.innerHTML = '';
-    if (hostRoom.t) {
-      const t = hostRoom.t;
-      const ctl = h('div.toggle.panel.nav', { onclick: () => { hostRoom.openControl = !hostRoom.openControl; this.dirty = true; this.app.toast(hostRoom.openControl ? 'OPEN CONTROL on — everyone in the room can change mode / arena and start' : 'Open Control off — only you can change the room'); this.renderOnline(); }, title: 'Let everyone in the room change mode / arena and start matches' }, h('span.dot'), 'OPEN CONTROL');
-      ctl.classList.toggle('on', hostRoom.openControl);
-      ctl.addEventListener('click', () => this.pushSummary());
-      const info = hostRoom.info;
-      const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'Host'}'s room`, title: 'Room name — type to rename' });
-      rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; this.app.toast(`Room renamed to ${rname.value.trim() || rname.placeholder}`); });
-      rname.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') rname.blur(); });
-      const pub = h('div.toggle.panel.nav', { title: t.listable ? 'List this room in Public Rooms' : 'Desktop LAN / tunnel rooms can\'t be listed — host a Cloud room to go public', onclick: () => { if (!t.listable) { this.app.toast('Host a Cloud room to list it publicly'); return; } hostRoom.setInfo({ public: !info.public }); this.app.toast(hostRoom.info.public ? 'Room is now PUBLIC — listed for everyone' : 'Room is now private (invite only)'); this.pushSummary(); this.renderOnline(); } }, h('span.dot'), 'PUBLIC');
-      pub.classList.toggle('on', info.public);
-      const keep = info.persistent
-        ? h('div.hint', { style: { color: 'var(--gold)' } }, icon('lock'), ' SAVED ROOM — same code every time')
-        : h('button.btn.small.nav', { title: 'Save to My Rooms: reopen later with this same code and invite link', onclick: () => {
-            saveMyRoom({ code: t.code, key: newOwnerKey(), name: info.name || `${L.slots[0]?.name ?? 'My'}'s room`, public: info.public, openControl: hostRoom.openControl, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
-            hostRoom.setInfo({ persistent: true });
-            this.app.toast(`Saved to My Rooms — ${t.code} is yours next time you open it`);
-            this.renderOnline();
-          } }, 'KEEP ROOM');
-      el.append(
-        h('div.hint', null, `${t.kind === 'relay-tunnel' ? 'TUNNEL ROOM' : t.kind === 'relay-cloud' ? 'CLOUD ROOM' : 'LAN ROOM'} · ${hostRoom.members.size + 1} in room · everyone follows the leader`),
-        rname,
-        // (the code and the invite link share a line — the room box stays short enough for any screen)
-        h('div.code-row', null, h('div.code', null, t.code),
-          ...t.invites.slice(1, 2).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast('Invite link copied'); }, title: `${u} — click to copy` }, icon('link'), ' ', u))),
-        roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host'), radio ? RADIO_HOST : null), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
-        this.findBtn(),
-        h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } }, pub, ctl, keep,
-          h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); L.slots = L.slots.filter((x) => x.ctrl.type !== 'remote'); this.fillCpus(); this.renderSlots(); this.renderOnline(); } }, 'Close Room')),
-      );
-      return;
-    }
+    if (hostRoom.t) { this.renderPartyBox(el); return; }
     const p = getPlatform();
     el.append(
-      h('div.hint', null, 'INVITE ONLINE FRIENDS'),
-      this.findBtn(),
+      h('div.hint', null, 'PLAY ONLINE — WITH FRIENDS OR A QUICK MATCH'),
       h('div.row', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-        h('button.btn.small.nav', { onclick: () => this.openRoom('lan'), title: p ? 'Direct connection on your network' : 'Same-origin relay' }, 'LAN'),
+        h('button.btn.small.primary.nav', { onclick: () => this.openRoom(p && !cloudRelayUrl() ? 'lan' : 'cloud'), title: 'Open your party online: friends join with its code, and you can quick match' }, icon('users'), ' GO ONLINE'),
+        p ? h('button.btn.small.nav', { onclick: () => this.openRoom('lan'), title: 'Direct connection on your network' }, 'LAN') : null,
         p ? h('button.btn.small.nav', { onclick: () => this.openRoom('tunnel') }, 'Public Link') : null,
-        h('button.btn.small.nav', { onclick: () => this.openRoom('cloud') }, 'Cloud')),
+        h('button.btn.small.nav', { onclick: () => this.app.go('online'), title: 'Join a friend\'s party, a public party, or one of your kept parties' }, 'FIND A PARTY')),
     );
+  }
+
+  /** the party box: name, code + invite link, quick match, privacy / control / kept code / password, members, music */
+  renderPartyBox(el: HTMLElement) {
+    const t = hostRoom.t!, info = hostRoom.info;
+    const members = [...hostRoom.members.values()];
+    const mine = members.filter((m) => m.party === t.code), visitors = members.filter((m) => m.party !== t.code);
+    const tog = (label: Node | string, on: boolean, title: string, click: () => void) => {
+      const b = h('div.toggle.panel.nav', { title, onclick: click }, h('span.dot'), label);
+      b.classList.toggle('on', on);
+      return b;
+    };
+    const rname = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.name, maxLength: 32, placeholder: `${L.slots[0]?.name ?? 'My'}'s party`, title: 'Party name — type to rename' });
+    rname.addEventListener('change', () => { hostRoom.setInfo({ name: rname.value.trim() }); if (!info.persistent) savePartyPrefs({ name: rname.value.trim() }); this.pushSummary(); this.dirty = true; });
+    rname.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') rname.blur(); });
+    const ctlNow = L.stash ? L.stash.ctl : hostRoom.openControl;
+    const pub = tog('PUBLIC', info.public, t.listable ? 'Public: listed in Public Parties so anyone can find it (a password still keeps them out). Off: invite only' : 'LAN / tunnel parties can\'t be listed — go online with Cloud to be public', () => {
+      if (!t.listable) { this.app.toast('Only cloud parties can be public'); return; }
+      hostRoom.setInfo({ public: !info.public }); this.app.toast(hostRoom.info.public ? 'Party is PUBLIC — anyone can find it' : 'Party is private — invite only'); this.pushSummary(); this.renderOnline();
+    });
+    const ctl = tog('SHARED CONTROL', ctlNow, 'Shared control: everyone in the party can change mode / arena / rules, quick match and start. Off: only you', () => {
+      if (L.stash) { L.stash.ctl = !L.stash.ctl; this.app.toast('Applies once the quick match is over'); }
+      else { hostRoom.openControl = !hostRoom.openControl; if (!info.persistent) savePartyPrefs({ open: hostRoom.openControl }); this.app.toast(hostRoom.openControl ? 'Shared control — everyone can drive the party' : 'Only you drive the party'); }
+      this.dirty = true; this.pushSummary(); this.renderOnline();
+    });
+    const keep = tog('KEEP CODE', info.persistent, info.persistent ? `Kept: ${t.code} is yours — the same code and link every time` : 'Keep this code: the same code and invite link every time you go online', () => {
+      if (info.persistent) { this.app.toast('Forget kept parties in FIND A PARTY → Kept parties'); return; }
+      saveMyRoom({ code: t.code, key: newOwnerKey(), name: info.name || `${L.slots[0]?.name ?? 'My'}'s party`, public: info.public, openControl: ctlNow, password: info.password, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
+      setHomePartyCode(t.code);
+      hostRoom.setInfo({ persistent: true });
+      this.app.toast(`Kept — ${t.code} is your party's code from now on`);
+      this.renderOnline();
+    });
+    const pw = tog(h('span', null, icon('lock'), ' PASSWORD'), !!info.password, info.password ? 'Password on — click to change or remove it' : 'Ask for a password to join (invite links still need it)', () => { this.editPw = !this.editPw || !info.password; this.renderOnline(); });
+    const pwIn = h<HTMLInputElement>('input.room-name', { type: 'text', value: info.password, maxLength: 32, placeholder: 'password (empty = none)' });
+    const setPw = () => {
+      const v = pwIn.value.trim();
+      this.editPw = false;
+      if (v === info.password) { this.renderOnline(); return; }
+      hostRoom.setInfo({ password: v });
+      hostRoom.sendParty({ t: 'partycfg', pw: v });
+      this.pushSummary();
+      this.app.toast(v ? 'Password set — new people need it to join' : 'Password removed');
+      this.renderOnline();
+    };
+    pwIn.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') pwIn.blur(); if (e.key === 'Escape') { pwIn.value = info.password; pwIn.blur(); } });
+    pwIn.addEventListener('change', setPw);
+    pwIn.addEventListener('blur', () => { if (this.editPw) setPw(); });
+
+    // members: tap one for REMOVE / BLOCK / MAKE LEADER
+    const chip = (m: typeof members[number] | null) => {
+      const me = !m, open = m && this.openMember === m.peer;
+      const visitor = m && m.party !== t.code;
+      const c = h('div.pm-chip' + (me ? '.me' : '') + (visitor ? '.visitor' : '') + (open ? '.open' : ''), { onclick: () => { if (!m) return; this.openMember = open ? null : m.peer; this.renderOnline(); }, title: m ? `${m.name}${visitor ? ' — visiting with a quick match' : ''} — tap for options` : 'You lead the party' },
+        me ? icon('crown') : null, me ? `${L.slots[0]?.name ?? 'You'} (you)` : m!.name);
+      if (!open || !m) return c;
+      return h('div.pm-acts', null, c,
+        h('button.btn.small.nav', { onclick: () => { if (!confirmTwice(this.app, 'kick-' + m.peer, `Press again to remove ${m.name}`)) return; this.openMember = null; hostRoom.kick(m.peer); } }, 'REMOVE'),
+        h('button.btn.small.nav', { title: 'Remove them and keep this browser out of your parties', onclick: () => { if (!confirmTwice(this.app, 'block-' + m.peer, `Press again to remove and BLOCK ${m.name}`)) return; this.openMember = null; hostRoom.kick(m.peer, true); this.app.toast(`${m.name} is blocked`); } }, 'BLOCK'),
+        !visitor && !info.persistent ? h('button.btn.small.nav', { title: 'They lead the party; you stay in it', onclick: () => this.promote(m.peer, m.name) }, 'MAKE LEADER') : null);
+    };
+    const blocked = party.blocked();
+    el.append(...[
+      h('div.hint', null, `YOUR PARTY · ${mine.length + 1} ${mine.length ? 'PEOPLE' : 'PERSON'}${visitors.length ? ` + ${visitors.length} VISITING` : ''} · ${t.kind === 'relay-tunnel' ? 'TUNNEL' : t.kind === 'relay-cloud' ? 'ONLINE' : 'LAN'}`),
+      rname,
+      h('div.code-row', null, h('div.code', null, t.code),
+        ...t.invites.slice(1, 2).map((u) => h('div.url', { onclick: () => { navigator.clipboard?.writeText(u); this.app.toast(info.password ? 'Invite link copied — they\'ll need the password too' : 'Invite link copied'); }, title: `${u} — click to copy` }, icon('link'), ' ', u))),
+      h('div.pm-row', null, chip(null), ...mine.map((m) => chip(m))),
+      ...[...new Set(visitors.map((m) => m.party ?? ''))].map((pc) => h('div.pm-row', null, h('span.pm-lbl', null, 'VISITING'), ...visitors.filter((m) => (m.party ?? '') === pc).map((m) => chip(m)))),
+      h('div.party-btns', null, this.findBtn(),
+        h('button.btn.small.nav', { onclick: () => this.app.go('online'), title: 'Join another party, a public party, or one of your kept parties' }, 'FIND A PARTY')),
+      h('div.party-togs', null, pub, ctl, keep, pw),
+      this.editPw ? pwIn : null,
+      blocked.length ? h('div.hint.pm-blocked', { onclick: () => { this.showBlocked = !this.showBlocked; this.renderOnline(); }, style: { cursor: 'pointer' } }, `${this.showBlocked ? '▾' : '▸'} BLOCKED (${blocked.length})`) : null,
+      ...(this.showBlocked ? blocked.map((b) => h('div.pm-blk', null, h('span', null, b.name), h('button.btn.small.nav', { onclick: () => { party.unblock(b.id); this.app.toast(`${b.name} unblocked`); this.renderOnline(); } }, 'UNBLOCK'))) : []),
+      roomMusicRow(this.app, { song: L.song, by: L.songBy, canSet: true, onSet: (s, radio) => this.setRoomSong(s, (radio ? '📻 ' : '') + (L.slots[0]?.name ?? 'Host'), radio ? RADIO_HOST : null), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }),
+    ].filter(Boolean) as Node[]);
+    if (this.editPw) queueMicrotask(() => { pwIn.focus(); pwIn.select(); });
+  }
+
+  /** MAKE LEADER: they take the party over (it reopens under the same code, with them hosting); you rejoin as a member */
+  promote(peer: number, name: string) {
+    const t = hostRoom.t;
+    if (!t || !confirmTwice(this.app, 'promote-' + peer, `Press again to make ${name} the party leader`)) return;
+    promoted = peer;
+    this.dirty = true;
+    hostRoom.send('all', this.lobbySnapshot());
+    hostRoom.send('all', { t: 'promote', heir: peer });
+    const code = t.code;
+    if (hostRoom.info.password) party.pw.set(code, hostRoom.info.password);
+    setTimeout(() => {
+      if (queue.active) queue.cancel();
+      hostRoom.close();
+      L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
+      party.home = { code, leader: false };
+      this.app.toast(`${name} leads the party now`);
+      this.app.go('online', { rejoin: code, wait: 30 });
+    }, 400);
+  }
+
+  /** who takes the party over if the leader goes: the one they promoted, else the first of the party to join */
+  heir() {
+    const t = hostRoom.t;
+    if (!t) return -1;
+    if (promoted !== null && hostRoom.members.has(promoted)) return promoted;
+    for (const m of hostRoom.members.values()) if (m.party === t.code) return m.peer;
+    return -1;
+  }
+
+  backLabel() {
+    if (this.guest) return `◀ ${leaveLabel()}`;
+    return hostRoom.t ? (leadsParty() ? '◀ Leave Party' : '◀ Go Offline') : '◀ Back';
   }
 
   async openRoom(kind: 'lan' | 'tunnel' | 'cloud') {
     const el = this.onlineEl;
     const name = L.slots[0]?.name ?? 'host';
     const o = this.roomOpts;
-    const hostOpts = o.code ? { code: o.code, ...(o.key ? { key: o.key } : {}) } : {}; // (a matched room: the matchmaker's code, nobody's key)
+    const hostOpts = o.code ? { code: o.code, ...(o.key ? { key: o.key } : {}) } : {}; // (a kept party: its code and key; reopening one: its code)
     el.innerHTML = '';
-    el.append(h('div.hint', null, `Opening ${o.name || (kind === 'tunnel' ? 'Cloudflare tunnel' : kind === 'cloud' ? 'cloud room' : 'LAN room')}…`));
+    el.append(h('div.hint', null, `Going online${o.name ? ` — ${o.name}` : ''}…`));
     try {
       const t = await (kind === 'cloud' ? hostCloud(name, hostOpts) : hostLocal(name, kind === 'tunnel', hostOpts));
-      hostRoom.open(t, { name: o.name, public: o.public && t.listable, persistent: o.persistent });
+      if (!this.el?.isConnected || this.guest) { t.close(); return; }
+      promoted = null;
+      this.cfgSent.clear();
+      hostRoom.open(t, { name: o.name, public: o.public && t.listable, persistent: o.persistent, password: o.password ?? '' });
       hostRoom.openControl = !!o.openControl;
+      if (o.password) party.pw.set(t.code, o.password);
+      party.home = { code: t.code, leader: true, opts: currentRoomOpts() };
+      this.roomOpts = { name: '', public: false, persistent: false };
       this.pushSummary();
-      this.app.toast(`${o.name || 'Room'} ${t.code} open${hostRoom.info.public ? ' · listed in Public Rooms' : ''} — share the code!`);
+      if (!this.takeover) this.app.toast(`Your party ${t.code} is online — share the code!`);
+      this.takeover = false;
       if (this.findAfterOpen) { this.findAfterOpen = false; this.findPlayers(); }
     } catch (e) {
       const msg = String((e as Error).message || e);
-      this.app.toast(msg === 'room already hosted' ? `${o.code ?? 'This room'} is already open (another tab or device?) — join it from ONLINE instead` : msg);
+      if (this.takeover && o.code) { this.takeover = false; this.app.go('online', { rejoin: o.code, wait: 30 }); return; } // (someone else took the party over first: join them)
+      this.app.toast(msg === 'room already hosted' ? `${o.code ?? 'This party'} is already open (another tab or device?) — join it from FIND A PARTY instead` : msg);
     }
     this.renderOnline();
   }
+  /** opening the party because its leader left and I'm next */
+  takeover = false;
 
   /** keep the public listing / saved room in step with the lobby */
   pushSummary() {
@@ -1033,14 +1229,16 @@ export class LobbyScreen implements Screen {
     hostRoom.setSummary({ host: L.slots[0]?.name ?? 'Host', mode: L.mode, modeName: m.name, arena: findArena(L.arenaId).name, players, max: m.maxPlayers });
     if (hostRoom.info.persistent) {
       const saved = findMyRoom(hostRoom.t.code);
-      if (saved) saveMyRoom({ ...saved, name: hostRoom.info.name || saved.name, public: hostRoom.info.public, openControl: hostRoom.openControl, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
+      if (saved) saveMyRoom({ ...saved, name: hostRoom.info.name || saved.name, public: hostRoom.info.public, openControl: L.stash ? L.stash.ctl : hostRoom.openControl, password: hostRoom.info.password, mode: L.mode, arenaId: L.arenaId, lastUsed: Date.now() });
     }
   }
 
   lobbySnapshot() {
     const arena = findArena(L.arenaId);
     return {
-      t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, mode: L.mode, arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
+      t: 'lobby', roomName: hostRoom.info.name, public: hostRoom.info.public, persistent: hostRoom.info.persistent, locked: !!hostRoom.info.password, mode: L.mode,
+      heir: this.heir(), searching: queue.active ? queue.waited() : '', matchFound: pendingMatch.cur ? pendingMatch.cur.expect : 0,
+      members: (() => { const code = hostRoom.t?.code, grps: string[] = []; return [...hostRoom.members.values()].map((m) => { const g = m.party === code || !m.party ? 0 : (grps.indexOf(m.party) + 1 || grps.push(m.party)); return { peer: m.peer, name: m.name, mine: g === 0, grp: g }; }); })(), arena: arena.name, arenaId: arena.id, arenaDef: arena.custom ? arena : undefined, arenaDesc: arena.desc, size: SIZE_LABEL[arenaSize(arena)], sizeFilter: L.sizeFilter === 'ALL' ? 'ALL' : SIZE_LABEL[L.sizeFilter],
       startIn: pendingMatch.cur && !hostRoom.inMatch ? this.lastLeft : undefined,
       teamSplit: L.teamSplit,
       items: L.items, target: L.target, time: L.time, nudge: L.nudge, kothShare: L.kothShare, rubber: L.rubber, control: hostRoom.openControl ? 'all' : 'host', leader: L.slots[0]?.name ?? 'Host', song: L.song, songBy: L.songBy, radioBy: L.radioBy,
@@ -1090,22 +1288,28 @@ export class LobbyScreen implements Screen {
 
   leave() {
     if (this.guest) {
-      const member = party.inParty && !party.leads;
-      if (!confirmTwice(this.app, 'leave-room', member ? `Press again to leave the room — and ${party.leaderName}'s party` : 'Press again to leave the room')) return;
-      if (member) party.leave();
-      clientRoom.leave();
-      this.app.toast('Left the room — Rejoin from Online to come back');
-      this.app.go('online');
+      const label = leaveLabel();
+      if (!confirmTwice(this.app, 'leave-room', label === 'Leave Party' ? 'Press again to leave the party' : 'Press again to take your party back home')) return;
+      leaveRoom(this.app);
       return;
     }
     if (this.joining) { this.toggleJoin(); return; } // (Esc cancels join mode first)
     if (testRide.from && !hostRoom.t) { this.app.go(testRide.from); return; } // test ride: back to the editor
     if (hostRoom.t) {
-      if (!confirmTwice(this.app, 'close-room', `Room ${hostRoom.t.code} is open — press again to CLOSE it for everyone`)) return;
-      if (queue.ticket?.room === hostRoom.t.code) queue.cancel();
+      const others = leadsParty();
+      const heir = [...hostRoom.members.values()].find((m) => m.peer === this.heir());
+      if (others && !confirmTwice(this.app, 'close-room', `Press again to leave your party — ${heir?.name ?? 'the next member'} will lead it`)) return;
+      if (queue.active) queue.cancel();
       pendingMatch.cur = null;
+      restoreStash();
       hostRoom.close();
+      party.home = null;
       L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
+      this.fillCpus();
+      if (others) { this.app.go('menu'); return; }
+      this.app.toast('Offline — back to your own lobby');
+      this.renderSlots(); this.renderOnline(); this.refresh();
+      return;
     }
     this.app.go('menu');
   }
@@ -1119,26 +1323,44 @@ export class LobbyScreen implements Screen {
       return h('button.btn.small.nav.qm-searching', { onclick: () => queue.cancel(), title: 'Searching for players for this mode — click to stop' },
         `SEARCHING ${queue.waited()}${st ? ` · ${st.modes[L.mode] ?? 0} queued` : ''} · CANCEL`);
     }
-    return h('button.btn.small.primary.nav', { onclick: () => this.findPlayers(), title: 'Quick match: find players online for this mode — they join this room' }, icon('bolt'), ' FIND PLAYERS');
+    return h('button.btn.small.primary.nav', { onclick: () => this.findPlayers(), title: 'Quick match: find players online for this mode. Your party plays together (your CPUs stay here)' }, icon('bolt'), ` QUICK MATCH · ${this.mode.name.toUpperCase()}`);
   }
 
-  /** a guest's room box: the room, its invite link, its music, and leaving */
+  /** a guest's party box: whose party (or the room you're visiting with your party), who's in it, the search, the music */
   renderGuestBox() {
     const el = this.onlineEl, lb = clientRoom.lobby, t = clientRoom.t;
     if (!el) return;
+    if (this.ui) this.ui.back.textContent = this.backLabel();
     el.innerHTML = '';
     if (!t) return;
     const link = publicJoinInput(t.code);
     const song = lb?.song ? acceptSong(lb.song) : null;
     const watching = lb && !L.slots.some((s) => s.mine);
+    const away = party.away(t.code);
+    const leader = String(lb?.leader ?? 'the leader');
+    const members = (lb?.members ?? []) as { peer: number; name: string; mine: boolean; grp?: number }[];
+    const chip = (name: string, cls: string, ic?: string, title = '') => h('div.pm-chip' + cls, { title }, ic ? icon(ic) : null, name);
+    const mem = (m: (typeof members)[number]) => chip(m.peer === t.id ? `${m.name} (you)` : m.name, m.peer === t.id ? '.me' : '', m.peer === lb.heir ? 'star' : undefined, m.peer === lb.heir ? 'Leads the party if the leader leaves' : '');
+    const myGrp = members.find((m) => m.peer === t.id)?.grp ?? 0;
+    const grps = [...new Set(members.map((m) => m.grp ?? 0))].filter((g) => g > 0);
     el.append(...([
-      h('div.hint', null, `${lb?.roomName ? String(lb.roomName).toUpperCase() : 'ONLINE ROOM'} · ${lb ? (this.canCtl ? 'OPEN CONTROL' : `LED BY ${String(lb.leader).toUpperCase()}`) : 'CONNECTING…'}`),
+      h('div.hint', null, away
+        ? `VISITING ${lb?.roomName ? String(lb.roomName).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} WITH YOUR PARTY`
+        : `${lb?.roomName ? String(lb.roomName).toUpperCase() : `${leader.toUpperCase()}'S PARTY`} · ${lb ? (this.canCtl ? 'SHARED CONTROL' : `${leader.toUpperCase()} LEADS`) : 'CONNECTING…'}`),
       h('div.code-row', null, h('div.code', null, t.code),
-        h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast('Invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
-      watching ? h('div.hint', { style: { color: 'var(--gold)' } }, clientRoom.busy ? 'A match is on — you\'ll join the next one' : 'Room full for this mode — you\'ll play when a place frees up') : null,
+        h('div.url', { onclick: () => { navigator.clipboard?.writeText(link); this.app.toast(lb?.locked ? 'Invite link copied — they\'ll need the password too' : 'Invite link copied'); }, title: `${link} — click to copy` }, icon('link'), ' ', link)),
+      lb ? h('div.pm-row', null, chip(leader, '', 'crown', 'Party leader'), ...members.filter((m) => !m.grp).map(mem)) : null,
+      ...(lb ? grps.map((g) => h('div.pm-row', null, h('span.pm-lbl', null, g === myGrp ? 'YOUR PARTY' : 'VISITING'), ...members.filter((m) => m.grp === g).map(mem))) : []),
+      lb?.matchFound ? h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${lb.matchFound})`)
+        : lb?.searching ? (this.canCtl
+          ? h('button.btn.small.nav.qm-searching', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }) }, `SEARCHING ${lb.searching} · CANCEL`)
+          : h('div.hint', { style: { color: 'var(--gold)' } }, `QUICK MATCH — searching ${lb.searching}`))
+        : this.canCtl && !away ? h('button.btn.small.primary.nav', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }), title: 'Quick match: the whole party plays together' }, icon('bolt'), ` QUICK MATCH · ${this.mode.name.toUpperCase()}`) : null,
+      away ? h('div.hint', null, party.home?.leader ? 'You lead your party here — ◀ BACK TO YOUR PARTY takes everyone home.' : 'Your party leader decides when you all go home.') : null,
+      watching ? h('div.hint', { style: { color: 'var(--gold)' } }, clientRoom.busy ? 'A match is on — you\'ll join the next one' : 'Full for this mode — you\'ll play when a place frees up') : null,
       clientRoom.busy && !watching ? h('div.hint', { style: { color: 'var(--gold)' } }, 'A match is on — you\'ll join the next one') : null,
       lb ? roomMusicRow(this.app, { song, by: lb.songBy, canSet: this.canCtl, onSet: (s, radio) => clientRoom.send({ t: 'ctl', a: 'song', song: s, radio }), onCopied: () => this.renderOnline(), onRadio: () => this.renderOnline() }) : null,
-    ].filter(Boolean) as Node[])); // (leaving: the ◀ LEAVE ROOM button, top left)
+    ].filter(Boolean) as Node[])); // (leaving: the ◀ button, top left)
   }
 
   update(dt: number) {
@@ -1168,25 +1390,19 @@ export class LobbyScreen implements Screen {
   }
 
   /** the queue changed (searching, status, cancelled): the room box shows it */
-  onQueue = () => { if (!this.guest) this.renderOnline(); };
+  onQueue = () => { if (!this.guest) { this.renderOnline(); this.dirty = true; } };
 
   /** QUICK MATCH for the whole room: everyone here (players and online guests) queues for this mode together */
   findPlayers() {
     if (!hostRoom.t) { this.findAfterOpen = true; this.openRoom(getPlatform() && !cloudRelayUrl() ? 'lan' : 'cloud'); return; }
-    queue.start({ modes: [L.mode], size: Math.max(1, L.slots.filter((s) => s.ctrl.type !== 'cpu').length), room: hostRoom.t.code, name: L.slots[0]?.name ?? settings.playerName });
+    queue.start({ modes: [L.mode], size: Math.max(1, L.slots.filter((s) => s.ctrl.type !== 'cpu').length + [...hostRoom.members.keys()].filter((p) => !L.slots.some((s) => s.ctrl.type === 'remote' && s.ctrl.peer === p)).length), room: hostRoom.t.code, name: L.slots[0]?.name ?? settings.playerName });
+    this.dirty = true;
   }
   findAfterOpen = false;
   private lastLeft = -1;
 
-  /** our room was matched into another room: send the guests there, close this room and follow them */
-  travelTo(code: string) {
-    hostRoom.send('all', { t: 'travel', code });
-    setTimeout(() => {
-      hostRoom.close();
-      L.slots = L.slots.filter((s) => s.ctrl.type !== 'remote');
-      this.app.go('online', { match: code });
-    }, 700);
-  }
+  /** our party was matched into another party's room: we all go there (and come home together afterwards) */
+  travelTo(code: string) { partyTravel(this.app, code, 'match'); }
 
   /** a matched room: start once everyone's in (a short countdown), or when the wait runs out (CPUs fill in) */
   matchCountdown() {
@@ -1208,7 +1424,7 @@ export class LobbyScreen implements Screen {
     if (this.guest) {
       // (your own lobby comes back as you left it)
       try { Object.assign(L, JSON.parse(this.guestBackup)); } catch { /* ignore */ }
-      clientRoom.handler = null; clientRoom.closeHandler = null;
+      clientRoom.handler = null;
       this.guest = false;
       this.el.remove();
       return;

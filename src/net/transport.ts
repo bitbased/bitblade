@@ -28,6 +28,8 @@ export interface RoomListing {
   players: number; max: number; inMatch: boolean; persistent: boolean;
   /** anyone in the room can change mode / arena and start */
   openControl?: boolean;
+  /** a password is needed to join */
+  locked?: boolean;
 }
 
 /** a public room as returned by the directory */

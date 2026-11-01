@@ -754,7 +754,7 @@ body.hints-on .music-chip { bottom: 56px; }
 }
 /* (in a room the cards share the row with the room box: as many columns as fit, names never cut) */
 @media (orientation: landscape) { .lobby.in-room .lobby-mid > .slots { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)) !important; } }
-.lobby.in-room .lobby-mid { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
+@media (orientation: landscape) { .lobby.in-room .lobby-mid { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); } }
 /* (5+ blades beside the room box: four to a row so two rows fit — long names end in … rather than scrolling) */
 @media (orientation: landscape) { .lobby.in-room .lobby-mid > .slots.many { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; } }
 .lobby .slots.many .slot .pname, .lobby .slots.many .slot .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -778,19 +778,25 @@ body.hints-on .music-chip { bottom: 56px; }
 .qm-searching { border-color: var(--gold) !important; color: var(--gold) !important; }
 
 /* Online: your party */
-.party-box { display: flex; flex-direction: column; gap: 8px; }
-.party-member { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.3); }
-.party-member b { font-family: var(--font-h); letter-spacing: 0.05em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.party-member .pm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); flex: none; }
-.party-member.me { border-color: var(--accent); }
-.party-member .pm-tag { font-family: var(--font-h); font-size: 10px; letter-spacing: 0.12em; color: var(--muted); }
-.party-member .pm-tag.lead { color: var(--gold); }
-.party-member .pm-kick { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px; }
-.party-member .pm-kick:hover { color: var(--red); }
-.party-box .code-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.party-box .code { font-family: var(--font-h); font-size: 24px; letter-spacing: 0.22em; color: var(--gold); text-shadow: 0 0 14px rgba(255, 210, 58, 0.6); flex: none; }
-.party-box .url { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--accent); cursor: pointer; }
-.party-follow { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--gold); background: rgba(255, 210, 58, 0.06); }
-.party-following { font-family: var(--font-h); letter-spacing: 0.1em; color: var(--gold); font-size: 15px; }
 .play-inner { display: flex; flex-direction: column; gap: 10px; }
 .play-inner h3, .online .panel h3 { display: flex; align-items: center; gap: 6px; }
+
+/* the party box (lobby): members as chips, the buttons, the toggles */
+.online-box .pm-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.pm-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; font-family: var(--font-h); font-size: 11px; letter-spacing: 0.06em; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.35); color: var(--text); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-chip svg { width: 12px; height: 12px; color: var(--gold); flex: none; }
+.pm-chip.me { border-color: var(--accent); color: var(--accent); cursor: default; }
+.pm-chip.visitor { border-style: dashed; }
+.pm-lbl { font-family: var(--font-h); font-size: 9px; letter-spacing: 0.14em; color: var(--muted); align-self: center; margin-right: 2px; }
+.pm-chip.open { border-color: var(--gold); }
+.pm-chip small { font-size: 9px; color: var(--muted); }
+.pm-acts { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 2px; border: 1px solid var(--gold); }
+.pm-acts .btn.small { padding: 3px 7px; font-size: 10px; }
+.online-box .party-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.online-box .party-togs { display: flex; gap: 6px; flex-wrap: wrap; }
+.online-box .party-togs .toggle { padding: 5px 8px; font-size: 11px; }
+.online-box .party-togs .toggle svg { width: 11px; height: 11px; }
+.pm-blk { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--muted); }
+.pm-blk .btn.small { padding: 2px 6px; font-size: 10px; }
+.online-status { display: flex; flex-direction: column; gap: 6px; }
+.field.need input { border-color: var(--gold); box-shadow: 0 0 10px rgba(255, 210, 58, 0.35); }

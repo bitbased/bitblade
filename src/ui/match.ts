@@ -9,6 +9,7 @@ import { Input, TouchControls } from '../input/input';
 import type { Control, ControllerSpec, GameEvent, GameState, MatchConfig } from '../game/types';
 import type { ClientTransport, HostTransport } from '../net/transport';
 import { setBackdropVisible } from './backdrop';
+import { leaveLabel, leaveRoom } from './partyFlow';
 import { clientRoom, hostRoom } from '../net/room';
 import { acceptSong, onRoomSong, RADIO_HOST, roomSongHost } from './roomMusic';
 import { editorName, testRide } from './testRide';
@@ -88,14 +89,6 @@ export class MatchScreen implements Screen {
       this.net = new NetClient(cfg, this.arg.client.mine);
       this.state = this.net.latest;
       clientRoom.handler = (m) => this.onHostMsg(m);
-      clientRoom.closeHandler = (r) => {
-        if (this.ended) return;
-        this.ended = true;
-        app.toast(`Disconnected: ${r}`);
-        // the host dropped: wait in the online hub and rejoin automatically if the room comes back
-        if (r === 'Host left' && clientRoom.lastJoin) app.go('online', { rejoin: clientRoom.lastJoin });
-        else app.go('menu');
-      };
     } else {
       this.sim = new Sim(cfg);
       this.state = this.sim.s;
@@ -373,13 +366,12 @@ export class MatchScreen implements Screen {
       if (this.arg.host) {
         buttons = [
           h('button.btn.nav', { onclick: () => this.hostRestart() }, 'Restart Match — everyone'),
-          h('button.btn.nav', { onclick: () => this.quit() }, 'Back to Room Lobby — change track / players'),
-          h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) this.closeRoomAndQuit(); } }, 'Close Room & Quit'),
+          h('button.btn.nav', { onclick: () => this.quit() }, 'Back to Party Lobby — change track / players'),
         ];
       } else if (this.arg.client) {
         buttons = [
-          h('button.btn.nav', { onclick: () => this.leaveMatchStayInRoom() }, 'Leave Match — stay in room'),
-          h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) this.quit(); } }, 'Leave Room'),
+          h('button.btn.nav', { onclick: () => this.leaveMatchStayInRoom() }, 'Leave Match — stay in the lobby'),
+          h('button.btn.nav', { onclick: () => { if (confirmTwice(this.app, 'leave-room', `Press again: ${leaveLabel()}`)) this.quit(); } }, leaveLabel()),
         ];
       } else {
         buttons = [
@@ -429,13 +421,6 @@ export class MatchScreen implements Screen {
     this.app.go('online', { resume: true });
   }
 
-  closeRoomAndQuit() {
-    this.ended = true;
-    hostRoom.send('all', { t: 'end' });
-    hostRoom.close();
-    this.app.go('menu');
-  }
-
   quit() {
     this.ended = true;
     if (this.arg.host) {
@@ -445,7 +430,7 @@ export class MatchScreen implements Screen {
       this.app.go('lobby', { keep: true });
       return;
     }
-    if (this.arg.client) clientRoom.leave();
+    if (this.arg.client) { leaveRoom(this.app); return; }
     this.app.go('menu');
   }
 
@@ -468,6 +453,6 @@ export class MatchScreen implements Screen {
     this.view.dispose();
     this.unsubRoom?.();
     if (this.arg.host) { hostRoom.onInput = null; hostRoom.onQuitMatch = null; }
-    if (this.arg.client) { clientRoom.handler = null; clientRoom.closeHandler = null; }
+    if (this.arg.client) clientRoom.handler = null;
   }
 }

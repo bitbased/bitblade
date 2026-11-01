@@ -203,7 +203,7 @@ export class Directory {
     if (url.pathname === "/upsert") {
       await this.state.storage.put("r:" + code, {
         code, name: clip(b.name, 32), host: clip(b.host, 16), mode: clip(b.mode, 12), modeName: clip(b.modeName, 24), arena: clip(b.arena, 32),
-        players: num(b.players, 16), max: num(b.max, 16), clients: num(b.clients, 64), inMatch: !!b.inMatch, persistent: !!b.persistent, openControl: !!b.openControl, updated: Date.now(),
+        players: num(b.players, 16), max: num(b.max, 16), clients: num(b.clients, 64), inMatch: !!b.inMatch, persistent: !!b.persistent, openControl: !!b.openControl, locked: !!b.locked, updated: Date.now(),
       });
       return new Response("ok");
     }

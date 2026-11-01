@@ -11,6 +11,7 @@ import { TEAM_COLORS } from './hud';
 import { setBackdropVisible, unpinBackdrop } from './backdrop';
 import { Input } from '../input/input';
 import { settings } from '../core/settings';
+import { goOnline, leaveLabel, leaveRoom } from './partyFlow';
 import { clientRoom, hostRoom } from '../net/room';
 import { editorName, testRide } from './testRide';
 import { icon } from './icons';
@@ -141,7 +142,7 @@ export class MainMenu extends Base {
         h('div.menu-logo', null, 'BITBLADE'),
         session ? item('CONTINUE', `${session.mode} · ${session.arena} · ${session.humans}P${session.total > session.humans ? ` + ${session.total - session.humans} CPU` : ''}`, () => this.app.go('lobby', { keep: true })) : null,
         item(session ? 'NEW GAME' : 'PLAY', 'Local battles · up to 8 players · CPUs', () => this.app.go('modes')),
-        item('ONLINE', 'Host a room or join with a code / link', () => this.app.go('online')),
+        item('ONLINE', 'Your party: play with friends, quick match, or join a party', () => goOnline(this.app)),
         item('BLADE FORGE', 'Design, paint and tune your blades', () => this.app.go('blades')),
         item('COURSE BUILDER', 'Connect skate pools into custom courses', () => this.app.go('courses')),
         item('TRACK STUDIO', 'Build race tracks and track adventures from segments', () => this.app.go('tracks')),
@@ -187,7 +188,6 @@ export class Results extends Base {
         if (m?.t === 'start' && clientRoom.t) this.app.go('match', { cfg: m.cfg, client: { t: clientRoom.t, mine: m.mine } });
         else if (m?.t === 'lobby') this.app.go('lobby', { guest: true });
       };
-      clientRoom.closeHandler = (r) => { this.app.toast(`Room closed: ${r}`); this.app.go('menu'); };
     }
     const w = state.winner;
     const isG = cfg.mode === 'gauntlet' || cfg.mode === 'quest';
@@ -238,15 +238,15 @@ export class Results extends Base {
       h('div.screen-sub', null, state.lastFinish),
       h('table.res-table', null, h('tr', null, ...head.map((x) => h('th', null, x))), ...rows),
       online === 'client'
-        ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the room shortly — the room leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', 'Press again to leave the room')) return; clientRoom.leave(); this.app.go('menu'); } }, 'Leave Room'))
+        ? h('div.lobby-bottom', null, h('div.hint', null, 'Back to the lobby shortly — the leader picks the next match…'), h('button.btn.nav', { onclick: () => { if (!confirmTwice(this.app, 'leave-room', `Press again: ${leaveLabel()}`)) return; leaveRoom(this.app); } }, leaveLabel()))
         : h('div.lobby-bottom', null,
           // rematch / next go back through the lobby so a host's room follows along (and newcomers get slotted in)
           h('button.btn.primary.nav', { onclick: () => (again ? this.app.go('match', again) : this.app.go('lobby', { keep: true, autostart: true })) }, online === 'host' ? '↻ Rematch — everyone' : '↻ Rematch'),
           h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true, next: true, autostart: true }) }, cfg.arena.track ? 'Next Track ▶' : 'Next Arena ▶'),
-          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? 'Room Lobby — change track / players' : 'Lobby — change track / players'),
+          h('button.btn.nav', { onclick: () => this.app.go('lobby', { keep: true }) }, online === 'host' ? 'Party Lobby — change track / players' : 'Lobby — change track / players'),
           online === 'host' ? (this.autoEl = h('div.hint', null, '')) : null,
           testRide.from && !online ? h('button.btn.nav', { onclick: () => this.app.go(testRide.from!) }, `◀ Back to ${editorName()}`) : null,
-          h('button.btn.nav', { onclick: () => { if (online === 'host') { if (!confirmTwice(this.app, 'close-room', 'Press again to close the room for everyone')) return; hostRoom.close(); } this.app.go('menu'); } }, online === 'host' ? 'Close Room' : 'Main Menu')),
+          h('button.btn.nav', { onclick: () => this.app.go(online === 'host' ? 'lobby' : 'menu', online === 'host' ? { keep: true } : undefined) }, online === 'host' ? 'Party Lobby' : 'Main Menu')),
     );
   }
   online?: 'host' | 'client';
@@ -262,7 +262,7 @@ export class Results extends Base {
   }
   unmount() {
     super.unmount();
-    if (this.online === 'client') { clientRoom.handler = null; clientRoom.closeHandler = null; }
+    if (this.online === 'client') clientRoom.handler = null;
   }
   // Esc / B from results: back to the lobby (the host's room stays open), never straight out
   onBack() { if (this.online !== 'client') this.app.go('lobby', { keep: true }); }
