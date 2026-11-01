@@ -1,5 +1,6 @@
 // Local + online-host lobby: player slots (+ PLAYER: press any device to join · + CPU), blades, teams, arena, rules,
 // invite codes. A player's input only changes on their card's input selector (or when they join).
+import { safeColor } from '../core/safe';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { glyph } from './nav';
 import { allBlades, computeStats, findBlade, PRESETS, STAT_INFO, STAT_KEYS, type BladeDesign } from '../core/blade';
@@ -634,7 +635,7 @@ export class LobbyScreen implements Screen {
     c.el.classList.toggle('mine', !!s.mine);
     c.el.classList.toggle('ghost', !!s.auto);
     c.el.title = s.auto ? 'Auto CPU: plays if nobody joins — + PLAYER takes this place, + CPU (or picking its difficulty) keeps it' : '';
-    c.el.style.setProperty('--slot', this.slotColor(s, i));
+    c.el.style.setProperty('--slot', safeColor(this.slotColor(s, i)));
     c.pnum.textContent = `P${i + 1}`;
     c.team.style.display = this.isTeamMode() ? '' : 'none';
     c.team.innerHTML = (s.team === 0 ? 'RED' : 'BLUE') + (s.teamLock ? '' : '<span class="tauto"> · AUTO</span>');

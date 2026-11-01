@@ -1,4 +1,5 @@
 // Title, main menu, mode select, results and settings screens.
+import { safeColor } from '../core/safe';
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
 import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
@@ -215,7 +216,7 @@ export class Results extends Base {
     const wc = w >= 0 ? (cfg.mode === 'tag' || cfg.mode === 'ctf' ? TEAM_COLORS[w] : cfg.players.find((p) => p.team === w)?.blade.glow) : '#fff';
     const banner = isG ? (w === 0 ? (cfg.mode === 'quest' ? 'QUEST CLEAR!' : 'GAUNTLET CLEAR!') : (cfg.mode === 'quest' ? 'QUEST FAILED' : 'GAUNTLET FAILED')) : w === -2 ? 'DRAW!' : w >= 0 ? `${teamName(w)} WINS!` : 'MATCH OVER';
     const banner2 = h('div.res-banner', null, banner);
-    banner2.style.setProperty('--wc', wc ?? '#fff');
+    banner2.style.setProperty('--wc', safeColor(wc));
     if (w >= 0) this.app.sfx.play('win');
     // columns depend on the mode: timed modes show finish times, collect modes show what you collected
     const t0 = state.t0 ?? 0;

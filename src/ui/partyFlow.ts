@@ -1,6 +1,7 @@
 // Where a party goes, from whatever screen is up: open your party (ONLINE), join one, visit a room together (a quick
 // match, a friend's party), come home, and carry on when the leader leaves (the next member takes the party over).
 // The lobby shows the party; this is the plumbing between rooms. main.ts wires clientRoom.onParty / onLost here.
+import { isPartyCode } from '../core/safe';
 import type { App } from './app';
 import { allBlades, findBlade } from '../core/blade';
 import { settings } from '../core/settings';
@@ -115,13 +116,13 @@ export function leaveLabel() {
 
 /** party traffic, whatever screen is showing */
 export function onPartyMsg(app: App, m: any) {
-  if (m.t === 'travel' && typeof m.code === 'string') {
+  if (m.t === 'travel' && isPartyCode(m.code)) {
     // the leader's taking the party somewhere (a match, a friend's party): go too
     if (typeof m.pw === 'string' && m.pw) party.pw.set(m.code, m.pw);
     clientRoom.leave();
     app.toast(m.why === 'match' ? 'Match found — your party is heading there' : 'Your party is heading to another room');
     app.go('online', { match: m.code });
-  } else if (m.t === 'gohome' && typeof m.code === 'string') {
+  } else if (m.t === 'gohome' && isPartyCode(m.code)) {
     clientRoom.leave();
     app.toast('Back to your party');
     app.go('online', { rejoin: m.code, wait: 30 });

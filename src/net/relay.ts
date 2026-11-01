@@ -3,7 +3,16 @@
 import { party } from "./party";
 
 /** this browser's id rides along on every connection (the server can turn a banned browser away) */
-const devQ = () => `&dev=${encodeURIComponent(party.deviceId)}`;
+/** the private browser id (bans / whitelist) — only ever sent to this game's own server, never to one an invite named */
+const devQ = (wsBase: string) => (ownServer(wsBase) ? `&dev=${encodeURIComponent(party.deviceId)}` : "");
+function ownServer(wsBase: string) {
+  try {
+    const host = new URL(wsBase.replace(/^ws/, "http")).host;
+    if (typeof location !== "undefined" && /^https?:$/.test(location.protocol)) return host === location.host;
+    const env = (import.meta as any).env?.VITE_CLOUD_RELAY as string | undefined;
+    return !!env && host === new URL(env).host;
+  } catch { return false; }
+}
 
 export type RelayRole = "host" | "client";
 
@@ -61,12 +70,12 @@ export class RelayClient {
   static host(wsBase: string, name = "host", opts: { code?: string; key?: string } = {}): Promise<RelayClient> {
     const code = opts.code ? encodeURIComponent(opts.code.toUpperCase()) : "new";
     const key = opts.key ? `&key=${encodeURIComponent(opts.key)}` : "";
-    const c = new RelayClient(wsBase, `/room/${code}?role=host&name=${encodeURIComponent(name)}${key}${devQ()}`, "host");
+    const c = new RelayClient(wsBase, `/room/${code}?role=host&name=${encodeURIComponent(name)}${key}${devQ(wsBase)}`, "host");
     return c.ready();
   }
 
   static join(wsBase: string, code: string, name: string): Promise<RelayClient> {
-    const c = new RelayClient(wsBase, `/room/${encodeURIComponent(code.toUpperCase())}?role=client&name=${encodeURIComponent(name)}${devQ()}`, "client");
+    const c = new RelayClient(wsBase, `/room/${encodeURIComponent(code.toUpperCase())}?role=client&name=${encodeURIComponent(name)}${devQ(wsBase)}`, "client");
     return c.ready();
   }
 
@@ -141,6 +150,10 @@ export function parseJoinInput(input: string): { wsBase: string; code: string } 
   const parts = url.pathname.split("/").filter(Boolean);
   const code = parts[parts.length - 1] ?? "";
   if (!CODE_RE.test(code)) throw new Error("No party code in that — codes are 4-10 letters / digits, like K7QM2");
+  // (the web game joins parties on its own server only: a link naming another server would hand this page to
+  //  whoever runs that server. The desktop app and dev still join LAN / tunnel hosts by link.)
+  const web = typeof location !== "undefined" && /^https?:$/.test(location.protocol);
+  if (web && !(import.meta as any).env?.DEV && url.host !== location.host) return { wsBase: defaultWsBase(), code: code.toUpperCase() };
   const secure = url.protocol === "https:" || url.protocol === "wss:";
   return { wsBase: `${secure ? "wss" : "ws"}://${url.host}`, code: code.toUpperCase() };
 }

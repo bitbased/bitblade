@@ -1,4 +1,5 @@
 // In-match HUD: timer, scores, per-player cards, announcer, countdown.
+import { num, safeColor } from '../core/safe';
 import { h } from './app';
 import { ITEMS, MODES, type GameState, type MatchConfig } from '../game/types';
 import { CONTROL_HELP } from '../input/input';
@@ -48,7 +49,7 @@ export class Hud {
     };
     this.obj.textContent = objText[cfg.mode];
     cfg.players.forEach((p, i) => {
-      const c = cfg.mode === 'tag' || cfg.mode === 'ctf' ? this.teamColor(p.team) : p.blade.glow;
+      const c = cfg.mode === 'tag' || cfg.mode === 'ctf' ? this.teamColor(p.team) : safeColor(p.blade.glow);
       const spin = h('i'), burst = h('i'), spI = h('i');
       const spBar = h('div.bar.sp.thin', null, spI);
       const item = h('div.item');
@@ -73,7 +74,7 @@ export class Hud {
     this.vps = ids.slice(0, 4).map((id, k) => {
       const tag = h('div.split-tag'), wrong = h('div.vp-wrong');
       const el = h('div.split-vp.vp-' + pos[k], null, tag, wrong);
-      el.style.setProperty('--c', this.cfg.players[id].blade.glow);
+      el.style.setProperty('--c', safeColor(this.cfg.players[id].blade.glow));
       const card = this.cardEls[id]?.el;
       if (card) el.append(card);
       this.root.append(el);
@@ -128,7 +129,7 @@ export class Hud {
       const a = this.annQueue.shift()!;
       this.ann.innerHTML = '';
       const t = h('div.a-text', null, a.text);
-      if (a.color) t.style.setProperty('--ac', a.color);
+      if (a.color) t.style.setProperty('--ac', safeColor(a.color));
       this.ann.append(t);
       if (a.sub) this.ann.append(h('div.a-sub', null, a.sub));
       this.annT = this.annQueue.length ? 0.9 : 1.6;
@@ -151,7 +152,7 @@ export class Hud {
     if (s.phase === 'launch') setText(this.hint, s.phaseT < 3 ? (this.cfg.mode === 'pinball' ? 'HOLD ↓ TO PULL THE PLUNGER — LET GO TO FIRE' : 'PRESS DASH WHEN THE RING IS GREEN!') : '');
     if (this.standings) {
       const order = s.tops.map((t, i) => ({ t, i })).sort((a, b) => (a.t.place || 99) - (b.t.place || 99));
-      const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${this.cfg.players[i].blade.glow}"><span>${t.place || '-'}</span>${esc(clean(this.cfg.players[i].name))}<em>${t.finishT >= 0 ? 'FIN' : `L${Math.min(t.lap + 1, this.cfg.target)}`}</em></div>`).join('');
+      const html = '<b>STANDINGS</b>' + order.map(({ t, i }) => `<div style="--c:${safeColor(this.cfg.players[i].blade.glow)}"><span>${num(t.place) || '-'}</span>${esc(clean(this.cfg.players[i].name))}<em>${num(t.finishT) >= 0 ? 'FIN' : `L${Math.min(num(t.lap) + 1, num(this.cfg.target))}`}</em></div>`).join('');
       if (this.standings.dataset.h !== html) { this.standings.dataset.h = html; this.standings.innerHTML = html; }
     }
     s.tops.forEach((t, i) => {
@@ -170,16 +171,17 @@ export class Hud {
       const ik = t.roll > 0 ? Object.values(ITEMS)[Math.floor(s.t * 14) % Object.keys(ITEMS).length] : it;
       if (ik && c.item.dataset.k !== ik.icon) { c.item.dataset.k = ik.icon; c.item.innerHTML = iconSvg(ik.icon); c.item.style.color = ik.color; }
       const bits: string[] = [];
-      if (this.cfg.mode === 'rush') bits.push(`${iconSvg('gem')} ${t.crystals}`);
-      if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') bits.push(`${iconSvg('heart')} ${t.lives}`, `${iconSvg('diamond')} ${t.score}`);
+      // (the leader's snapshot fills these, and they go in as HTML: numbers only — see core/safe.ts)
+      if (this.cfg.mode === 'rush') bits.push(`${iconSvg('gem')} ${num(t.crystals)}`);
+      if (this.cfg.mode === 'gauntlet' || this.cfg.mode === 'quest') bits.push(`${iconSvg('heart')} ${num(t.lives)}`, `${iconSvg('diamond')} ${num(t.score)}`);
       if (this.cfg.mode === 'pinball' && !t.extra) {
-        const tilt = s.pin?.tilted ? '<b style="color:#ff3b4a">TILT</b>' : s.pin && s.pin.tilt > 0.25 ? `tilt <b style="color:${s.pin.tilt > 0.7 ? '#ff3b4a' : '#ffd23a'}">${'▮'.repeat(Math.ceil(s.pin.tilt * 5))}</b>` : '';
-        bits.push(`${iconSvg('target')} ${(s.teamScores[t.team] | 0).toLocaleString()}`, `BALL ${Math.min(3, 4 - t.lives)}/3`, ...(tilt ? [tilt] : []));
+        const tilt = s.pin?.tilted ? '<b style="color:#ff3b4a">TILT</b>' : s.pin && s.pin.tilt > 0.25 ? `tilt <b style="color:${s.pin.tilt > 0.7 ? '#ff3b4a' : '#ffd23a'}">${'▮'.repeat(Math.max(0, Math.min(5, Math.ceil(num(s.pin.tilt * 5)))))}</b>` : '';
+        bits.push(`${iconSvg('target')} ${(s.teamScores[t.team] | 0).toLocaleString()}`, `BALL ${Math.min(3, 4 - num(t.lives))}/3`, ...(tilt ? [tilt] : []));
       }
       if (this.cfg.mode === 'ctf' && t.flag >= 0) bits.push(`${iconSvg('hex')} CARRYING CORE`);
-      if (this.cfg.mode === 'race') bits.push(`${iconSvg('finish')} LAP ${Math.min(t.lap + 1, this.cfg.target)}/${this.cfg.target}`, `<b class="place">P${t.place}</b>`);
-      if (t.kos) bits.push(`KO ${t.kos}`);
-      if (!t.alive && t.respawnT > 0) bits.push(`respawn ${t.respawnT.toFixed(1)}`);
+      if (this.cfg.mode === 'race') bits.push(`${iconSvg('finish')} LAP ${Math.min(num(t.lap) + 1, num(this.cfg.target))}/${num(this.cfg.target)}`, `<b class="place">P${num(t.place)}</b>`);
+      if (num(t.kos)) bits.push(`KO ${num(t.kos)}`);
+      if (!t.alive && Number(t.respawnT) > 0) bits.push(`respawn ${Number(t.respawnT).toFixed(1)}`);
       if (t.special >= 1) bits.push('SPECIAL READY');
       const html = bits.join(' · ');
       if (c.meta.dataset.h !== html) { c.meta.dataset.h = html; c.meta.innerHTML = html; }
