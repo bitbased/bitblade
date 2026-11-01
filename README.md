@@ -223,3 +223,7 @@ server/       Bun relay and matchmaker (an alternative dev backend)
 electron/     desktop main process, preload, LAN relay, tunnel
 scripts/      dev tunnel, Electron dev runner
 ```
+
+## License
+
+[MIT](LICENSE): use it, change it, build on it. Keep the copyright notice.
