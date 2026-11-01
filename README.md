@@ -102,7 +102,8 @@ bun run typecheck
   `DEV_BACKEND=8787` switches to the small Bun relay (`bun run relay`) instead.
 - **Local admin password:** set `ADMIN_TOKEN=…` in `worker/.dev.vars`. That file is git-ignored; never commit it.
 
-**Dev tunnel** (serves your local build at bitblade-dev.bitbased.net):
+**Dev tunnel** (optional: serves your local build on a public hostname; edit the name in the script and in
+`vite.config.ts` `allowedHosts`):
 
 ```powershell
 winget install Cloudflare.cloudflared
@@ -110,20 +111,47 @@ cloudflared tunnel login
 powershell -File scripts/dev-tunnel.ps1   # with `bun run dev` and `bun run worker:dev` running
 ```
 
-### Deploy (Cloudflare)
+## Self-hosting (Cloudflare)
+
+BitBlade runs on one Cloudflare Worker, which serves the web game and runs the online rooms. The Workers free plan is
+enough to start; Durable Objects carry the online traffic.
 
 ```sh
+bun install
 cd worker
 bun x wrangler login
-bun x wrangler secret put ADMIN_TOKEN    # once: the admin password (20+ characters)
+bun x wrangler secret put ADMIN_TOKEN    # the /admin password: make up a long one (20+ characters)
 cd ..
-bun run worker:deploy                    # builds dist/ and deploys bitblade.bitbased.net
+bun run worker:deploy                    # builds the game and deploys it
 ```
 
-- **Durable Objects:** `Room` (party relay), `Directory`, `Queue` (quick match) and `Admin`.
-- **KV:** the `ADMIN_KV` namespace holds the admin settings and lists, so they survive redeploys and moves.
+That's all you need. It goes live at **https://bitblade.&lt;your-account&gt;.workers.dev** with online play working: no
+domain, KV or other setup. The web game always uses the server it was loaded from, so nothing in the code points at
+someone else's.
 
-### Desktop (Electron)
+**Your own domain, and optional KV:** put them in `worker/deploy.env`. The file is git-ignored, so your settings
+stay out of the repo:
+
+```sh
+DOMAIN=bitblade.example.com        # its zone must be on the same Cloudflare account
+ADMIN_KV_ID=0123456789abcdef...    # optional, from: bun x wrangler kv namespace create ADMIN_KV
+```
+
+`bun run worker:deploy` (`scripts/deploy.ts`) then writes `worker/wrangler.deploy.toml` (`wrangler.toml` plus those
+values, also git-ignored) and deploys it. Pass wrangler options through, e.g. `bun run worker:deploy --dry-run`.
+
+- **Without KV:** admin settings, bans and the whitelist live in the `Admin` Durable Object. They survive redeploys;
+  they're lost only if the worker is deleted or renamed.
+- **With KV:** a second copy outlives the worker, and you can read or fix it from the dashboard even if the admin page
+  is down.
+- **Durable Objects:** `Room` (party relay), `Directory`, `Queue` (quick match), `Admin`.
+
+**Desktop builds** load from files, so they can't use "the site they came from". They connect to `VITE_CLOUD_RELAY`,
+baked in at build time from `.env.production` (this project's server). To build a desktop app for your own server,
+put `VITE_CLOUD_RELAY=https://your-host` in `.env.production.local`, which is git-ignored and takes precedence. The
+desktop app's Settings also has a SERVER URL field (the web game doesn't show it).
+
+## Desktop (Electron)
 
 ```sh
 bun run electron:dev   # desktop app against the dev server

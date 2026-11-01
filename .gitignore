@@ -7,3 +7,7 @@ release
 *.vars
 .env
 .env.*
+
+# your deploy settings (custom domain, KV id) and the config generated from them — see scripts/deploy.ts
+worker/deploy.env
+worker/wrangler.deploy.toml

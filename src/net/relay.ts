@@ -116,11 +116,12 @@ export class RelayClient {
 const CODE_RE = /^[A-Za-z0-9]{4,10}$/;
 
 function defaultWsBase(): string {
-  const env = (import.meta as any).env?.VITE_CLOUD_RELAY as string | undefined;
-  if (env) return env.replace(/^http/, "ws").replace(/\/+$/, "");
+  // (on the web: the site the game came from; the desktop app: the server it was built for — see cloudRelayUrl)
   if (typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
     return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
   }
+  const env = (import.meta as any).env?.VITE_CLOUD_RELAY as string | undefined;
+  if (env) return env.replace(/^http/, "ws").replace(/\/+$/, "");
   return "ws://localhost:8787";
 }
 

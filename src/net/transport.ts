@@ -85,15 +85,26 @@ export async function hostLocal(name: string, tunnel: boolean, opts: HostOpts = 
   return wrapHost(rc, kind, invites, false, () => { p.stopTunnel(); p.stopHost(); });
 }
 
+const onWeb = () => typeof location !== 'undefined' && location.protocol.startsWith('http');
+/** Settings → SERVER URL may point the game at another server: in dev, and in the desktop app — never on the web */
+export const serverOverrideAllowed = () => import.meta.env.DEV || !onWeb();
+
+/**
+ * The game's server (rooms, quick match, status). On the web it's always the site the game was loaded from, so a
+ * self-hosted copy uses its own server with no setup. The desktop app is loaded from files, so it uses the server
+ * baked in at build time: VITE_CLOUD_RELAY (.env.production, or .env.production.local to override it).
+ */
 export function cloudRelayUrl(): string {
-  try {
-    const s = localStorage.getItem('bitblade.cloudRelay');
-    if (s) return s;
-  } catch { /* ignore */ }
-  const env = import.meta.env.VITE_CLOUD_RELAY as string | undefined;
-  if (env) return env;
-  // served over http(s) (dev server, dev tunnel, the Worker): the page's own origin has a relay
-  return typeof location !== 'undefined' && location.protocol.startsWith('http') ? location.origin : '';
+  if (serverOverrideAllowed()) {
+    try { const s = localStorage.getItem('bitblade.cloudRelay'); if (s) return s; } catch { /* ignore */ }
+  }
+  if (onWeb()) return location.origin;
+  return (import.meta.env.VITE_CLOUD_RELAY as string | undefined) ?? '';
+}
+
+/** the game's public web address (for links people open: invites, shared songs) */
+export function publicOrigin(): string {
+  return cloudRelayUrl().replace(/^ws/, 'http').replace(/\/+$/, '');
 }
 
 /** Host through the Cloudflare Worker (Durable Object relay). */

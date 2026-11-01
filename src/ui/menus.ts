@@ -4,7 +4,7 @@ import { HUM_STYLES, type HumStyle, type SfxName } from '../game/audio';
 import { allSongs, loadCustomSongs, musicPrefs, PRESET_SONGS, saveCustomSongs, saveMusicPrefs, songById } from '../game/music';
 import { PICK_MODES, type ModeId } from '../game/types';
 import { getPlatform, isInstalledApp, quitApp } from '../net/platform';
-import { cloudRelayUrl } from '../net/transport';
+import { cloudRelayUrl, serverOverrideAllowed } from '../net/transport';
 import { onlineState } from '../net/onlineStatus';
 import { notice } from './notice';
 import { clean } from '../core/textFilter';
@@ -381,7 +381,8 @@ export class SettingsScreen extends Base {
         toggle("HIDE OFFENSIVE WORDS (other players' names)", () => settings.filterWords, (v) => { settings.filterWords = v; settings.save(); }),
         toggle('AUTO RESOLUTION (keeps FPS up)', () => settings.adaptive, (v) => { settings.adaptive = v; settings.save(); }),
         slider('RESOLUTION SCALE', settings.pixelRatio, 0.5, 2, 0.25, (v) => { settings.pixelRatio = v; settings.save(); const r = getRenderer(this.app.canvas).renderer; r.setPixelRatio(v); r.setSize(innerWidth, innerHeight); }),
-        h('div.field', null, h('label', null, 'CLOUD RELAY URL (Cloudflare Worker)'), relay),
+        // (the web game always uses its own site's server; only dev and the desktop app can point elsewhere)
+        serverOverrideAllowed() ? h('div.field', { title: 'The online server (a BitBlade Cloudflare Worker). Empty: the default.' }, h('label', null, 'SERVER URL'), relay) : null,
         toggle('GYRO STEERING (touch players)', () => this.app.input.gyro.on, (v) => { if (v) this.app.input.enableGyro(); else this.app.input.gyro.on = false; }),
         h('button.btn.small.nav', { onclick: () => { this.app.input.calibrateGyro(); this.app.toast('Gyro calibrated — hold your phone like this to stand still'); } }, 'Calibrate Gyro'),
         p ? h('button.btn.small.nav', { onclick: () => p.toggleFullscreen() }, 'Toggle Fullscreen (F11)') : h('button.btn.small.nav', { onclick: () => document.documentElement.requestFullscreen?.() }, 'Fullscreen'),

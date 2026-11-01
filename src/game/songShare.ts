@@ -3,6 +3,7 @@
 // generated song is ~600–700 characters; a long hand-made one a few thousand. Sharing again after edits makes a new
 // link (each one is a snapshot).
 import { newSong, sanitizeSong, type Song } from './music';
+import { publicOrigin } from '../net/transport';
 
 /** past this the link gets unwieldy for some apps (it still works in browsers) */
 export const LONG_LINK = 8000;
@@ -36,7 +37,7 @@ export async function decodeSong(text: string): Promise<Song> {
 
 /** the full link for a song */
 export async function songLink(song: Song) {
-  return `${location.origin}/#song=${await encodeSong(song)}`;
+  return `${publicOrigin() || location.origin}/#song=${await encodeSong(song)}`; // (the desktop app: its server's site)
 }
 
 /** a song link opened: the encoded song from the address (and the address cleaned up), or null */

@@ -3,7 +3,7 @@
 // parties (same code every time). Leading a party with friends in it, joining a room takes the whole party there.
 // It's also where a guest waits to get back in: the leader reopening the party, a match's room opening.
 import { confirmTwice, h, MenuNav, type App, type Screen } from './app';
-import { publicJoinInput } from '../net/transport';
+import { publicJoinInput, publicOrigin } from '../net/transport';
 import { parseJoinInput } from '../net/relay';
 import { clientRoom, hostRoom } from '../net/room';
 import { deleteMyRoom, loadMyRooms, newOwnerKey, newRoomCode, saveMyRoom, type SavedRoom } from '../net/myRooms';
@@ -57,7 +57,7 @@ export class OnlineScreen implements Screen {
   build(prefill: string) {
     const name = h<HTMLInputElement>('input', { type: 'text', value: settings.playerName, maxLength: 16 });
     name.addEventListener('change', () => { settings.playerName = name.value; settings.save(); });
-    this.codeIn = h<HTMLInputElement>('input', { type: 'text', placeholder: 'ABCDE  or  https://bitblade.bitbased.net/join/ABCDE', value: prefill });
+    this.codeIn = h<HTMLInputElement>('input', { type: 'text', placeholder: `ABCDE  or  ${publicOrigin() || 'https://…'}/join/ABCDE`, value: prefill });
     this.codeIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.join(); });
     this.pwIn = h<HTMLInputElement>('input', { type: 'password', placeholder: 'only if the party has one', maxLength: 32 });
     this.pwIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.join(); });

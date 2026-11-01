@@ -2,8 +2,9 @@ name = "bitblade"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
-# Production hostname (zone bitbased.net must be on this Cloudflare account)
-routes = [{ pattern = "bitblade.bitbased.net", custom_domain = true }]
+# No custom domain here: a plain deploy goes to the free https://bitblade.<your-account>.workers.dev.
+# For your own domain (and the optional KV below) put them in worker/deploy.env and deploy with `bun run worker:deploy`
+# (scripts/deploy.ts) — see the README's Self-hosting section.
 
 [assets]
 directory = "../dist"
@@ -27,12 +28,10 @@ class_name = "Queue"
 name = "ADMIN"
 class_name = "Admin"
 
-# The admin switches, bans and whitelist, kept for good (portable to another worker / app; readable and fixable from
-# the dashboard or `wrangler kv` even if the admin page is down). Create it once:
-#   bun x wrangler kv namespace create ADMIN_KV      → put the id it prints here
-[[kv_namespaces]]
-binding = "ADMIN_KV"
-id = "3f4ba8f56c1b45158e9668d287daa4eb"
+# Optional KV (ADMIN_KV): a second copy of the admin switches, bans and whitelist that outlives the worker (portable
+# to another worker; readable and fixable from the dashboard or `wrangler kv` even if the admin page is down). Without
+# it they're kept in the Admin Durable Object, which is fine. To use it: `bun x wrangler kv namespace create ADMIN_KV`
+# and put the id in worker/deploy.env as ADMIN_KV_ID.
 
 [[migrations]]
 tag = "v1"
