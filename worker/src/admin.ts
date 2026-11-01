@@ -78,8 +78,6 @@ export class Admin {
     if (this.liveLoaded) return;
     this.liveLoaded = true;
     for (const [k, v] of await this.state.storage.list<LiveRoom>({ prefix: "live:" })) if (!this.live.has(k.slice(5))) this.live.set(k.slice(5), v);
-    const legacy = await this.state.storage.get<[string, LiveRoom][]>("live"); // (the old single-list format)
-    if (legacy) { for (const [k, v] of legacy) if (!this.live.has(k)) { this.live.set(k, v); await this.putLive(k); } await this.state.storage.delete("live"); }
   }
   private putLive(code: string) { const v = this.live.get(code); return v ? this.state.storage.put(`live:${code}`, v) : this.dropLive(code); }
   private dropLive(code: string) { this.live.delete(code); return this.state.storage.delete(`live:${code}`); }
@@ -136,7 +134,7 @@ export class Admin {
     const day = dayKey(now);
     if (this.ips?.day !== day) {
       if (this.ips) await this.saveIps();
-      const m = new Map<string, IpDay>(Object.entries((await this.state.storage.get<Record<string, IpDay>>(`ip:${day}`)) ?? {})); // (old format)
+      const m = new Map<string, IpDay>();
       for (const part of (await this.state.storage.list<Record<string, IpDay>>({ prefix: `ip:${day}:` })).values()) for (const [k, v] of Object.entries(part)) m.set(k, v);
       this.ips = { day, m };
     }
@@ -148,7 +146,6 @@ export class Admin {
     // (in chunks of 300 — about 50 KB each, under the 128 KB a stored value can be — and the rest forgotten in memory
     //  too, so a viral day with 100k addresses doesn't grow this object without end)
     for (let i = 0; i * IP_CHUNK < Math.max(top.length, 1); i++) await this.state.storage.put(`ip:${this.ips.day}:${i}`, Object.fromEntries(top.slice(i * IP_CHUNK, (i + 1) * IP_CHUNK)));
-    await this.state.storage.delete(`ip:${this.ips.day}`);
     if (this.ips.m.size > 4000) this.ips.m = new Map(top);
   }
   private async flushSoon(now: number) {
