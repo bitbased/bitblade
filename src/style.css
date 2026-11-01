@@ -819,3 +819,16 @@ body.hints-on .music-chip { bottom: 56px; }
 .notice h2 { margin: 0; font-family: var(--font-h); letter-spacing: 0.12em; color: var(--gold); font-size: 20px; }
 .notice p { margin: 0; font-size: 16px; line-height: 1.4; }
 .notice .btn { align-self: flex-end; min-width: 110px; }
+
+/* a shared song link opened: the card over the main menu */
+.shared-song { position: fixed; z-index: 70; left: 0; right: 0; margin: 0 auto; bottom: 86px; width: min(600px, calc(100vw - 32px)); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; border-color: var(--accent) !important; animation: fadeUp 0.3s both; }
+.shared-song .ss-head { display: flex; align-items: center; justify-content: space-between; }
+.shared-song .ss-tag { font-family: var(--font-h); font-size: 11px; letter-spacing: 0.16em; color: var(--accent); }
+.shared-song .ss-x { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px; }
+.shared-song .ss-x:hover { color: var(--text); }
+.shared-song .ss-x svg { width: 16px; height: 16px; }
+.shared-song .ss-name { font-family: var(--font-h); font-size: 22px; letter-spacing: 0.06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shared-song .ss-sub { color: var(--muted); font-size: 13px; }
+.shared-song .ss-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.shared-song .ss-btns .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 14px; }
+.shared-song .ss-btns .btn svg { width: 14px; height: 14px; }

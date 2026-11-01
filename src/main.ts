@@ -18,6 +18,8 @@ import { queue } from './net/queue';
 import { clientRoom, hostRoom } from './net/room';
 import { onQueueMatch } from './ui/quickMatch';
 import { onPartyMsg, roomLost } from './ui/partyFlow';
+import { takeSongFromUrl } from './game/songShare';
+import { showSharedSong } from './ui/sharedSong';
 
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
 const root = document.getElementById('ui') as HTMLElement;
@@ -117,10 +119,14 @@ clientRoom.onLost = (why, code) => roomLost(app, why, code);
 // deep link: /join/CODE or ?join=CODE  → straight to the online join flow
 const m = location.pathname.match(/\/join\/([A-Za-z0-9]{4,10})/) || location.search.match(/[?&]join=([^&]+)/);
 const partyLink = location.search.match(/[?&]party=([A-Za-z0-9]{4,10})/); // (a party invite: /?party=CODE)
+const sharedSong = takeSongFromUrl(); // (a shared song: /#song=…)
 if (import.meta.env.DEV) (window as any).__app = app; // headless checks
 if (m) app.go('online', { join: location.protocol.startsWith('http') && location.pathname.includes('/join/') ? location.href : decodeURIComponent(m[1]) });
 else if (partyLink) app.go('online', { join: partyLink[1].toUpperCase() });
+else if (sharedSong) { app.go('menu'); void showSharedSong(app, sharedSong); } // (a song link: the song, ready to play / keep)
 else app.go('title');
+// (a song link pasted into a tab that's already on the game: only the #fragment changes, so no reload)
+addEventListener('hashchange', () => { const s = takeSongFromUrl(); if (s) void showSharedSong(app, s); });
 
 let last = performance.now();
 function frame(now: number) {

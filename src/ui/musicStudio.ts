@@ -9,6 +9,7 @@ import {
 } from '../game/music';
 import { setBackdropVisible } from './backdrop';
 import { icon } from './icons';
+import { sharedForStudio, shareSong } from './sharedSong';
 import { draftBar, draftsOf, dropDraft, getDraft, lastOpen, putDraft, setLastOpen } from './drafts';
 import './musicStudio.css';
 
@@ -225,7 +226,8 @@ class MusicStudio {
         h('button.btn.small.nav', { onclick: () => { const s = newSong(); s.patterns[0][4] = 'x...x...x...x...'; s.patterns[0][6] = '..x...x...x...x.'; this.openFresh(s); } }, '+ New'),
         h('button.btn.small.nav', { onclick: () => this.openFresh({ ...clone(this.song), id: newSong().id, name: this.song.name + ' copy', custom: true }) }, 'Duplicate'),
         h('button.btn.small.nav.ms-wide.ms-gen', { onclick: () => this.surprise(), title: 'Generate a brand-new song (press again for another — an untouched one is replaced)' }, icon('dice'), ' Generate Song'),
-        h('button.btn.small.nav', { onclick: () => this.exportSong() }, 'Export'),
+        h('button.btn.small.nav', { onclick: () => this.exportSong(), title: 'Download the song as a file' }, 'Export'),
+        h('button.btn.small.nav.ms-gen', { onclick: () => shareSong(this.app, this.song), title: 'A link with the whole song in it — anyone who opens it can play it and save it' }, icon('link'), ' Share'),
         h('button.btn.small.nav', { onclick: () => this.importSong() }, 'Import'),
         this.isPreset || this.fresh ? null : h('button.btn.small.nav.ms-danger', { onclick: () => this.deleteSong() }, 'Delete'),
         h('button.btn.small.nav.ms-wide' + (isMenu ? '.on' : ''), { onclick: () => { if (this.fresh) { this.app.toast('Save the song first'); return; } musicPrefs.menu = isMenu ? 'neon-drive' : this.song.id; saveMusicPrefs(); this.renderList(); this.app.toast(isMenu ? 'Menu music back to Neon Drive' : `${this.song.name} is now the menu music`); } }, isMenu ? '♪ Menu music ✓' : '♪ Use as menu music'),
@@ -468,7 +470,7 @@ class MusicStudio {
 
 let studio: MusicStudio | null = null;
 export const musicStudioScreen: Screen = {
-  mount(app: App) { studio = new MusicStudio(app); if (import.meta.env.DEV) (window as unknown as { __ms?: MusicStudio }).__ms = studio; },
+  mount(app: App) { studio = new MusicStudio(app); if (sharedForStudio.song) { studio.openFresh(sharedForStudio.song); sharedForStudio.song = null; } if (import.meta.env.DEV) (window as unknown as { __ms?: MusicStudio }).__ms = studio; },
   unmount() { studio?.dispose(); studio = null; },
   update(dt: number) { studio?.update(dt); },
 };
