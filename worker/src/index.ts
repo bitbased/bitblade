@@ -127,6 +127,10 @@ export default {
 
 type Peer = { id: number; role: "host" | "client"; name: string; code: string; ip: string; dev: string; since: number };
 
+/** an open room checks in with the admin page this often even when nothing's happening (an idle lobby sends no
+ *  messages, so without it the room dropped off the admin page's list and came back — flickering) */
+const HEARTBEAT = 5 * 60_000;
+
 /** a kept code nobody has opened for this long is free again */
 const KEEP_FOR = 180 * 24 * 3600_000;
 
@@ -224,6 +228,7 @@ export class Room {
       this.state.acceptWebSocket(ws, ["host"]);
       ws.serializeAttachment(peer);
       this.send(ws, { t: "welcome", id: 0, role, code });
+      await this.state.storage.setAlarm(Date.now() + HEARTBEAT);
     } else {
       const host = this.host();
       if (!host) return this.reject(ws, clientSide, "no host");
@@ -290,6 +295,13 @@ export class Room {
     await this.onGone(ws);
   }
 
+  /** the heartbeat: still open → tell the admin page, and again in a while (wakes a hibernating room only briefly) */
+  async alarm() {
+    if (!this.host()) return;
+    this.report(true);
+    await this.state.storage.setAlarm(Date.now() + HEARTBEAT);
+  }
+
   async webSocketError(ws: WebSocket) {
     await this.onGone(ws);
   }
@@ -306,6 +318,7 @@ export class Room {
         try { c.close(1000, "host left"); } catch {}
       }
       this.report(true, true);
+      await this.state.storage.deleteAlarm();
       await this.state.storage.delete("nextId"); // keep "owner" so kept codes stay claimed
       await dir(this.env).fetch(new Request("https://dir/remove", { method: "POST", body: JSON.stringify({ code: peer.code }) }));
     } else {

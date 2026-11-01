@@ -55,11 +55,30 @@ type Bucket = { conns: number; hosts: number; joins: number; msgs: number; bytes
 const emptyBucket = (): Bucket => ({ conns: 0, hosts: 0, joins: 0, msgs: 0, bytes: 0, activeSecs: 0, connSecs: 0, queue: 0, matches: 0, denied: 0, floods: 0, peakRooms: 0 });
 type IpDay = { conns: number; hosts: number; msgs: number; bytes: number; floods: number; denied: number; last: number; devs?: string[] };
 
+/** rooms check in at least every 5 minutes (index.ts HEARTBEAT): one not heard from in 12 has closed */
+const LIVE_TTL = 12 * 60_000;
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
 export class Admin {
   private cfg: AdminConfig | null = null;
+  /** open rooms (by code — the code never leaves this object: the admin page gets an anonymous ref per room), saved so
+   *  the list survives this object being unloaded while idle */
   private live = new Map<string, { players: number; hostIp: string; since: number; name: string; seen: number }>();
+  private liveLoaded = false;
+  /** refs are a hash of the code with this per-instance salt: they can't be turned back into a join code */
+  private salt = crypto.randomUUID();
+  private async loadLive() {
+    if (this.liveLoaded) return;
+    this.liveLoaded = true;
+    const saved = await this.state.storage.get<[string, { players: number; hostIp: string; since: number; name: string; seen: number }][]>("live");
+    for (const [k, v] of saved ?? []) if (!this.live.has(k)) this.live.set(k, v);
+  }
+  private saveLive() { return this.state.storage.put("live", [...this.live]); }
+  private async refOf(code: string) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(this.salt + code));
+    return [...new Uint8Array(d).slice(0, 6)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
   /** this hour's bucket and today's per-IP counts, flushed to storage at most every few seconds */
   private bucket: { key: string; b: Bucket } | null = null;
   private ips: { day: string; m: Map<string, IpDay> } | null = null;
@@ -126,6 +145,7 @@ export class Admin {
     const url = new URL(req.url);
     const now = Date.now();
     const body = req.method === "POST" ? ((await req.json().catch(() => ({}))) as any) : {};
+    await this.loadLive();
     switch (url.pathname) {
       // ---- from the worker / rooms / queue
       case "/config": return json(await this.config());
@@ -174,11 +194,21 @@ export class Admin {
         await this.saveConfig(c);
         return json(c);
       }
-      case "/close-room": { await this.roomCmd(String(body.code), { a: "close", why: String(body.why ?? "Closed by the admin") }); this.live.delete(String(body.code)); return json({ ok: true }); }
+      case "/close-room": {
+        // (the page names a room by its ref, never its code)
+        let code = "";
+        for (const k of this.live.keys()) if ((await this.refOf(k)) === String(body.ref)) code = k;
+        if (!code) return json({ error: "That room isn't open any more (the list was out of date)" }, 404);
+        await this.roomCmd(code, { a: "close", why: String(body.why ?? "Closed by the admin") });
+        this.live.delete(code);
+        await this.saveLive();
+        return json({ ok: true });
+      }
       case "/close-all": {
         const codes = [...this.live.keys()];
         await Promise.all(codes.map((code) => this.roomCmd(code, { a: "close", why: String(body.why ?? "Online play is paused") })));
         this.live.clear();
+        await this.saveLive();
         return json({ closed: codes.length });
       }
     }
@@ -203,10 +233,13 @@ export class Admin {
       const ip = await this.ipRow(c.ip, now); ip.msgs += c.msgs || 0; ip.bytes += c.bytes || 0;
     }
     for (const f of r.floods ?? []) { b.floods++; (await this.ipRow(f.ip, now)).floods++; }
+    const had = this.live.get(r.code);
     if (r.live === null) this.live.delete(r.code);
     else if (r.live) this.live.set(r.code, { ...r.live, seen: now });
-    // (a room that stopped reporting for 3 minutes is gone)
-    for (const [k, v] of this.live) if (now - v.seen > 3 * 60_000) this.live.delete(k);
+    // (a room that's missed two heartbeats is gone — it closed without saying so)
+    for (const [k, v] of this.live) if (now - v.seen > LIVE_TTL) this.live.delete(k);
+    // (saved when the list changes, and with each heartbeat — not on every traffic report)
+    if (!had || r.live === null || !r.live || had.players !== r.live.players || now - had.seen > 60_000) await this.saveLive();
     b.peakRooms = Math.max(b.peakRooms, this.live.size);
     await this.flushSoon(now);
   }
@@ -234,7 +267,8 @@ export class Admin {
     const banned = new Set(cfg.bans.map((b) => b.ip));
     const topIps = [...today.entries()].map(([ip, v]) => ({ ip, ...v, banned: banned.has(ip), flag: flagIp(v) }))
       .sort((a, b) => (b.flag ? 1 : 0) - (a.flag ? 1 : 0) || b.msgs - a.msgs || b.conns - a.conns).slice(0, 50);
-    const live = [...this.live.entries()].filter(([, v]) => now - v.seen < 3 * 60_000).map(([code, v]) => ({ code, ...v })).sort((a, b) => b.players - a.players);
+    const live = await Promise.all([...this.live.entries()].filter(([, v]) => now - v.seen < LIVE_TTL).sort((a, b) => b[1].players - a[1].players)
+      .map(async ([code, v]) => ({ ref: await this.refOf(code), name: v.name, players: v.players, hostIp: v.hostIp, since: v.since })));
     return { now, config: cfg, live, hours, month: { month, ...mt }, cost: costEstimate(mt, now), topIps };
   }
 }
@@ -385,12 +419,23 @@ const ADMIN_PAGE = /* html */ `<!doctype html>
 :root { --bg: #0b0e17; --panel: #131828; --line: #2a3350; --text: #e6ecff; --muted: #8b95b5; --accent: #3cf2ff; --gold: #ffd23a; --red: #ff4d6d; --green: #4dffa6; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
-header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
 header h1 { font-size: 18px; margin: 0; letter-spacing: 0.08em; color: var(--accent); }
 header .sp { flex: 1; }
-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; padding: 14px 18px 40px; }
+/* one column on phones; on wider screens the controls on the left, what's happening on the right */
+main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 14px 18px 40px; align-items: start; max-width: 1500px; margin: 0 auto; }
+@media (min-width: 1000px) { main { grid-template-columns: minmax(380px, 1fr) minmax(0, 1.6fr); } #play { grid-row: span 2; } }
 section { background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; min-width: 0; }
 section.wide { grid-column: 1 / -1; }
+h3 { font-size: 12px; letter-spacing: 0.1em; color: var(--muted); margin: 18px 0 6px; text-transform: uppercase; font-weight: 600; border-top: 1px solid var(--line); padding-top: 14px; }
+/* settings: a label, then its control */
+.field { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 12px; align-items: center; margin: 9px 0; }
+.field > label:first-child { color: var(--muted); }
+.field input:not([type=checkbox]), .field select { width: 100%; }
+.field .inline { display: flex; gap: 8px; align-items: center; }
+.field .inline input { width: 90px; }
+@media (max-width: 560px) { .field { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+code { word-break: break-all; }
 h2 { font-size: 12px; letter-spacing: 0.14em; color: var(--muted); margin: 0 0 10px; text-transform: uppercase; }
 .big { font-size: 28px; font-weight: 700; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
@@ -404,7 +449,22 @@ button.danger { border-color: var(--red); color: var(--red); }
 button.danger.on { background: var(--red); color: #fff; }
 textarea { width: 100%; min-height: 70px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-td, th { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+td, th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
+td.ip { white-space: normal; word-break: break-all; min-width: 120px; }
+td.wrap { white-space: normal; overflow-wrap: anywhere; min-width: 120px; }
+td.num, th.num { text-align: right; }
+td.act { text-align: right; }
+/* phones: each table row becomes a card (label: value), so nothing scrolls sideways */
+@media (max-width: 700px) {
+  table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
+  table.cards tr.head { display: none; }
+  table.cards tr { border: 1px solid var(--line); margin: 8px 0; padding: 4px 0; }
+  table.cards td { border: 0; display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; padding: 3px 10px; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+  table.cards td > span { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  table.cards td::before { content: attr(data-l); color: var(--muted); font-size: 12px; }
+  table.cards td.act { display: block; }
+  table.cards td.act::before { content: none; }
+}
 th { color: var(--muted); font-weight: 500; }
 td.flag { color: var(--gold); }
 .muted { color: var(--muted); }
@@ -422,21 +482,25 @@ td.flag { color: var(--gold); }
 <div id="app" hidden>
 <header><h1>BITBLADE ADMIN</h1><span id="status" class="muted"></span><span class="sp"></span><span class="muted">you: __MYIP__</span><button id="refresh">Refresh</button><a href="/admin/api/export"><button title="Download the switches, bans and whitelist (a backup)">Export</button></a><a href="/admin/logout"><button>Sign out</button></a></header>
 <main>
-<section><h2>Online play</h2>
+<section id="play"><h2>Online play</h2>
   <div class="row" id="modes"></div>
-  <div class="row"><label><input type="checkbox" id="queue"> Quick match on</label></div>
-  <div class="row" style="flex-direction:column;align-items:stretch"><span class="muted">Message for players turned away</span><input id="msg" maxlength="200" placeholder="e.g. Back in 10 minutes — updating!"></div>
-  <div class="row"><span class="muted" title="Players connect directly to their party leader (the server only introduces them; Google's public STUN, no TURN relay). ON: direct where it connects, the server relay where it doesn't. REQUIRED: direct only — anyone who can't connect directly can't stay.">WebRTC (direct)</span><select id="rtc"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select><span class="muted">phones / mobile data</span><select id="rtcm"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select></div>
-  <div class="row"><span class="muted">Flood limit</span><input id="flood" type="number" min="30" max="5000" style="width:90px"><span class="muted">msgs/sec per connection</span></div>
+  <div class="field"><label for="queue">Quick match</label><label><input type="checkbox" id="queue"> on</label></div>
+  <div class="field"><label for="msg">Message when turned away</label><input id="msg" maxlength="200" placeholder="e.g. Back in 10 minutes — updating!"></div>
+  <div class="field" title="Players connect directly to their party leader (the server only introduces them; Google's public STUN, no TURN relay). ON: direct where it connects, the server relay where it doesn't. REQUIRED: direct only — anyone who can't connect directly can't stay."><label for="rtc">WebRTC (direct)</label><select id="rtc"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select></div>
+  <div class="field"><label for="rtcm">WebRTC on phones</label><select id="rtcm"><option value="off">Off</option><option value="on">On — relay as fallback</option><option value="required">Required</option></select></div>
+  <div class="field"><label for="flood">Flood limit</label><span class="inline"><input id="flood" type="number" min="30" max="5000"><span class="muted">msgs/sec per connection</span></span></div>
   <div class="row"><button id="save" class="on">Save</button><button id="closeall" class="danger">Close all rooms now</button></div>
-  <div class="muted">WHITELIST only: just these can play (you testing). OFF: nobody — except these. One per line: an IP (v4 or v6, any notation), a range like 203.0.113.0/24 or 2001:db8:1:2::/64, a prefix ending in . or :, or a browser as id:… </div><div class="row"><span class="muted">This browser:</span><code id="mydev"></code><button id="addme">Whitelist this browser</button><button id="addip" title="Adds __MYNET__ — on IPv6 that's your whole home network (the part of the address that doesn't rotate)">Whitelist my network</button></div>
+  <h3>Whitelist</h3>
+  <div class="muted">WHITELIST only: just these can play (you testing). OFF: nobody — except these. One per line: an IP (v4 or v6, any notation), a range like 203.0.113.0/24 or 2001:db8:1:2::/64, a prefix ending in . or :, or a browser as id:…</div>
+  <div class="row"><span class="muted">This browser:</span><code id="mydev"></code></div>
+  <div class="row"><button id="addme">Whitelist this browser</button><button id="addip" title="Adds __MYNET__ — on IPv6 that's your whole home network (the part of the address that doesn't rotate)">Whitelist my network</button></div>
   <textarea id="white" placeholder="203.0.113.7"></textarea>
 </section>
-<section><h2>Right now</h2><div id="now"></div><div class="scroll"><table id="rooms"></table></div></section>
+<section><h2>Right now</h2><div id="now"></div><div class="scroll"><table id="rooms" class="cards"></table></div><div class="muted" style="margin-top:8px">Party codes aren't shown here: they're how people join a party, and they're private to it.</div></section>
 <section><h2>This month (estimate)</h2><div id="cost"></div></section>
 <section class="wide"><h2>Last 72 hours</h2><div class="row"><select id="metric"></select><span id="mtot" class="muted"></span></div><div class="chart" id="chart"></div><div class="row muted" style="justify-content:space-between"><span id="c0"></span><span>now</span></div></section>
-<section class="wide"><h2>Addresses today</h2><div class="muted">Busiest first — flagged ones look like abuse. Ban for a while or for good; banning also drops them from rooms they're in. Banned players just see "temporarily unavailable" — the same as a pause.</div><div class="scroll"><table id="ips"></table></div></section>
-<section><h2>Bans</h2><div class="row"><input id="banip" placeholder="IP, range (…/24, …::/64), prefix, or id:browser" style="flex:1"><select id="banh"><option value="1">1 hour</option><option value="24" selected>1 day</option><option value="168">1 week</option><option value="0">for good</option></select></div><div class="row"><input id="banwhy" placeholder="reason (for you)" style="flex:1"><button id="ban" class="danger">Ban</button></div><table id="bans"></table></section>
+<section class="wide"><h2>Addresses today</h2><div class="muted">Busiest first — flagged ones look like abuse. Ban for a while or for good; banning also drops them from rooms they're in. Banned players just see "temporarily unavailable" — the same as a pause.</div><div class="scroll"><table id="ips" class="cards"></table></div></section>
+<section class="wide"><h2>Bans</h2><div class="row"><input id="banip" placeholder="IP, range (…/24, …::/64), prefix, or id:browser" style="flex:1"><select id="banh"><option value="1">1 hour</option><option value="24" selected>1 day</option><option value="168">1 week</option><option value="0">for good</option></select></div><div class="row"><input id="banwhy" placeholder="reason (for you)" style="flex:1"><button id="ban" class="danger">Ban</button></div><div class="scroll"><table id="bans" class="cards"></table></div></section>
 </main></div>
 <script>
 const AUTHED = __AUTHED__;
@@ -478,7 +542,7 @@ if (!AUTHED) {
     if (document.activeElement !== $('white')) $('white').value = c.whitelist.join('\\n');
     const players = data.live.reduce((a, r) => a + r.players, 0);
     $('now').innerHTML = '<div class="row"><span class="stat"><b class="big">' + data.live.length + '</b><span>rooms open</span></span><span class="stat"><b class="big">' + players + '</b><span>players connected</span></span></div>';
-    $('rooms').innerHTML = data.live.length ? '<tr><th>Code</th><th>Name</th><th>Players</th><th>Host IP</th><th>Open</th><th></th></tr>' + data.live.map((r) => '<tr><td>' + esc(r.code) + '</td><td>' + esc(r.name || '') + '</td><td>' + r.players + '</td><td>' + esc(r.hostIp) + '</td><td>' + ago(r.since) + '</td><td><button data-close="' + esc(r.code) + '">Close</button></td></tr>').join('') : '<tr><td class="muted">No rooms open.</td></tr>';
+    $('rooms').innerHTML = data.live.length ? th([['Party'], ['Players', 'num'], ['Leader IP'], ['Open'], ['']]) + data.live.map((r) => tr([['Party', r.name ? esc(r.name) : '<span class="muted">(no name)</span>', 'wrap'], ['Players', r.players, 'num'], ['Leader IP', esc(r.hostIp), 'ip'], ['Open', ago(r.since)], ['', '<button data-close="' + esc(r.ref) + '" data-name="' + esc(r.name || 'this party') + '">Close</button>', 'act']])).join('') : '<tr><td class="muted">No rooms open.</td></tr>';
     const m = data.month, e = data.cost;
     $('cost').innerHTML = '<div class="row"><span class="stat"><b class="big">$' + e.total.toFixed(2) + '</b><span>so far</span></span><span class="stat"><b class="big">$' + e.projected.toFixed(2) + '</b><span>month projected</span></span></div>'
       + '<table><tr><td>Workers Paid plan</td><td>$' + e.parts.base.toFixed(2) + '</td></tr>'
@@ -486,14 +550,20 @@ if (!AUTHED) {
       + '<tr><td>Room busy time ' + fmt(e.gbSecs) + ' GB·s (400k included)</td><td>$' + e.parts.doDuration.toFixed(2) + '</td></tr>'
       + '<tr><td>Worker requests ' + fmt(e.workerRequests) + ' (10M included)</td><td>$' + e.parts.workerRequests.toFixed(2) + '</td></tr></table>'
       + '<div class="muted" style="margin-top:8px">' + m.month + ': ' + fmt(m.conns) + ' connections · ' + fmt(m.hosts) + ' rooms · ' + fmt(m.matches) + ' quick matches · ' + bytes(m.bytes) + ' relayed. Estimated from the rooms\\' own counts at list prices — the real bill is in the Cloudflare dashboard → Billing.</div>';
-    $('ips').innerHTML = '<tr><th>IP</th><th>Browsers</th><th>Flag</th><th>Conns</th><th>Rooms</th><th>Msgs</th><th>Data</th><th>Turned away</th><th>Last</th><th></th></tr>' + (data.topIps.length ? data.topIps.map((r) => '<tr><td>' + esc(r.ip) + '</td><td>' + (r.devs || []).map((d) => '<button title="Ban this browser (not the whole address)" data-bandev="' + esc(d) + '">' + esc(d.slice(0, 6)) + '</button>').join(' ') + '</td><td class="flag">' + esc(r.flag) + '</td><td>' + r.conns + '</td><td>' + r.hosts + '</td><td>' + fmt(r.msgs) + '</td><td>' + bytes(r.bytes) + '</td><td>' + r.denied + '</td><td>' + ago(r.last) + '</td><td>' + (r.banned ? '<span class="bad">banned</span>' : '<button class="danger" data-ban="' + esc(r.ip) + '">Ban 1 day</button>') + '</td></tr>').join('') : '<tr><td class="muted" colspan="10">Nobody yet today.</td></tr>');
-    $('bans').innerHTML = c.bans.length ? '<tr><th>IP</th><th>Until</th><th>Reason</th><th></th></tr>' + c.bans.map((b) => '<tr><td>' + esc(b.ip) + '</td><td>' + (b.until ? new Date(b.until).toLocaleString() : 'for good') + '</td><td>' + esc(b.reason) + '</td><td><button data-unban="' + esc(b.ip) + '">Unban</button></td></tr>').join('') : '<tr><td class="muted">No bans.</td></tr>';
+    $('ips').innerHTML = th([['IP'], ['Browsers'], ['Flag'], ['Conns', 'num'], ['Rooms', 'num'], ['Msgs', 'num'], ['Data', 'num'], ['Turned away', 'num'], ['Last'], ['']]) + (data.topIps.length ? data.topIps.map((r) => tr([
+      ['IP', esc(r.ip), 'ip'], ['Browsers', (r.devs || []).map((d) => '<button title="Ban this browser (not the whole address)" data-bandev="' + esc(d) + '">' + esc(d.slice(0, 6)) + '</button>').join(' ')], ['Flag', esc(r.flag), 'flag'],
+      ['Conns', r.conns, 'num'], ['Rooms', r.hosts, 'num'], ['Msgs', fmt(r.msgs), 'num'], ['Data', bytes(r.bytes), 'num'], ['Turned away', r.denied, 'num'], ['Last', ago(r.last)],
+      ['', r.banned ? '<span class="bad">banned</span>' : '<button class="danger" data-ban="' + esc(r.ip) + '">Ban 1 day</button>', 'act']])).join('') : '<tr><td class="muted" colspan="10">Nobody yet today.</td></tr>');
+    $('bans').innerHTML = c.bans.length ? th([['Who'], ['Until'], ['Reason'], ['']]) + c.bans.map((b) => tr([['Who', esc(b.ip), 'ip'], ['Until', b.until ? new Date(b.until).toLocaleString() : 'for good'], ['Reason', esc(b.reason), 'wrap'], ['', '<button data-unban="' + esc(b.ip) + '">Unban</button>', 'act']])).join('') : '<tr><td class="muted">No bans.</td></tr>';
     chart();
   }
+  // a table row whose cells carry their column name (shown as the label when the table becomes cards on a phone)
+  const tr = (cells) => '<tr>' + cells.map(([l, v, cls]) => '<td data-l="' + l + '"' + (cls ? ' class="' + cls + '"' : '') + '><span>' + v + '</span></td>').join('') + '</tr>';
+  const th = (heads) => '<tr class="head">' + heads.map((h) => '<th' + (h[1] ? ' class="' + h[1] + '"' : '') + '>' + h[0] + '</th>').join('') + '</tr>';
   async function load() { const d = await api('overview'); if (d) { data = d; render(); } }
   document.addEventListener('click', async (e) => {
     const t = e.target;
-    if (t.dataset.close && confirm('Close room ' + t.dataset.close + '? Everyone in it is disconnected.')) { await api('close-room', { code: t.dataset.close }); load(); }
+    if (t.dataset.close && confirm('Close ' + t.dataset.name + '? Everyone in it is disconnected.')) { const r = await api('close-room', { ref: t.dataset.close }); if (r && r.error) alert(r.error); load(); }
     if (t.dataset.ban && confirm('Ban ' + t.dataset.ban + ' for a day?')) { await api('ban', { ip: t.dataset.ban, hours: 24, reason: 'from the address list' }); load(); }
     if (t.dataset.bandev && confirm('Ban browser ' + t.dataset.bandev + ' for a day? (Clearing site data gets around this — an IP ban is harder to dodge.)')) { await api('ban', { ip: 'id:' + t.dataset.bandev, hours: 24, reason: 'browser, from the address list' }); load(); }
     if (t.dataset.unban) { await api('unban', { ip: t.dataset.unban }); load(); }

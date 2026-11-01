@@ -40,6 +40,8 @@ interface DurableObjectStorage {
   delete(key: string): Promise<boolean>;
   list<T = unknown>(opts?: { prefix?: string }): Promise<Map<string, T>>;
   deleteAll(): Promise<void>;
+  setAlarm(at: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 interface DurableObjectState {
