@@ -19,7 +19,7 @@ const FILES = [
 ];
 
 const root = join(import.meta.dir, '..');
-const priv = join(root, '.private');
+const priv = join(root, '.private', 'settings'); // (.private/ also holds the social renderer's Chrome profile)
 const [cmd = 'status', repoArg] = process.argv.slice(2);
 const gh = Bun.which('gh') ?? (existsSync('C:/Program Files/GitHub CLI/gh.exe') ? 'C:/Program Files/GitHub CLI/gh.exe' : '');
 
@@ -43,7 +43,11 @@ function needGh() {
 }
 /** the private repo, cloned into .private/ (up to date). false: it doesn't exist yet */
 function clone(repo: string): boolean {
-  if (existsSync(join(priv, '.git'))) { must(['git', 'pull', '--ff-only', '-q'], priv); return true; }
+  if (existsSync(join(priv, '.git'))) {
+    // (a brand-new private repo has nothing to pull yet)
+    if (run(['git', 'ls-remote', '--heads', 'origin'], priv).out.trim()) must(['git', 'pull', '--ff-only', '-q'], priv);
+    return true;
+  }
   if (!run([gh!, 'repo', 'view', repo, '--json', 'name']).ok) return false;
   must([gh!, 'repo', 'clone', repo, priv, '--', '-q']);
   return true;
@@ -84,7 +88,9 @@ if (cmd === 'pull') {
   }
   must(['git', 'add', '-A'], priv);
   if (run(['git', 'diff', '--cached', '--quiet'], priv).ok) { console.log(`Nothing new — ${repo} is up to date.`); process.exit(0); }
-  must(['git', 'commit', '-q', '-m', `config:push (${n} file${n === 1 ? '' : 's'})`], priv);
+  // (commit as whoever this checkout commits as — the machine may have no global git identity)
+  const who = (k: string, d: string) => run(['git', 'config', k]).out.trim() || d;
+  must(['git', '-c', `user.name=${who('user.name', 'bitblade config')}`, '-c', `user.email=${who('user.email', 'config@localhost')}`, 'commit', '-q', '-m', `config:push (${n} file${n === 1 ? '' : 's'})`], priv);
   must(['git', 'push', '-q', '-u', 'origin', 'HEAD'], priv);
   console.log(`Pushed to ${repo} (private).`);
 } else if (cmd === 'status') {
