@@ -24,7 +24,8 @@
     "worker:deploy": "bun run scripts/deploy.ts",
     "config:pull": "bun run scripts/config.ts pull",
     "config:push": "bun run scripts/config.ts push",
-    "config:status": "bun run scripts/config.ts status"
+    "config:status": "bun run scripts/config.ts status",
+    "social": "bun run scripts/render-social.ts"
   },
   "build": {
     "appId": "net.bitbased.bitblade",
