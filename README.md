@@ -87,7 +87,8 @@ Banned players only ever see "Online play is temporarily unavailable".
 
 ## Graphics settings
 
-Settings has bloom, resolution scale and **auto resolution**, which lowers the resolution when frames are slow.
+Settings has bloom, resolution scale, **auto resolution** (lowers the resolution when frames are slow) and a **frame
+rate limit**. The limit is 30 / 60 / 120 / unlimited, default 60, which saves battery and heat on 120–144 Hz screens.
 
 ## Develop
 
