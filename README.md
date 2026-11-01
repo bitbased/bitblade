@@ -149,8 +149,8 @@ values, also git-ignored) and deploys it.
   building the game.
 - **No `deploy.env` and no terminal (CI):** the deploy stops rather than guess. Pass `--workers-dev` to deploy to
   the free address anyway.
-- **Copy the file to every machine you deploy from.** On a machine without it, the script asks first instead of
-  quietly deploying your site without its domain.
+- **Copy the file to every machine you deploy from** (see "Your settings on another computer" below). On a machine
+  without it, the script asks first instead of quietly deploying your site without its domain.
 
 - **Without KV:** admin settings, bans and the whitelist live in the `Admin` Durable Object. They survive redeploys;
   they're lost only if the worker is deleted or renamed.
@@ -162,6 +162,20 @@ values, also git-ignored) and deploys it.
 baked in at build time from `.env.production` (this project's server). To build a desktop app for your own server,
 put `VITE_CLOUD_RELAY=https://your-host` in `.env.production.local`, which is git-ignored and takes precedence. The
 desktop app's Settings also has a SERVER URL field (the web game doesn't show it).
+
+### Your settings on another computer
+
+Your private files (`worker/deploy.env`, the admin password in `worker/.dev.vars` and `worker/.prod.vars`, and
+`.env.production.local`) are git-ignored. To carry them between computers, keep them in a **private** GitHub repo
+next to this one. With origin `you/bitblade`, that's `you/bitblade-private`:
+
+```sh
+bun run config:push     # save this computer's files (creates the private repo the first time)
+bun run config:pull     # on another computer: fetch them into place (a different local file is kept as .bak)
+bun run config:status   # what differs
+```
+
+It uses the GitHub CLI's login (`gh auth login` once per computer). The public repo never sees the files.
 
 ## Desktop (Electron)
 

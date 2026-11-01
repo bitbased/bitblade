@@ -11,3 +11,6 @@ release
 # your deploy settings (custom domain, KV id) and the config generated from them — see scripts/deploy.ts
 worker/deploy.env
 worker/wrangler.deploy.toml
+# the private settings repo (scripts/config.ts), and backups it makes
+.private/
+*.bak
