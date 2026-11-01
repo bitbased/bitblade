@@ -16,6 +16,8 @@ const IMAGES: Record<string, { w: number; h: number; out: string; jpeg?: boolean
   'share-2x2': { w: 1600, h: 900, out: 'docs/social/share-2x2.png' },
   'github-card': { w: 1280, h: 640, out: 'docs/social/github-card.png' },
 };
+/** not rendered unless named: the earlier logo-only link card */
+const EXTRA: typeof IMAGES = { 'logo-card': { w: 1280, h: 640, out: 'docs/social/logo-card.png' } };
 
 function findChrome() {
   const c = [
@@ -34,7 +36,7 @@ const chrome = findChrome();
 const magick = Bun.which('magick');
 const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(IMAGES);
 for (const name of names) {
-  const img = IMAGES[name];
+  const img = IMAGES[name] ?? EXTRA[name];
   if (!img) { console.error(`unknown: ${name} (have: ${Object.keys(IMAGES).join(', ')})`); process.exit(1); }
   const html = join(root, 'docs/social', `${name}.html`);
   const out = join(root, img.out);
