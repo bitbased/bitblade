@@ -52,4 +52,5 @@ new_sqlite_classes = ["Admin"]
 
 # The admin page password is a secret, never in this file:
 #   bun x wrangler secret put ADMIN_TOKEN        (production)
-#   worker/.dev.vars: ADMIN_TOKEN=...            (wrangler dev — that file is git-ignored)
+#   worker/.dev.vars: ADMIN_TOKEN=...            (wrangler dev — git-ignored)
+#   worker/.prod.vars: ADMIN_TOKEN=...           (git-ignored) → bun x wrangler secret bulk .prod.vars
