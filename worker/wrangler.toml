@@ -32,7 +32,7 @@ class_name = "Admin"
 #   bun x wrangler kv namespace create ADMIN_KV      → put the id it prints here
 [[kv_namespaces]]
 binding = "ADMIN_KV"
-id = "00000000000000000000000000000000"
+id = "3f4ba8f56c1b45158e9668d287daa4eb"
 
 [[migrations]]
 tag = "v1"
