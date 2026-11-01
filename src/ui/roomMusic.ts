@@ -4,6 +4,7 @@
 import { h, type App } from './app';
 import { allSongs, loadCustomSongs, PRESET_SONGS, sanitizeSong, saveCustomSongs, surpriseSong, type Song } from '../game/music';
 import { icon } from './icons';
+import { clean } from '../core/textFilter';
 import { clientRoom, hostRoom } from '../net/room';
 
 /** biggest song we'll accept over the network (a full 4-pattern, 32-part song is ~4KB) */
@@ -79,11 +80,11 @@ export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canS
     o.onSet(choices[(Math.max(0, k) + d + choices.length) % choices.length]);
   };
   const s = o.song;
-  const sub = roomRadio.mode !== 'off' && o.canSet ? RADIO_LABEL[roomRadio.mode] : s ? `${s.custom ? 'custom song' : 'preset'}${o.by ? ` · ${o.by.startsWith('📻') ? o.by : `picked by ${o.by}`}` : ''}` : 'room music';
+  const sub = roomRadio.mode !== 'off' && o.canSet ? RADIO_LABEL[roomRadio.mode] : s ? `${s.custom ? 'custom song' : 'preset'}${o.by ? ` · ${o.by.startsWith('📻') ? o.by : `picked by ${clean(o.by)}`}` : ''}` : 'room music';
   const row = h('div.selector.panel' + (o.canSet ? '.nav' : ''), { 'data-navx': o.canSet ? '1' : undefined },
     h('span.lbl', null, 'MUSIC'),
     o.canSet ? h('button.arrow', { onclick: () => cycle(-1) }, '◀') : null,
-    h('div.val', null, h('b', null, s ? `♪ ${s.name}` : 'AUTO'), h('span', null, sub)),
+    h('div.val', null, h('b', null, s ? `♪ ${clean(s.name)}` : 'AUTO'), h('span', null, sub)),
     o.canSet ? h('button.arrow', { onclick: () => cycle(1) }, '▶') : null,
     o.canSet ? h('button.arrow.rm-dice', { title: 'Generate a brand-new song for the room, shared with everyone (press again for another)', onclick: (e: Event) => { e.stopPropagation(); o.onSet(surpriseSong()); } }, icon('dice')) : null,
     o.canSet ? h('button.arrow.rm-dice.rm-radio' + (roomRadio.mode !== 'off' ? '.on' : ''), {
@@ -99,7 +100,7 @@ export function roomMusicRow(app: App, o: { song: Song | null; by?: string; canS
   // one fixed-height status line, whatever it holds — so clicking through songs never shifts the room UI
   const status = h('div.rm-status', null,
     s && !inMyLibrary(s)
-      ? h('button.btn.small.nav', { title: 'Save this song to your Music Studio library', onclick: () => { copyToMySongs(s); app.toast(`♪ ${s.name} saved to your songs`); o.onCopied?.(); } }, '⬇ Copy song to my library')
+      ? h('button.btn.small.nav', { title: 'Save this song to your Music Studio library', onclick: () => { copyToMySongs(s); app.toast(`♪ ${clean(s.name)} saved to your songs`); o.onCopied?.(); } }, '⬇ Copy song to my library')
       : h('span', null, s && s.custom ? '✓ This song is in your library' : s ? 'Preset — everyone has it' : 'Auto: each track plays its own song'));
   return h('div.room-music', null, row, status);
 }

@@ -211,7 +211,7 @@ let lobbyApp: App | null = null;
 function hostRoomSong(app: App, s: Song | null, by: string, radioBy: number | null) {
   L.song = s; L.songBy = s ? by : ''; L.radioBy = s ? radioBy : null;
   if (s) app.sfx.playSong(s, app.sfx.player?.song?.id !== s.id); else if (!hostRoom.inMatch) app.sfx.useMusic('menu');
-  if (s) app.toast(`♪ ${s.name}${by ? ` — ${by.startsWith('📻') ? by : `picked by ${by}`}` : ''}`);
+  if (s) app.toast(`♪ ${clean(s.name)}${by ? ` — ${by.startsWith('📻') ? clean(by) : `picked by ${clean(by)}`}` : ''}`);
   if (s) onRoomSong(app, L.radioBy, (n) => hostRoomSong(app, n, `📻 ${L.slots[0]?.name ?? 'Host'}`, RADIO_HOST));
   if (hostRoom.inMatch) hostRoom.send('all', { t: 'song', song: s, by: L.songBy, radioBy: L.radioBy });
   if (activeLobby?.el?.isConnected) { activeLobby.dirty = true; activeLobby.renderOnline(); }

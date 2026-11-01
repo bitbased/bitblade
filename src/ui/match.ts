@@ -164,7 +164,7 @@ export class MatchScreen implements Screen {
     } else if (m?.t === 'song') {
       // the room's song changed mid-match (someone's radio, or a pick): everyone hears it
       const s = acceptSong(m.song);
-      if (s) { this.app.sfx.playSong(s, this.app.sfx.player?.song?.id !== s.id); this.app.toast(`♪ ${s.name}${m.by ? ` — ${m.by}` : ''}`); onRoomSong(this.app, m.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true })); }
+      if (s) { this.app.sfx.playSong(s, this.app.sfx.player?.song?.id !== s.id); this.app.toast(`♪ ${clean(s.name)}${m.by ? ` — ${clean(m.by)}` : ''}`); onRoomSong(this.app, m.radioBy, (n) => clientRoom.send({ t: 'ctl', a: 'song', song: n, radio: true })); }
       if (clientRoom.lobby) { clientRoom.lobby.song = m.song; clientRoom.lobby.songBy = m.by; clientRoom.lobby.radioBy = m.radioBy; }
     } else if (m?.t === 'end') {
       this.finish();
@@ -337,17 +337,17 @@ export class MatchScreen implements Screen {
     const sfx = this.app.sfx;
     type Opt = { label: string; play: () => void };
     const opts: Opt[] = [
-      { label: this.arg.cfg.song ? `♪ Room song — ${this.arg.cfg.song.name}` : '♪ This course\'s song', play: () => (this.arg.cfg.song ? sfx.playSong(this.arg.cfg.song) : sfx.useMusic('game', this.arg.cfg.arena)) },
+      { label: this.arg.cfg.song ? `♪ Room song — ${clean(this.arg.cfg.song.name)}` : '♪ This course\'s song', play: () => (this.arg.cfg.song ? sfx.playSong(this.arg.cfg.song) : sfx.useMusic('game', this.arg.cfg.arena)) },
       { label: '📻 Radio', play: () => sfx.startRadio() },
       ...allSongs().map((s) => ({ label: `♪ ${s.name}${s.custom ? '' : ' ★'}`, play: () => sfx.playSong(s) })),
     ];
     const val = h('b', null, opts[this.musicIdx]?.label ?? opts[0].label);
-    const now = h('span', null, sfx.player?.song ? `now: ${sfx.player.song.name}` : '');
+    const now = h('span', null, sfx.player?.song ? `now: ${clean(sfx.player.song.name)}` : '');
     const go = (d: number) => {
       this.musicIdx = (this.musicIdx + d + opts.length) % opts.length;
       opts[this.musicIdx].play();
       val.textContent = opts[this.musicIdx].label;
-      now.textContent = sfx.player?.song ? `now: ${sfx.player.song.name}` : '';
+      now.textContent = sfx.player?.song ? `now: ${clean(sfx.player.song.name)}` : '';
     };
     const row = h('div.selector.panel.nav.pause-music', { 'data-navx': '1' },
       h('span.lbl', null, 'MUSIC'),
