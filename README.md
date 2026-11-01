@@ -1,6 +1,4 @@
-<p align="center"><a href="https://bitblade.bitbased.net"><img src="public/icon.svg" width="128" alt="BitBlade"></a></p>
-
-<h1 align="center">BitBlade</h1>
+<a href="https://bitblade.bitbased.net"><img src="public/social.jpg" alt="BitBlade — Let it rip! Spinning-top battles, races, pinball and quests, local and online, right in your browser. Play at bitblade.bitbased.net"></a>
 
 <p align="center"><b><a href="https://bitblade.bitbased.net">▶ Play it now at bitblade.bitbased.net</a></b><br>
 In your browser: no install or account needed.</p>
