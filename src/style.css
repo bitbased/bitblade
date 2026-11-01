@@ -706,8 +706,8 @@ body.hints-on .music-chip { bottom: 56px; }
   .mode-card p { font-size: 13px; }
   /* settings: two columns across the width */
   .settings-panel { max-width: none !important; display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; row-gap: 12px !important; align-content: start; }
-  /* online: public rooms · join · host side by side, each scrolling inside its own panel */
-  .online-grid { display: grid; grid-template-columns: 1.15fr 1fr 1fr; align-items: stretch; flex: 1; min-height: 0; overflow: hidden; padding-bottom: 0; }
+  /* online: its panels (join · kept parties) side by side in equal shares of the width, each scrolling inside itself */
+  .online-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: stretch; flex: 1; min-height: 0; overflow: hidden; padding-bottom: 0; }
   .online-grid > .panel { width: auto !important; min-width: 0; overflow-y: auto; }
   .room-list { max-height: none; }
 }
