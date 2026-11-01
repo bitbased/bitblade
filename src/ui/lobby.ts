@@ -1364,17 +1364,31 @@ export class LobbyScreen implements Screen {
     if (pm && hostRoom.t) return h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${pm.expect})`);
     if (queue.active) {
       const st = queue.status;
-      return h('button.btn.small.nav.qm-searching', { onclick: () => queue.cancel(), title: 'Searching for players for this mode — click to stop' },
-        `SEARCHING ${queue.waited()}${st ? ` · ${L.random ? st.queued : st.modes[L.mode] ?? 0} queued` : ''} · CANCEL`);
+      return h('button.btn.small.nav.qm-searching.qm-live', { onclick: () => queue.cancel(), title: 'Searching for players for this mode — click to stop' }, this.searchText());
     }
     return h('button.btn.small.primary.nav', { onclick: () => this.findPlayers(), title: 'Quick match: find players online for this mode. Your party plays together (your CPUs stay here)' }, icon('bolt'), ` QUICK MATCH · ${L.random ? 'ANY MODE' : this.mode.name.toUpperCase()}`);
   }
+
+  /** the search, as the button says it (updated in place every second — the box isn't rebuilt for it) */
+  searchText() {
+    const st = queue.status;
+    return `SEARCHING ${queue.waited()}${st ? ` · ${L.random ? st.queued : st.modes[L.mode] ?? 0} queued` : ''} · CANCEL`;
+  }
+  private qmWas = false;
+  private guestKey = '';
 
   /** a guest's party box: whose party (or the room you're visiting with your party), who's in it, the search, the music */
   renderGuestBox() {
     const el = this.onlineEl, lb = clientRoom.lobby, t = clientRoom.t;
     if (!el) return;
     if (this.ui) this.ui.back.textContent = this.backLabel();
+    // (the snapshot comes every second while searching / counting down: only the search text changes — patch it, don't
+    // rebuild the box, so nothing flickers or replays its animation)
+    const searchTxt = lb?.searching ? (this.canCtl ? `SEARCHING ${lb.searching} · CANCEL` : `QUICK MATCH — searching ${lb.searching}`) : '';
+    const key = JSON.stringify([t?.code, this.canCtl, clientRoom.busy, L.slots.some((s) => s.mine), L.slots.filter((s) => s.ctrl.type !== 'cpu').length, party.home, lb && { ...lb, searching: !!lb.searching, startIn: undefined, slots: undefined }]);
+    const live = el.querySelector('.qm-live');
+    if (key === this.guestKey && el.childElementCount && (!searchTxt || live)) { if (live) live.textContent = searchTxt; return; }
+    this.guestKey = key;
     el.innerHTML = '';
     if (!t) return;
     const link = publicJoinInput(t.code);
@@ -1399,8 +1413,8 @@ export class LobbyScreen implements Screen {
       ...(lb ? grps.map((g) => h('div.pm-row', null, h('span.pm-lbl', null, g === myGrp ? 'YOUR PARTY' : lb.matchRoom ? 'PARTY' : 'VISITING'), ...members.filter((m) => m.grp === g).map(mem))) : []),
       lb?.matchFound ? h('div.hint', { style: { color: 'var(--gold)' } }, `MATCH FOUND — waiting for players (${L.slots.filter((s) => s.ctrl.type !== 'cpu').length}/${lb.matchFound})`)
         : lb?.searching ? (this.canCtl
-          ? h('button.btn.small.nav.qm-searching', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }) }, `SEARCHING ${lb.searching} · CANCEL`)
-          : h('div.hint', { style: { color: 'var(--gold)' } }, `QUICK MATCH — searching ${lb.searching}`))
+          ? h('button.btn.small.nav.qm-searching.qm-live', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }) }, searchTxt)
+          : h('div.hint.qm-live', { style: { color: 'var(--gold)' } }, searchTxt))
         : this.canCtl && !away ? h('button.btn.small.primary.nav', { onclick: () => clientRoom.send({ t: 'ctl', a: 'find' }), title: 'Quick match: the whole party plays together' }, icon('bolt'), ` QUICK MATCH · ${L.random ? 'ANY MODE' : this.mode.name.toUpperCase()}`) : null,
       away ? h('div.hint', null, party.home?.leader ? '◀ BACK TO YOUR PARTY takes your party home.' : 'Your party leader decides when you all go home.') : null,
       watching ? h('div.hint', { style: { color: 'var(--gold)' } }, clientRoom.busy ? 'A match is on — you\'ll join the next one' : 'Full for this mode — you\'ll play when a place frees up') : null,
@@ -1436,7 +1450,15 @@ export class LobbyScreen implements Screen {
   }
 
   /** the queue changed (searching, status, cancelled): the room box shows it */
-  onQueue = () => { if (!this.guest) { this.renderOnline(); this.dirty = true; } };
+  onQueue = () => {
+    if (this.guest) return;
+    // (a status tick while searching: just the button's text — no rebuild, no flicker)
+    const live = this.onlineEl?.querySelector('.qm-live');
+    if (live && queue.active && this.qmWas) live.textContent = this.searchText();
+    else this.renderOnline();
+    this.qmWas = queue.active;
+    this.dirty = true;
+  };
 
   /** QUICK MATCH for the whole room: everyone here (players and online guests) queues for this mode together */
   findPlayers() {
