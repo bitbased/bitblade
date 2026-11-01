@@ -365,7 +365,10 @@ export async function handleAdmin(req: Request, env: Env): Promise<Response> {
   const api = url.pathname.match(/^\/admin\/api\/([a-z-]+)$/);
   if (!api) return json({ error: "not found" }, 404);
   // (state changes only by POST from this page: SameSite=Strict cookie + a same-origin check)
-  if (req.method === "POST" && req.headers.get("Origin") && req.headers.get("Origin") !== url.origin) return json({ error: "bad origin" }, 403);
+  // (compared by host: behind the dev server's proxy the worker sees http:// while the browser is on https://)
+  const origin = req.headers.get("Origin");
+  const hosts = [url.host, req.headers.get("Host"), req.headers.get("X-Forwarded-Host")].filter(Boolean);
+  if (req.method === "POST" && origin && (() => { try { return !hosts.includes(new URL(origin).host); } catch { return true; } })()) return json({ error: "bad origin" }, 403);
   const action = api[1];
   if (action === "overview") return stub.fetch(new Request("https://admin/overview"));
   if (action === "export") { const r = await stub.fetch(new Request("https://admin/export")); return new Response(r.body, { headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename=bitblade-admin-${new Date().toISOString().slice(0, 10)}.json` } }); }
