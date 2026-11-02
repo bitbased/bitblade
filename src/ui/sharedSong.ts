@@ -23,7 +23,10 @@ export async function showSharedSong(app: App, encoded: string) {
     const sfx = app.sfx;
     sfx.ensure?.();
     if (sfx.ctx && sfx.ctx.state !== 'running') void sfx.ctx.resume().catch(() => {});
-    if (playing) sfx.playSong(song, true); else sfx.useMusic('menu');
+    // (a song link skips the title screen, which is what normally turns music on — without this the song was
+    //  queued but never scheduled, until something else like the radio switched music on)
+    sfx.music(true);
+    if (playing) { sfx.playSong(song, true); sfx.update(); } else sfx.useMusic('menu');
     setPlay();
   };
   const saved = () => loadCustomSongs().some((s) => same(s, song));
